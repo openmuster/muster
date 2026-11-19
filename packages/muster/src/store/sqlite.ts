@@ -1,0 +1,118 @@
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { Failure } from '../failure.ts'
+
+/** The oldest embedded SQLite muster runs on: the first with the WAL-reset fix. */
+export const SQLITE_FLOOR = [3, 51, 3] as const
+
+const BUSY_TRIES = 8
+
+/** Whether `version` ("3.54.0") is at least the floor. */
+export function atLeastFloor(version: string, floor: readonly number[] = SQLITE_FLOOR): boolean {
+  const parts = version.split('.').map((part) => Number.parseInt(part, 10))
+  for (let i = 0; i < floor.length; i++) {
+    const have = parts[i] ?? 0
+    const need = floor[i] ?? 0
+    if (have !== need) return have > need
+  }
+  return true
+}
+
+const isBusy = (error: unknown) => {
+  const code = (error as { errcode?: number; code?: string } | null)?.errcode
+  const message = String((error as { message?: string } | null)?.message ?? '')
+  // SQLITE_BUSY (5) and SQLITE_LOCKED (6), with their extended codes.
+  return (code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6)) || /database is locked|database table is locked/.test(message)
+}
+
+/** Sleeps in this thread: a CLI process has nothing else to do while it waits for the writer. */
+function pause(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** An open board file. */
+export type Db = {
+  readonly raw: DatabaseSync
+  readonly path: string
+  /** Runs `fn` in one write transaction. Only BEGIN and COMMIT are retried when busy: `fn` runs once. */
+  write<T>(fn: () => T): T
+  close(): void
+}
+
+/**
+ * Opens a board's file with the settings SPEC.md section 3 lists, and refuses a filesystem that can't
+ * do WAL: a board on one silently loses its guarantees.
+ */
+export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
+  if (path !== ':memory:' && !options.readonly) mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  let raw: DatabaseSync
+  try {
+    raw = new DatabaseSync(path, { readOnly: options.readonly === true })
+  } catch (error) {
+    throw new Failure('no_store', `Couldn't open the board at ${path}.`, { hint: String((error as Error).message) })
+  }
+  const version = (raw.prepare('select sqlite_version() as v').get() as { v: string }).v
+  if (!atLeastFloor(version)) {
+    raw.close()
+    throw new Failure('sqlite_too_old', `This Node embeds SQLite ${version}; muster needs ${SQLITE_FLOOR.join('.')} or later.`, {
+      hint: 'Use a newer Node.',
+    })
+  }
+  raw.exec('pragma busy_timeout = 5000')
+  if (!options.readonly) {
+    const mode = (raw.prepare('pragma journal_mode = wal').get() as { journal_mode: string }).journal_mode
+    if (path !== ':memory:' && mode !== 'wal') {
+      raw.close()
+      throw new Failure('no_wal', `The filesystem under ${path} can't keep a write-ahead log.`, {
+        hint: 'Keep the board on a local disk: pass --dir or set MUSTER_DIR.',
+      })
+    }
+    raw.exec('pragma synchronous = full')
+    raw.exec('pragma checkpoint_fullfsync = 1')
+    raw.exec('pragma wal_autocheckpoint = 100')
+    raw.exec('pragma journal_size_limit = 8388608')
+  }
+  raw.exec('pragma foreign_keys = on')
+
+  const boundary = (sql: string) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        raw.exec(sql)
+        return
+      } catch (error) {
+        if (!isBusy(error) || attempt >= BUSY_TRIES) throw error
+        pause(20 + Math.floor(Math.random() * 130))
+      }
+    }
+  }
+
+  return {
+    raw,
+    path,
+    write(fn) {
+      boundary('begin immediate')
+      let result: ReturnType<typeof fn>
+      try {
+        result = fn()
+      } catch (error) {
+        raw.exec('rollback')
+        throw error
+      }
+      try {
+        boundary('commit')
+      } catch (error) {
+        try {
+          raw.exec('rollback')
+        } catch {
+          // The transaction is already gone.
+        }
+        throw error
+      }
+      return result
+    },
+    close() {
+      raw.close()
+    },
+  }
+}
