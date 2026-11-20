@@ -1,0 +1,111 @@
+name: deploy docs
+
+# The docs site (apps/docs) as a Cloudflare Worker: production on a push to main, a preview Worker
+# per pull request, removed when the pull request closes. Nothing here runs until the repository has
+# a CLOUDFLARE_ACCOUNT_ID variable and a CLOUDFLARE_API_TOKEN secret.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: deploy-docs-${{ github.event.pull_request.number || github.ref }}
+  # A superseded preview can be dropped. A production deploy can't: the version that went live
+  # would be one the smoke test never ran against.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash sets pipefail, so a rejected deploy piped to tee fails the step.
+    shell: bash
+
+jobs:
+  deploy:
+    # Forks and Dependabot get no secrets, so a deploy there could only fail on sign-in.
+    if: >-
+      vars.CLOUDFLARE_ACCOUNT_ID != '' &&
+      github.event.action != 'closed' &&
+      (github.event_name == 'push' ||
+      (github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build for Cloudflare
+        run: pnpm exec opennextjs-cloudflare build
+        working-directory: apps/docs
+
+      - name: Deploy to production
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: pnpm exec wrangler deploy
+        working-directory: apps/docs
+      - name: Smoke test production
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: node scripts/smoke-docs.mjs https://openmuster.ai
+        env:
+          # An edge can serve the previous version for a few seconds after a deploy returns.
+          SMOKE_SETTLE_MS: '10000'
+
+      - name: Deploy preview
+        if: github.event_name == 'pull_request'
+        id: preview
+        run: |
+          # Its own config, with no custom domain: a preview must never take over the real one.
+          NAME="muster-docs-preview-${{ github.event.pull_request.number }}"
+          pnpm exec wrangler deploy --config wrangler.preview.jsonc --name "$NAME" 2>&1 | tee deploy-output.txt
+          echo "url=$(grep -oP 'https://[^\s]+\.workers\.dev' deploy-output.txt | head -1)" >> "$GITHUB_OUTPUT"
+        working-directory: apps/docs
+      - name: Comment the preview's address
+        if: github.event_name == 'pull_request' && steps.preview.outputs.url
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = `**Docs preview:** ${{ steps.preview.outputs.url }}`
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number })
+            const existing = comments.find((comment) => comment.user.type === 'Bot' && comment.body.includes('**Docs preview:**'))
+            if (existing) await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body })
+            else await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body })
+      # Not gated on the address: if it was never found, this fails loudly instead of not running.
+      - name: Smoke test preview
+        if: github.event_name == 'pull_request'
+        run: node scripts/smoke-docs.mjs "${{ steps.preview.outputs.url }}"
+
+  cleanup-preview:
+    if: >-
+      vars.CLOUDFLARE_ACCOUNT_ID != '' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Delete the preview Worker
+        run: pnpm exec wrangler delete --name "muster-docs-preview-${{ github.event.pull_request.number }}" --force || true
+        working-directory: apps/docs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

@@ -1,0 +1,17 @@
+{
+  // For a pull request's preview: the same Worker with no custom domain, so it can never take the real one.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "muster-docs-preview",
+  // Keep this a few days in the past: a date in the future for Cloudflare's clock is refused.
+  "compatibility_date": "2026-11-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // Keep Workers Logs, so an error in the search route is visible.
+  "observability": {
+    "enabled": true
+  }
+}

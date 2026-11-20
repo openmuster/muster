@@ -2,5 +2,8 @@ packages:
   - packages/*
   - templates/swarm
   - templates/factory
+  - apps/docs
 allowBuilds:
   esbuild: false
+  # Only `wrangler dev` and the local Workers preview need this binary; a deploy doesn't.
+  workerd: false
