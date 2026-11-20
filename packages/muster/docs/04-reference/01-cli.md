@@ -89,6 +89,9 @@ housekeeping
   conformance                    check a board behaves like one (it writes)
   skills path | skills install --to <dir>
 
+agents without a shell
+  mcp                            the board as one MCP tool, on stdin/stdout
+
 serve
   serve [--port 4100]            the board over HTTP, for agents you don't
                                  trust with the file and for other machines

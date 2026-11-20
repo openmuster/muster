@@ -135,6 +135,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `runner_not_installed` | The runner's package isn't installed |
 | `agent_token_missing` | A cloud run was started without a token made for the agent |
 | `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
+| `not_a_terminal_command` | `mu mcp` was typed at a terminal; it is started by an agent |
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |

@@ -79,6 +79,7 @@ mu inspect
 - [With no cloud at all](./03-guides/14-no-cloud.md)
 - [Several repositories, several boards](./03-guides/15-several-boards.md)
 - [Work that isn't code](./03-guides/16-non-code.md)
+- [An agent with no shell: MCP](./03-guides/17-mcp.md)
 
 ## Reference
 

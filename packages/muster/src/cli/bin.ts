@@ -11,6 +11,13 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
 }) as typeof process.emitWarning
 const { main } = await import('./main.ts')
 
+// `mu mcp` isn't a command that runs and ends: it serves the board to an agent over this process's own pipes.
+if (process.argv[2] === 'mcp' && process.argv.length === 3) {
+  const { mcp } = await import('./mcp.ts')
+  await mcp(process.stdin, process.stdout, process.env, main)
+  process.exit(0)
+}
+
 const stop = new AbortController()
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => stop.abort(signal))
 
