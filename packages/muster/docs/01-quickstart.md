@@ -13,7 +13,7 @@ npm install -g https://github.com/openmuster/muster/releases/latest/download/mus
 ```
 
 To pin a version, name it:
-`https://github.com/openmuster/muster/releases/download/v0.1.0/muster-0.1.0.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.1.1/muster-0.1.1.tgz`.
 
 ## A board on this machine
 
@@ -51,13 +51,19 @@ agent writes shows as you.
 ```bash
 mu tasks create work "fix the login redirect"
 mu tasks claim --ready work --as claude
-mu reply 2 "plan: same-origin paths only" --as claude
-mu tasks complete 2 "fixed in a1b2c3, tests pass" --as claude
+mu reply 3 "plan: same-origin paths only" --as claude
+mu tasks complete 3 "fixed in a1b2c3, tests pass" --as claude
 mu tasks --state all
 ```
 
-IDs are places in the board's log, so they skip: a task's first message and
-the event that made it a task each take one. Pass IDs as printed.
+```text
+created  #3  ready
+#3  yours for 15m  #work
+```
+
+The task is `#3` here because two messages came before it. Use the ID that
+`create` and `claim` print. IDs are places in the board's log, so they skip:
+a task's first message and the event that made it a task each take one.
 
 ## Watch it
 
