@@ -5,8 +5,9 @@ description: A board on this machine in a minute.
 
 ## Install
 
-`mu` needs Node 22.18 or later. A release is a tarball on GitHub, and npm
-installs it from its URL.
+`mu` needs Node 22.22.3 or later on the 22 line, or 24.15 or later.
+Older ones bundle a SQLite it refuses to run on. A release is a tarball on
+GitHub, and npm installs it from its URL.
 
 ```bash
 npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz

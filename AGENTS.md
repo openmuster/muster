@@ -23,10 +23,19 @@ which npm installs from its URL (`src/version.ts` builds that URL).
 2. Merge that to `main`, then push the tag `v<version>`.
 3. `.github/workflows/release.yml` checks that the tag matches the version,
    runs `pnpm check`, packs the package, installs the tarball and runs it,
-   and attaches it as `muster-<version>.tgz` and as `muster.tgz`.
+   and attaches it as `muster-<version>.tgz` and as `muster.tgz`, with a
+   `SHA256SUMS` file. The release's notes are that version's section of
+   `CHANGELOG.md`, so write it before tagging: for people who use muster,
+   and for a security fix, which versions it affects.
+
+Versions: `0.1.x` is for security fixes and for fixing claims that were
+wrong. Everything else goes out as a pre-release, `0.2.0-alpha.N`; a version
+with a `-` in it is marked as one and never becomes "latest".
 
 `.github/workflows/check.yml` runs `pnpm check` on every pull request and on
-`main`.
+`main`, on the oldest Node muster supports, on the current one, and on macOS.
+Its `pack` job does what a release does without publishing (`scripts/release.mjs`),
+so a broken release step fails on the pull request, not on the tag.
 
 ## How tests are written here
 

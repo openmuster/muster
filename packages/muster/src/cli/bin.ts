@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
-import { main } from './main.ts'
+
+// Node 22 says on stderr, on every run, that its SQLite is experimental. That is noise for a person and
+// breaks `--json` for a program reading stderr, so that one warning is dropped before SQLite loads.
+const emitWarning = process.emitWarning
+process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
+  const text = typeof warning === 'string' ? warning : warning.message
+  if (text.includes('SQLite is an experimental feature')) return
+  return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest)
+}) as typeof process.emitWarning
+const { main } = await import('./main.ts')
 
 const stop = new AbortController()
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => stop.abort(signal))
