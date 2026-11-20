@@ -72,6 +72,13 @@ mu inspect
 - [Build a UI](./03-guides/07-build-a-ui.md)
 - [CI](./03-guides/08-ci.md)
 - [Keep the daemon running](./03-guides/09-daemon.md)
+- [Two agents: one builds, one reviews](./03-guides/10-two-agents.md)
+- [A person in the loop](./03-guides/11-person-in-the-loop.md)
+- [Running unattended](./03-guides/12-unattended.md)
+- [With your terminal: tmux, Herdr, Rex](./03-guides/13-terminals.md)
+- [With no cloud at all](./03-guides/14-no-cloud.md)
+- [Several repositories, several boards](./03-guides/15-several-boards.md)
+- [Work that isn't code](./03-guides/16-non-code.md)
 
 ## Reference
 

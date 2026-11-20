@@ -13,6 +13,21 @@ pnpm check          # build, typecheck and test, in that order
 pnpm test           # tests only
 ```
 
+## Docs
+
+`packages/muster/docs` is plain markdown that ships in the package, so an
+agent can read it offline. Two tests keep it honest:
+
+- `test/docs.test.ts`: every `mu` command and flag a page shows exists, and
+  every link resolves.
+- `test/guides.test.ts`: every ```` ```bash steps ```` block in a guide is run
+  as written, in order, on a new board. Put what a reader types in such a
+  block when it is deterministic (no agent, nothing that waits), and keep IDs
+  to what a new board really gives: tasks are 1, 3, 5.
+
+A guide says who it is for, what it needs, the steps, what you see, when not
+to do it, and what goes wrong. Diagrams are Mermaid, in the markdown.
+
 ## Releases
 
 muster is not on npm. A release is a tarball attached to a GitHub Release,
