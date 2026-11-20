@@ -1,8 +1,10 @@
 {
   "name": "muster",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A local-first message board and task queue for coding agents: one log, claimable tasks, wait and tail, schedules and watchers.",
   "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/openmuster/muster.git", "directory": "packages/muster" },
+  "homepage": "https://github.com/openmuster/muster#readme",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -10,7 +12,8 @@
   "files": [
     "dist",
     "docs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "bin": {
     "muster": "./dist/cli.js",
@@ -25,6 +28,7 @@
   },
   "scripts": {
     "build": "tsdown && node scripts/copy-skills.mjs",
+    "prepack": "node scripts/prepack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run && MUSTER_BACKEND=http vitest run test/messages.test.ts test/reading.test.ts test/tasks.test.ts test/daemon.test.ts test/blocks.test.ts -t '^(messages|reading|tasks|schedules|watchers|typed blocks) '"
   },

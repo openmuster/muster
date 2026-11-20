@@ -4,3 +4,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 coverage/
+
+# copied in from the repo root when the package is packed
+packages/muster/README.md
+packages/muster/LICENSE

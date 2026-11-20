@@ -20,3 +20,12 @@ sandboxes instead, start them with muster's `vercel()` or `cloudflare()`
 runner against a board served at a URL they can reach.
 
 `JOIN.md` is what you paste into a coding agent to join a run's queue by hand.
+
+## Outside this repository
+
+Here the app uses the `muster` in this checkout (`workspace:*`). In a copy of
+your own, point the dependency at a release instead:
+
+```json
+"muster": "https://github.com/openmuster/muster/releases/download/v0.1.0/muster-0.1.0.tgz"
+```

@@ -12,6 +12,6 @@ pnpm check          # build, typecheck, test
   claims to check and see it fail.
 - Tests use real SQLite in a temp folder and injected clocks. They mock nothing
   of muster's own.
-- A change people will notice updates its page in `packages/muster/docs`, and
-  gets a changeset: `pnpm changeset`.
+- A change people will notice updates its page in `packages/muster/docs`.
+  Releases are cut by hand: see "Releases" in [AGENTS.md](./AGENTS.md).
 - One change per pull request, titled `<type>(<area>): <what it does>`.

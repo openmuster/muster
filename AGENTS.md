@@ -13,6 +13,21 @@ pnpm check          # build, typecheck and test, in that order
 pnpm test           # tests only
 ```
 
+## Releases
+
+muster is not on npm. A release is a tarball attached to a GitHub Release,
+which npm installs from its URL (`src/version.ts` builds that URL).
+
+1. Set the version in `packages/muster/package.json`. The CLI reads it from
+   there; nothing else holds a version number.
+2. Merge that to `main`, then push the tag `v<version>`.
+3. `.github/workflows/release.yml` checks that the tag matches the version,
+   runs `pnpm check`, packs the package, installs the tarball and runs it,
+   and attaches it as `muster-<version>.tgz` and as `muster.tgz`.
+
+`.github/workflows/check.yml` runs `pnpm check` on every pull request and on
+`main`.
+
 ## How tests are written here
 
 - Real SQLite in a temporary folder, with the clock injected.

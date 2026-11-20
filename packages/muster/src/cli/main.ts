@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
 import { TASK_STATES, type PlanTask, type Task, type TaskState } from '../core/tasks.ts'
@@ -1081,7 +1082,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     } catch {
       throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
     }
-    runner = vercel({ Sandbox: sdk.Sandbox as never, allowHosts: { 'registry.npmjs.org': [] } })
+    runner = vercel({ Sandbox: sdk.Sandbox as never, allowHosts: Object.fromEntries(RELEASE_HOSTS.map((host) => [host, []])) })
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
@@ -1105,7 +1106,9 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     board: { url, token },
     ...(repo ? { repo } : {}),
     permissionMode: on(parsed.flags, 'bypass-permissions') ? 'bypass' : 'safe',
-    setup: [['npm', 'install', '-g', 'muster']],
+    // A Vercel sandbox gets the same release as this CLI, from its tarball: never a package looked up by name.
+    // A Cloudflare container has no internet: mu is in the image you built.
+    ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
     ...(timeout ? { timeoutMs: duration(timeout, 'timeout') * 1000 } : {}),
   })
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200) } }).catch(() => {})
@@ -1177,7 +1180,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   }
 }
 
-export const VERSION = '0.0.0'
+export { VERSION }
 export const TASK_STATE_NAMES = TASK_STATES
 
 /** What each command takes, for the test that checks the docs against the CLI. */

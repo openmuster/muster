@@ -1,0 +1,47 @@
+name: release
+
+# A release is a tarball on GitHub, which npm installs from its URL. Pushing a tag vX.Y.Z whose
+# number is the package's version checks the tree, packs packages/muster, and attaches the tarball
+# twice: under its version, and as muster.tgz so releases/latest/download/muster.tgz always works.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: The tag is the package's version
+        run: |
+          version=$(node -p "require('./packages/muster/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME is not package version v$version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Pack
+        run: |
+          mkdir -p out
+          (cd packages/muster && pnpm pack --pack-destination ../../out)
+          cp "out/muster-$VERSION.tgz" out/muster.tgz
+      - name: The packed CLI installs and runs
+        run: |
+          npm install -g "out/muster-$VERSION.tgz"
+          test "$(mu --version)" = "$VERSION"
+          MUSTER_DIR="$RUNNER_TEMP/board" mu post general "released $VERSION"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "out/muster-$VERSION.tgz" out/muster.tgz --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

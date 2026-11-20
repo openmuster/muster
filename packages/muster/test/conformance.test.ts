@@ -59,6 +59,8 @@ describe('mu run in a cloud sandbox', () => {
     expect(got).toHaveLength(1)
     expect(got[0]).toMatchObject({ url: '/runs', auth: 'Bearer worker-secret', body: { task: 12, repo: 'https://github.com/acme/web.git', board: { host: 'board.example.com', token: 'mu1.agent' }, env: { MUSTER_TOKEN: 'set-by-the-network-policy' } } })
     expect(got[0].body.prompt).toContain('Claim task #12 first: mu tasks claim 12')
+    // A container has no internet, so nothing is installed at run time: mu is in the image.
+    expect(got[0].body.setup).toEqual([])
     expect(JSON.stringify(got[0].body.env)).not.toContain('mu1.')
     expect(run.stderr + run.stdout).toMatch(/network_error|cf-run-1/)
   })
@@ -72,8 +74,10 @@ describe('mu run in a cloud sandbox', () => {
     const { readFileSync } = await import('node:fs')
     const lines = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
     expect(lines[0].env).toEqual({ MUSTER_URL: board.MUSTER_URL, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '12' })
-    expect(Object.keys(lines[0].networkPolicy.allow).sort()).toEqual(['board.example.com', 'registry.npmjs.org'])
-    expect(lines[1]).toEqual({ cmd: 'npm', args: ['install', '-g', 'muster'] })
+    expect(Object.keys(lines[0].networkPolicy.allow).sort()).toEqual(['board.example.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+    // The sandbox installs this CLI's own release from its tarball, never a package looked up by name.
+    const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    expect(lines[1]).toEqual({ cmd: 'npm', args: ['install', '-g', `https://github.com/openmuster/muster/releases/download/v${version}/muster-${version}.tgz`] })
     expect(lines[2].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--sandbox' 'workspace-write' '-'")
   })
 

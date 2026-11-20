@@ -65,7 +65,7 @@ describe('the sandbox network policy', () => {
 })
 
 describe('cloud runners', () => {
-  const request = { task: 7, agent: claude, prompt: "it's a prompt with 'quotes'", board: { url: URL_, token: 'mu1.secret' }, repo: 'https://github.com/acme/web.git', setup: [['npm', 'install', '-g', 'muster']] }
+  const request = { task: 7, agent: claude, prompt: "it's a prompt with 'quotes'", board: { url: URL_, token: 'mu1.secret' }, repo: 'https://github.com/acme/web.git', setup: [['npm', 'install', '-g', 'https://example.com/muster.tgz']] }
 
   it('vercel: creates a sandbox with the policy and a placeholder token, prepares it, and starts the agent detached with the prompt on stdin', async () => {
     const calls: any[] = []
@@ -75,14 +75,14 @@ describe('cloud runners', () => {
         return { sandboxId: 'sbx_1', runCommand: async (command: any) => void calls.push(['run', command]), stop: async () => void calls.push(['stop']) }
       },
     }
-    const run = await vercel({ Sandbox, allowHosts: { 'registry.npmjs.org': [] } }).start(request)
+    const run = await vercel({ Sandbox, allowHosts: { 'github.com': [] } }).start(request)
     expect(run.id).toBe('sbx_1')
     const created = calls[0][1]
     expect(created.env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '7' })
-    expect(Object.keys(created.networkPolicy.allow).sort()).toEqual(['board.example.com', 'registry.npmjs.org'])
+    expect(Object.keys(created.networkPolicy.allow).sort()).toEqual(['board.example.com', 'github.com'])
     expect(created.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git' })
     expect(JSON.stringify(created.env)).not.toContain('mu1.secret')
-    expect(calls[1][1]).toEqual({ cmd: 'npm', args: ['install', '-g', 'muster'] })
+    expect(calls[1][1]).toEqual({ cmd: 'npm', args: ['install', '-g', 'https://example.com/muster.tgz'] })
     expect(calls[2][1]).toMatchObject({ cmd: 'sh', detached: true })
     expect(calls[2][1].args[1]).toBe(`printf %s 'it'\\''s a prompt with '\\''quotes'\\''' | 'claude' '--print' '--output-format' 'stream-json' '--verbose' '--strict-mcp-config' '--disable-slash-commands' '--tools' 'Bash,Read,Edit,Write,Grep,Glob'`)
     await run.stop()

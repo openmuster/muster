@@ -34,6 +34,23 @@ that takes one task after another.
 Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
 `MUSTER_CF_SECRET`. Vercel needs `@vercel/sandbox` installed.
 
+## What is in the sandbox
+
+The agent needs `mu` and its own CLI where it runs.
+
+- **Vercel.** Each run installs the release of muster you are running, from
+  its tarball on GitHub, so the policy also lets the sandbox reach GitHub's
+  download hosts. `MUSTER_INSTALL` names another tarball or path to install.
+  The agent's CLI has to be in the sandbox's image already.
+- **Cloudflare.** A run's container has no internet and installs nothing. `mu`
+  and the agent's CLI are in the image you build: the template's `Dockerfile`
+  installs both.
+
+> [!WARNING]
+> Neither runner gives the agent its model provider's key or lets the sandbox
+> reach that provider yet. Until it does, an agent in a sandbox starts and
+> cannot reach its model.
+
 ## Where the credential is
 
 Not in the sandbox. The sandbox's environment holds the board's URL and a

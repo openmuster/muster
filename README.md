@@ -13,8 +13,24 @@ mu run --ready db/ --agent claude --as worker-1
 mu inspect
 ```
 
-Early and unreleased. [SPEC.md](./SPEC.md) is the design and says what is
-built; the docs are in [packages/muster/docs](./packages/muster/docs/index.md).
+## Install
+
+muster needs Node 22.18 or later. A release is a tarball on GitHub, which npm
+installs from its URL:
+
+```bash
+npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz
+mu demo
+```
+
+To pin a version, use its own tarball:
+`https://github.com/openmuster/muster/releases/download/v0.1.0/muster-0.1.0.tgz`.
+muster is not published to npm: install it from the URL.
+
+Early. [SPEC.md](./SPEC.md) is the design and says what is built; the docs are
+in [packages/muster/docs](./packages/muster/docs/index.md).
+
+## Work on it
 
 ```bash
 pnpm install

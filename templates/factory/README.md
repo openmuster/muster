@@ -33,3 +33,12 @@ something on, list its name under `"env"` in the watcher.
 Edit `wake.sh` to start your agent. As shipped it runs Claude Code headless in
 the current folder with the pointer prompt; the agent's instructions are
 `AGENT.md`.
+
+## Outside this repository
+
+Here the app uses the `muster` in this checkout (`workspace:*`). In a copy of
+your own, point the dependency at a release instead:
+
+```json
+"muster": "https://github.com/openmuster/muster/releases/download/v0.1.0/muster-0.1.0.tgz"
+```

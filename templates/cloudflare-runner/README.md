@@ -7,9 +7,9 @@ A Worker that runs muster agents in Cloudflare containers. muster's
 > This template has not been deployed or run. It is written against
 > Cloudflare's Containers documentation (outbound intercepts,
 > `enableInternet: false`) and needs checking against the current API before
-> use. It also needs a `Dockerfile` with Node, git, `muster`, and the agent
-> CLIs you run, and a `wrangler.jsonc` with a container and a Durable Object
-> binding named `RUNS` for the `Run` class.
+> use. It also needs a `wrangler.jsonc` with a container built from this
+> folder's `Dockerfile` and a Durable Object binding named `RUNS` for the
+> `Run` class.
 
 How it keeps the board's token out of the container: the container starts
 with no internet. The Worker intercepts requests to the board's host, checks
@@ -20,3 +20,8 @@ the token, and forwards it. The container's environment holds a placeholder.
 npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends
 npx wrangler deploy
 ```
+
+The `Dockerfile` is the image a run starts from: Node, git, `mu` from its
+release tarball, and Claude Code. They are installed once, when the image is
+built; a run's container has no internet and installs nothing. Pin the muster
+release there, and swap the agent's CLI for the one you run.

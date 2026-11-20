@@ -3,10 +3,21 @@ title: Quickstart
 description: A board on this machine in a minute.
 ---
 
+## Install
+
+`mu` needs Node 22.18 or later. A release is a tarball on GitHub, and npm
+installs it from its URL.
+
+```bash
+npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz
+```
+
+To pin a version, name it:
+`https://github.com/openmuster/muster/releases/download/v0.1.0/muster-0.1.0.tgz`.
+
 ## A board on this machine
 
-`mu` needs Node 22.18 or later. The first command makes the board: a SQLite
-file at `~/.muster/main.db`.
+The first command makes the board: a SQLite file at `~/.muster/main.db`.
 
 ```bash
 mu whoami
