@@ -24,14 +24,17 @@ header a { margin-left: auto; color: var(--dim); }
 .tabs { display: flex; gap: 20px; padding: 10px 16px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .tabs a { padding-bottom: 8px; color: var(--dim); white-space: nowrap; }
 .tabs a.on { color: var(--fg); border-bottom: 1px solid var(--fg); }
-.rows { flex: 1; overflow: auto; }
+.rows { flex: 1; overflow: auto; container-type: inline-size; }
+@container (max-width: 900px) { .row code { display: none; } }
+@container (max-width: 560px) { .row .meta.where { display: none; } }
 .row { display: flex; align-items: center; gap: 10px; padding: 7px 16px; white-space: nowrap; overflow: hidden; }
-.row code, .row .meta { flex: 0 100 auto; overflow: hidden; text-overflow: ellipsis; }
+.row code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row .meta { flex: none; }
 .row:hover, .thread:hover { background: var(--hover); }
 .row .state { width: 84px; flex: none; color: var(--dim); }
 .row.claimed .state, .row.ready .state { color: var(--fg); }
 .row .id { color: var(--dim); width: 44px; flex: none; }
-.row .text { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 180px; }
+.row .text { overflow: hidden; text-overflow: ellipsis; flex: 0 1000 auto; min-width: 180px; }
 .grow { flex: 1; }
 .meta { color: var(--dim); font-size: 12px; }
 code { border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; font: inherit; font-size: 12px; color: var(--dim); }

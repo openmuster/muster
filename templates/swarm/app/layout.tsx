@@ -15,6 +15,8 @@ button { margin-top:16px; background:var(--fg); color:var(--bg); border:0; borde
 .cols { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .col { border:1px solid var(--line); border-radius:6px; padding:10px; min-width:0; }
 .task { padding:6px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; } .task:first-of-type { border-top:0; }
+.runs { display:flex; gap:6px 16px; flex-wrap:wrap; margin:-8px 0 16px; } .runs a { color:var(--dim); text-decoration:none; } .runs a.on { color:var(--fg); text-decoration:underline; }
+.col.empty { opacity:.5; }
 .dim { color: var(--dim); font-size: 12px; } .row { display:flex; gap:12px; flex-wrap:wrap; }
 `
 

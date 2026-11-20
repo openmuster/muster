@@ -72,6 +72,18 @@ describe('snapshot', () => {
     expect(snap.agents).toEqual([])
   })
 
+  it('lists each run newest first, with how many of its tasks are still open', async () => {
+    const team = fresh()
+    const old = (await team.taskCreate({ channel: 'swarm/limiter', text: 'build' })).task
+    const held = await team.as('agent-1').taskClaim({ id: old.id })
+    await team.as('agent-1').taskComplete({ id: old.id, token: held.token, result: 'done' })
+    await team.taskCreate({ channel: 'swarm/checkout', text: 'one' })
+    await team.taskCreate({ channel: 'swarm/checkout', text: 'two' })
+    await team.taskCreate({ channel: 'elsewhere', text: 'not the swarm' })
+    expect((await snapshot(team, 'swarm')).runs).toEqual([{ name: 'checkout', open: 2, total: 2 }, { name: 'limiter', open: 0, total: 1 }])
+    expect((await snapshot(team, 'swarm/limiter')).runs).toEqual([{ name: 'limiter', open: 0, total: 1 }])
+  })
+
   it('two agents racing for the next ready task each get a different one or nothing', async () => {
     const team = fresh()
     await team.taskCreate({ channel: 'swarm/limiter', text: 'only one' })

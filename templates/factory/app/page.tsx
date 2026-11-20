@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { FACTORY, team } from '@/lib/board'
-import { setup } from '@/lib/setup'
+import { setup, tilde } from '@/lib/setup'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +14,7 @@ export default async function Page() {
   return (
     <>
       <h1>factory</h1>
-      <p className="dim">board {me.where} · threads under #{FACTORY}/</p>
+      <p className="dim">board {tilde(me.where)} · threads under #{FACTORY}/</p>
       <h2>setup</h2>
       {steps.map((step) => (
         <div className="item" key={step.name}>

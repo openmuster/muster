@@ -1,7 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export type Step = { name: string; done: boolean; detail: string; fix?: string }
+
+/** A path as people write it: the home directory is `~`. */
+export const tilde = (path: string): string => {
+  const home = homedir()
+  return path === home ? '~' : path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
 
 const read = (path: string): unknown => {
   try {
@@ -28,14 +35,14 @@ export function setup(options: { config: string; board: string; channel: string 
     {
       name: 'a watcher wakes the agent',
       done: watcher !== undefined && command !== undefined && (!command.startsWith('/') || existsSync(command)),
-      detail: watcher ? (command && command.startsWith('/') && !existsSync(command) ? `"${watcher.name}" runs ${command}, which isn't there` : `"${watcher.name}" on #${options.channel}/`) : `no watcher on #${options.channel}/ in ${watchersFile}`,
-      ...(watcher ? {} : { fix: `copy this template's watchers.json to ${watchersFile} and give wake.sh its full path` }),
+      detail: watcher ? (command && command.startsWith('/') && !existsSync(command) ? `"${watcher.name}" runs ${tilde(command)}, which isn't there` : `"${watcher.name}" on #${options.channel}/`) : `no watcher on #${options.channel}/ in ${tilde(watchersFile)}`,
+      ...(watcher ? {} : { fix: `copy this template's watchers.json to ${tilde(watchersFile)} and give wake.sh its full path` }),
     },
     {
       name: 'a platform to hear from',
       done: platforms.length > 0,
       detail: platforms.length ? platforms.join(', ') : 'none: the factory hears only what is posted on the board',
-      ...(platforms.length ? {} : { fix: `optional: copy sync.json to ${join(options.config, 'sync.json')} and point the platform's webhook at /api/board/webhooks/<name>` }),
+      ...(platforms.length ? {} : { fix: `optional: copy sync.json to ${tilde(join(options.config, 'sync.json'))} and point the platform's webhook at /api/board/webhooks/<name>` }),
     },
     {
       name: 'the board is being served',

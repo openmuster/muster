@@ -1,8 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { setup } from '../lib/setup.ts'
+import { setup, tilde } from '../lib/setup.ts'
 
 const dir = () => mkdtempSync(join(tmpdir(), 'factory-test-'))
 
@@ -30,5 +30,13 @@ describe('setup', () => {
     writeFileSync(join(config, 'watchers.json'), JSON.stringify({ watchers: [{ name: 'factory', tail: { channel: 'factory/' }, run: ['/no/such/wake.sh'] }] }))
     const [watcher] = setup({ config, board: join(config, 'main.db'), channel: 'factory' })
     expect([watcher!.done, watcher!.detail]).toEqual([false, '"factory" runs /no/such/wake.sh, which isn\'t there'])
+  })
+
+  it('a path under the home directory is shown as people write it', () => {
+    const config = join(homedir(), '.config', 'muster-not-there')
+    const [watcher, platform] = setup({ config, board: join(config, 'main.db'), channel: 'factory' })
+    expect(watcher!.detail).toBe('no watcher on #factory/ in ~/.config/muster-not-there/watchers.json')
+    expect(`${watcher!.fix} ${platform!.fix}`).not.toContain(homedir())
+    expect([tilde(homedir()), tilde(`${homedir()}x/y`), tilde('/etc/muster')]).toEqual(['~', `${homedir()}x/y`, '/etc/muster'])
   })
 })

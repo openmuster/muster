@@ -193,10 +193,10 @@ function App() {
                     <code key={key}>{key}={value}</code>
                   ))}
                   <span className="grow" />
-                  {task.claim && <span className="meta">{who(task.claim.by)} · {left(task.claim.until)}</span>}
+                  {task.claim && <span className="meta" title={who(task.claim.by)}>{task.claim.by.profile ?? who(task.claim.by)} · {left(task.claim.until)}</span>}
                   {task.state === 'waiting' && <span className="meta">needs {task.needs.map((id) => `#${id}`).join(' ')}</span>}
                   {task.hold && <span className="meta">{task.hold.kind}</span>}
-                  <span className="meta">#{task.channel}</span>
+                  <span className="meta where">#{task.channel}</span>
                   <span className="meta">{ago(task.at)}</span>
                 </div>
               ))}

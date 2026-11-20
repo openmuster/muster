@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { redirect } from 'next/navigation'
-import { SWARM, team } from '@/lib/board'
+import { SWARM, team, tilde } from '@/lib/board'
 import { AGENTS_MAX, launch } from '@/lib/run'
 
 export const dynamic = 'force-dynamic'
@@ -32,7 +32,7 @@ export default async function Page() {
   return (
     <>
       <h1>swarm</h1>
-      <p className="dim">board {me.where} · tasks under #{SWARM}/</p>
+      <p className="dim">board {tilde(me.where)} · tasks under #{SWARM}/</p>
       <form action={start}>
         <label htmlFor="goal">goal</label>
         <textarea id="goal" name="goal" rows={3} required placeholder="what the agents should get done" />
