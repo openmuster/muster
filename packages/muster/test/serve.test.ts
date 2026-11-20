@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto'
+import { appendFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { board, boardKey, file, http, listen, mint, verify } from '../src/index.ts'
 import { processStart } from '../src/process.ts'
+import { fileRegistry } from '../src/serve/tokens.ts'
 import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 
 async function served() {
@@ -275,6 +278,11 @@ describe('serve', () => {
     expect(await ask({ profile: 'x', can: { 'work/': ['manage'] }, ttl: 600 })).toBe('invalid_token')
     expect(await ask({ profile: 'x', can: { 'work/': ['read'] }, ttl: 25 * 3600 })).toBe('invalid_ttl')
     expect(await ask({ profile: 'x', can: { 'work/': ['fly'] }, ttl: 600 })).toBe('invalid_permission')
+    // A maker held to a profile can only make a token for that same profile, and passes on its own limits.
+    const fixed = as({ profile: 'lead', noSync: true })
+    expect(await reason(fixed.backend.tokens.create({ profile: 'someone-else', can: { 'work/': ['read'] }, ttl: 600 }))).toBe('forbidden')
+    const child = await fixed.backend.tokens.create({ profile: 'lead', can: { 'work/': ['read', 'post'] }, ttl: 600 })
+    expect((await board({ backend: http({ url: server.url, token: child.token }) }).post({ channel: 'work', text: 'kept local' })).noSync).toBe(true)
     // It never outlives the token it was made from (an hour here), and it runs out when it says.
     expect((await mine.backend.tokens.create({ profile: 'x', can: { 'work/': ['read'] }, ttl: 7200 })).record.exp).toBe(Math.floor(time.now().getTime() / 1000) + 3600)
     time.advance(601_000)
@@ -311,5 +319,23 @@ describe('serve', () => {
     // The owner's own writes are unmarked.
     expect((await owner.post({ channel: 'work', text: 'x' })).noSync).toBe(false)
     await server.close()
+  })
+
+  it('the token list on a file loses nothing to two writers, and refuses every listed token when it can\'t be read', () => {
+    const dir = tempDir()
+    const a = fileRegistry('/boards/main.db', dir)
+    const b = fileRegistry('/boards/main.db', dir)
+    const record = (id: string) => ({ id, profile: 'p', can: null, exp: 4_102_444_800, at: 1, revoked: false })
+    a.record(record('one'))
+    b.record(record('two'))
+    expect(a.revoke('one')).toBe(true)
+    // A writer that read before the revocation can't undo it by adding its own line.
+    b.record(record('three'))
+    expect(a.list(0).map((token) => [token.id, token.revoked])).toEqual([['one', true], ['two', false], ['three', false]])
+    expect([b.revoked('one'), b.revoked('two'), b.revoked('never-made')]).toEqual([true, false, false])
+    const file = join(dir, 'tokens', readdirSync(join(dir, 'tokens'))[0]!)
+    appendFileSync(file, '{"neither": 1}\n')
+    expect([a.revoked('two'), a.revoked('never-made')]).toEqual([true, true])
+    expect(() => a.list(0)).toThrow(/can't be read/)
   })
 })

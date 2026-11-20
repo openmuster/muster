@@ -59,7 +59,9 @@ survive a restart of `mu serve`.
 `mu token list` shows the tokens the board has made that haven't run out,
 each with an ID. `mu token revoke <id>` stops one at once: its next request is
 refused. The board keeps that list beside its key, never the tokens
-themselves. A token made before muster kept the list has no ID and can't be
+themselves. If the list can't be read, no token with an ID is accepted until
+it can: a list that can't say a token is still good is treated as saying it
+isn't. A token made before muster kept the list has no ID and can't be
 revoked; it stops when it runs out.
 
 ### Making a token from another machine
@@ -70,6 +72,8 @@ too, with limits that keep it from growing:
 
 - It must be held to a profile and to named channels. No `*`, no `manage`.
 - It lives a day at most, and never longer than the token that made it.
+- A maker that is itself held to a profile can only make a token for that
+  same profile, and a maker marked no-sync makes no-sync tokens.
 - Only a token that reaches everything can make one. A token held to
   channels, or one made this way, can't make, list or revoke tokens.
 

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 import { Failure, misuse } from '../failure.ts'
@@ -32,36 +32,69 @@ export function memoryRegistry(): Registry {
   }
 }
 
-/** The registry for a board on a file: one small JSON file, rewritten whole and swapped in. */
+/**
+ * The registry for a board on a file: a log, one line per token made and one per token stopped.
+ * Lines are only ever added, so two processes writing at once lose nothing, and a revocation can't
+ * be undone by a write that read the file a moment earlier.
+ */
 export function fileRegistry(where: string, dir = configDir()): Registry {
   const folder = join(dir, 'tokens')
-  const path = join(folder, createHash('sha256').update(where).digest('hex').slice(0, 16) + '.json')
-  const load = (): TokenRecord[] => {
+  const path = join(folder, createHash('sha256').update(where).digest('hex').slice(0, 16) + '.log')
+  type Line = { made: TokenRecord } | { revoked: string }
+  /** Every token and whether it was stopped, or null when the file is there but can't be read as what we wrote. */
+  const load = (): Map<string, TokenRecord> | null => {
+    let text: string
     try {
-      return (JSON.parse(readFileSync(path, 'utf8')) as { tokens: TokenRecord[] }).tokens
-    } catch {
-      return []
+      text = readFileSync(path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
+      return null
     }
+    const tokens = new Map<string, TokenRecord>()
+    const stopped = new Set<string>()
+    try {
+      for (const raw of text.split('\n')) {
+        if (!raw) continue
+        const line = JSON.parse(raw) as Line
+        if ('made' in line) tokens.set(line.made.id, { ...line.made, revoked: false })
+        else if (typeof line.revoked === 'string') stopped.add(line.revoked)
+        else return null
+      }
+    } catch {
+      return null
+    }
+    for (const id of stopped) {
+      const found = tokens.get(id)
+      if (found) found.revoked = true
+      // A revocation for a token whose own line is missing still counts.
+      else tokens.set(id, { id, profile: null, can: null, exp: Number.MAX_SAFE_INTEGER, at: 0, revoked: true })
+    }
+    return tokens
   }
-  const save = (tokens: TokenRecord[]) => {
+  const add = (line: Line) => {
     mkdirSync(folder, { recursive: true, mode: 0o700 })
-    const next = `${path}.${process.pid}.tmp`
-    // A token that ran out can be forgotten: it no longer opens anything.
-    writeFileSync(next, JSON.stringify({ tokens: tokens.filter((token) => token.exp * 1000 > Date.now()) }, null, 2), { mode: 0o600 })
-    renameSync(next, path)
+    appendFileSync(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
   }
+  const unreadable = () => new Failure('token_list_unreadable', `The board's list of tokens at ${path} can't be read.`, { hint: 'Until it can, no token with an ID is accepted. Restore the file, or move it aside and make new tokens.' })
   return {
-    record: (token) => save([...load(), token]),
+    record: (token) => add({ made: token }),
     revoke(id) {
       const tokens = load()
-      const found = tokens.find((token) => token.id === id)
-      if (!found) return false
-      found.revoked = true
-      save(tokens)
+      if (tokens === null) throw unreadable()
+      if (!tokens.has(id)) return false
+      add({ revoked: id })
       return true
     },
-    revoked: (id) => load().find((token) => token.id === id)?.revoked === true,
-    list: (now) => load().filter((token) => token.exp * 1000 > now),
+    // A list that can't be read can't say a token is still good, so none is.
+    revoked: (id) => {
+      const tokens = load()
+      return tokens === null || tokens.get(id)?.revoked === true
+    },
+    list(now) {
+      const tokens = load()
+      if (tokens === null) throw unreadable()
+      return [...tokens.values()].filter((token) => token.exp * 1000 > now && token.at > 0)
+    },
   }
 }
 
@@ -92,6 +125,8 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
     const held = maker.claims!
     if (held.can || held.minted) throw new Failure('forbidden', "A token that is held to channels, or was made from another, can't make tokens.", { hint: 'Ask whoever runs the board.' })
     if (profile === null) throw misuse('invalid_token', 'A token made this way is held to a profile: say which.')
+    // A maker that is itself held to a profile speaks only as that one, so it can't make a token that speaks as another.
+    if (held.profile !== null && profile !== held.profile) throw new Failure('forbidden', `This token writes as ${held.profile}, so it can only make a token for ${held.profile}.`)
     if (Object.keys(can).length === 0) throw misuse('invalid_token', 'A token made this way is held to channels: name them.')
     if (Object.keys(can).includes('*')) throw misuse('invalid_token', "A token made this way can't reach every channel.")
     if (Object.values(can).some((permissions) => permissions.includes('manage'))) throw misuse('invalid_token', "A token made this way can't manage a channel.")
@@ -99,7 +134,7 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
     exp = Math.min(exp, held.exp)
   }
   const id = randomBytes(9).toString('base64url')
-  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote ? { minted: true } : {}), ...(request.noSync ? { noSync: true } : {}) }
+  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote ? { minted: true } : {}), ...(request.noSync || maker.claims?.noSync ? { noSync: true } : {}) }
   const record: TokenRecord = { id, profile, can: Object.keys(can).length ? can : null, exp, at: Math.floor(now / 1000), revoked: false }
   registry.record(record)
   return { token: mint(key, claims), record }
