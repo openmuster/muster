@@ -17,6 +17,8 @@ describe('the sandbox network policy', () => {
     expect([...SANDBOX_ROUTES, ...SANDBOX_CLOSED].sort()).toEqual([...ROUTES].sort())
     const { networkPolicy } = boardPolicy({ url: URL_, token: 'T' })
     for (const closed of SANDBOX_CLOSED) expect(applyPolicy(networkPolicy, { url: `${URL_}/${closed}`, method: 'POST' })).toBeNull()
+    // The routes that make and stop tokens aren't board routes at all, and a sandbox can't reach them either.
+    for (const route of ['tokenCreate', 'tokenList', 'tokenRevoke']) expect(applyPolicy(networkPolicy, { url: `${URL_}/${route}`, method: 'POST' })).toBeNull()
   })
 
   it('gives a sandbox the board with no credential inside it: the environment holds a placeholder', () => {

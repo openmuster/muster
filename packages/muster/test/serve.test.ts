@@ -250,4 +250,66 @@ describe('serve', () => {
     expect((await as({ profile: 'x', can: { 'work/': ['post'] } }).filePut({ name: 'f', data: 'eA==' })).size).toBe(1)
     await server.close()
   })
+
+  it('makes a token for an agent over HTTP: narrower than the maker\'s, short-lived, and unable to make more', async () => {
+    const { server, as, time, owner } = await served()
+    const mine = as()
+    const made = await mine.backend.tokens.create({ profile: 'fixer', can: { 'work/': ['read', 'post', 'label'] }, ttl: 600 })
+    const agent = board({ backend: http({ url: server.url, token: made.token }) })
+    // It writes as the profile it was made for, where it was let in, and nowhere else.
+    expect((await agent.post({ channel: 'work/login', text: 'hi' })).by.profile).toBe('fixer')
+    await owner.post({ channel: 'ops', text: 'private' })
+    // A channel it wasn't let into answers as if it weren't there.
+    expect(await reason(agent.post({ channel: 'ops', text: 'x' }))).toBe('not_found')
+    expect(await reason(agent.readChannel({ channel: 'ops' }))).toBe('not_found')
+    // It can't make tokens, list them or stop one.
+    expect(await reason(agent.backend.tokens.create({ profile: 'x', can: { 'work/': ['read'] }, ttl: 600 }))).toBe('forbidden')
+    expect(await reason(agent.backend.tokens.list())).toBe('forbidden')
+    // Nor can any token already held to channels.
+    expect(await reason(as({ profile: 'p', can: { 'work/': ['post'] } }).backend.tokens.create({ profile: 'x', can: { 'work/': ['read'] }, ttl: 600 }))).toBe('forbidden')
+    // What may be asked for is held to less than the maker has.
+    const ask = (request: Parameters<typeof mine.backend.tokens.create>[0]) => reason(mine.backend.tokens.create(request))
+    expect(await ask({ can: { 'work/': ['read'] }, ttl: 600 })).toBe('invalid_token')
+    expect(await ask({ profile: 'x', can: {}, ttl: 600 })).toBe('invalid_token')
+    expect(await ask({ profile: 'x', can: { '*': ['read'] }, ttl: 600 })).toBe('invalid_token')
+    expect(await ask({ profile: 'x', can: { 'work/': ['manage'] }, ttl: 600 })).toBe('invalid_token')
+    expect(await ask({ profile: 'x', can: { 'work/': ['read'] }, ttl: 25 * 3600 })).toBe('invalid_ttl')
+    expect(await ask({ profile: 'x', can: { 'work/': ['fly'] }, ttl: 600 })).toBe('invalid_permission')
+    // It never outlives the token it was made from (an hour here), and it runs out when it says.
+    expect((await mine.backend.tokens.create({ profile: 'x', can: { 'work/': ['read'] }, ttl: 7200 })).record.exp).toBe(Math.floor(time.now().getTime() / 1000) + 3600)
+    time.advance(601_000)
+    expect(await reason(agent.readChannel({ channel: 'work/' }))).toBe('unauthorized')
+    await server.close()
+  })
+
+  it('a token the owner stops is refused at once, and the list says which are live', async () => {
+    const { server, as } = await served()
+    const mine = as()
+    const made = await mine.backend.tokens.create({ profile: 'fixer', can: { 'work/': ['read', 'post'] }, ttl: 600 })
+    const agent = board({ backend: http({ url: server.url, token: made.token }) })
+    await agent.post({ channel: 'work', text: 'before' })
+    expect((await mine.backend.tokens.list()).tokens.map((token) => [token.id, token.profile, token.revoked])).toEqual([[made.record.id, 'fixer', false]])
+    expect(await mine.backend.tokens.revoke({ id: made.record.id })).toEqual({ revoked: made.record.id })
+    expect(await reason(agent.post({ channel: 'work', text: 'after' }))).toBe('unauthorized')
+    expect((await mine.backend.tokens.list()).tokens[0]!.revoked).toBe(true)
+    expect(await reason(mine.backend.tokens.revoke({ id: 'nope' }))).toBe('not_found')
+    await server.close()
+  })
+
+  it('a token marked to keep its words on the board does, whatever a request says, for edits and deletes too', async () => {
+    const { server, as, owner } = await served()
+    const made = await as().backend.tokens.create({ profile: 'fixer', can: { 'work/': ['read', 'post'] }, ttl: 600, noSync: true })
+    const agent = board({ backend: http({ url: server.url, token: made.token }) })
+    const posted = await agent.post({ channel: 'work', text: 'hello', noSync: false })
+    expect(posted.noSync).toBe(true)
+    const root = await owner.post({ channel: 'work', text: 'a thread that syncs' })
+    expect((await agent.reply({ to: root.id, text: 'mine' })).noSync).toBe(true)
+    await agent.edit({ id: posted.id, text: 'hello again' })
+    await agent.remove({ id: posted.id })
+    const events = (await owner.events({ after: 0 })).events.filter((event) => event.type === 'message.edited' || event.type === 'message.deleted')
+    expect(events.map((event) => (event.data as { noSync?: boolean }).noSync)).toEqual([true, true])
+    // The owner's own writes are unmarked.
+    expect((await owner.post({ channel: 'work', text: 'x' })).noSync).toBe(false)
+    await server.close()
+  })
 })

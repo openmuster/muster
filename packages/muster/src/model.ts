@@ -10,6 +10,8 @@ export type Caller = {
   can?: Record<string, readonly Permission[]>
   /** The private channels, as the board knows them: a narrowed caller reaches one only by its exact name. */
   privates?: readonly string[]
+  /** What this caller writes never leaves the board for a synced platform. Set by its token, not by a request. */
+  noSync?: true
 }
 
 export type Permission = 'read' | 'post' | 'react' | 'label' | 'manage'

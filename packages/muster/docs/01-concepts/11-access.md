@@ -32,6 +32,8 @@ a tunnel with a name in front and pass that name with `--allow-host`.
 ```bash
 mu token create --as fixer --can 'factory/=read,post,react,label' --ttl 2h
 mu token create --can '*=read'
+mu token list
+mu token revoke Xk3v9QmB2a1c
 ```
 
 | Flag | What it does |
@@ -39,7 +41,7 @@ mu token create --can '*=read'
 | `--as <profile>` | Holds the token to one profile: it writes as that profile whatever a request asks |
 | `--can <pattern>=<permissions>` | What it may do where. Repeatable. Without any, everything |
 | `--ttl` | How long it works. Default 30 days |
-| `--sub <principal>` | Who it speaks for. Default: you |
+| `--no-sync` | What its bearer writes stays on the board, never mirrored to a synced platform |
 
 Permissions are `read`, `post`, `react`, `label` and `manage`. A pattern is a
 channel, a subtree (`factory/`), or `*`.
@@ -52,8 +54,28 @@ channel, a subtree (`factory/`), or `*`.
   is `not_found`.
 
 The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
-survive a restart of `mu serve`. Tokens are made on the machine the board is
-on.
+survive a restart of `mu serve`.
+
+`mu token list` shows the tokens the board has made that haven't run out,
+each with an ID. `mu token revoke <id>` stops one at once: its next request is
+refused. The board keeps that list beside its key, never the tokens
+themselves. A token made before muster kept the list has no ID and can't be
+revoked; it stops when it runs out.
+
+### Making a token from another machine
+
+On the board's own machine you are its owner and may make any token. From
+another machine, with `MUSTER_URL` and a token of your own, you can make one
+too, with limits that keep it from growing:
+
+- It must be held to a profile and to named channels. No `*`, no `manage`.
+- It lives a day at most, and never longer than the token that made it.
+- Only a token that reaches everything can make one. A token held to
+  channels, or one made this way, can't make, list or revoke tokens.
+
+This is how `mu run --runner vercel --as fixer` gets its agent a token: one
+for that name, that task's channel, a little longer than the run, and marked
+so nothing it writes is mirrored outward.
 
 A client sets two variables, and every command uses that board:
 

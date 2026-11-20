@@ -133,8 +133,10 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `unknown_agent` | No agent by that name |
 | `unknown_runner` | No runner by that name |
 | `runner_not_installed` | The runner's package isn't installed |
-| `agent_token_missing` | A cloud run was started without a token made for the agent |
+| `agent_token_missing` | A cloud run was started with no name for the agent and no token made for it |
 | `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
+| `invalid_token` | A token was asked for that isn't held to a profile and named channels, or reaches too far |
+| `invalid_ttl` | A token's lifetime is too short, or over a day for one made from another machine |
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |

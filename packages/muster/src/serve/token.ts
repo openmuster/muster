@@ -14,6 +14,12 @@ export type Claims = {
   can?: Record<string, Permission[]>
   /** When it stops working, in seconds since the epoch. */
   exp: number
+  /** Its ID in the board's list of tokens, by which it can be stopped. Absent on tokens from before there was one. */
+  jti?: string
+  /** It was made over HTTP from another token, so it can't make more. */
+  minted?: true
+  /** What its bearer writes stays on the board, whatever the request says. */
+  noSync?: true
 }
 
 const b64 = (data: Buffer | string) => Buffer.from(data).toString('base64url')

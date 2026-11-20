@@ -170,7 +170,8 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         const copy = ctx.db.raw.prepare('select external, place from links where message = ? and key = ?').get(data.id, key) as { external: string; place: string | null } | undefined
         const rootCopy = event.thread === null ? undefined : (ctx.db.raw.prepare('select place from links where message = ? and key = ?').get(event.thread, key) as { place: string | null } | undefined)
         const where = copy?.place ?? rootCopy?.place ?? null
-        if (copy && where && data.origin?.key !== key && provider.mirrors(where)) {
+        // A change by a caller held to the board stays on the board, like what that caller posts.
+        if (copy && where && data.origin?.key !== key && !data.noSync && provider.mirrors(where)) {
           try {
             if (event.type === 'message.edited') await provider.update?.(copy.external, String(data.text ?? ''), where, fetcher)
             else await provider.remove?.(copy.external, where, fetcher)

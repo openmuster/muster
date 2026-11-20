@@ -15,6 +15,8 @@ import { sameProcess } from '../process.ts'
 import { ensureSchema } from '../store/schema.ts'
 import { openDb, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, importPending, receive, type Sync } from '../sync/engine.ts'
+import { boardKey } from '../serve/token.ts'
+import { fileRegistry, memoryRegistry, mintToken, type Registry } from '../serve/tokens.ts'
 import type { Backend } from './types.ts'
 
 export type FileOptions = {
@@ -22,6 +24,9 @@ export type FileOptions = {
   dir?: string
   /** The board's name: `<dir>/<name>.db`. Default `main`. */
   name?: string
+  /** The key tokens are signed with, and the list of tokens made. Default: the ones kept for this board in the config folder. */
+  key?: Buffer
+  tokens?: Registry
   /** Keeps the board in memory: nothing is written, and it's gone with the process. For tests. */
   memory?: boolean
   now?: () => Date
@@ -68,6 +73,9 @@ export function file(options: FileOptions = {}): Backend {
     return opened
   }
   const ctx = (): Context => ({ db: open(), now: options.now ?? (() => new Date()), alive: options.alive ?? sameProcess })
+  let kept: Registry | null = null
+  /** The board's list of the tokens it made: beside its key for a board on a file, in memory otherwise. */
+  const registry = (): Registry => (kept ??= options.tokens ?? (options.memory ? memoryRegistry() : fileRegistry(where())))
   const principal = options.principal ?? `local:user:${userInfo().username.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`
 
   // A caller held to some channels is told which are private, so the rules can keep it out of them.
@@ -88,6 +96,15 @@ export function file(options: FileOptions = {}): Backend {
     },
     async self(profile) {
       return { principal, profile: profile === null ? null : profileName(profile) }
+    },
+    // On the board's own machine the caller is its owner, who may make any token.
+    tokens: {
+      create: async (request) => mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, request, (options.now ?? (() => new Date()))().getTime()),
+      list: async () => ({ tokens: registry().list((options.now ?? (() => new Date()))().getTime()) }),
+      revoke: async (request) => {
+        if (!registry().revoke(request.id)) throw new Failure('not_found', 'No such token.')
+        return { revoked: request.id }
+      },
     },
     post: op(messages.post),
     reply: op(messages.reply),

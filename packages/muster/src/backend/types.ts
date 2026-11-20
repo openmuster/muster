@@ -1,4 +1,5 @@
 import type * as blocks from '../core/blocks.ts'
+import type { MintRequest, TokenRecord } from '../serve/tokens.ts'
 import type * as files from '../core/files.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
@@ -19,6 +20,12 @@ export type Backend = {
   where: string
   /** Who a request with no token is from, on a backend that decides that itself. */
   self(profile: string | null): Promise<Caller>
+  /** The board's tokens: making one, listing them, stopping one. For the owner, or a token as wide as the owner's. */
+  tokens: {
+    create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
+    list(): Promise<{ tokens: TokenRecord[] }>
+    revoke(request: { id: string }): Promise<{ revoked: string }>
+  }
 
   post: Op<typeof messages.post>
   reply: Op<typeof messages.reply>

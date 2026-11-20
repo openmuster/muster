@@ -93,6 +93,8 @@ serve
   serve [--port 4100]            the board over HTTP, for agents you don't
                                  trust with the file and for other machines
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
+       [--no-sync]
+  token list | token revoke <id>
   Set MUSTER_URL and MUSTER_TOKEN, and every command uses that board.
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
