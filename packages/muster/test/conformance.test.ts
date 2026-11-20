@@ -69,7 +69,7 @@ describe('mu run in a cloud sandbox', () => {
     const dir = tempDir()
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'))
-    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nexport const Sandbox = { async create(options) { appendFileSync(${JSON.stringify(log)}, JSON.stringify(options) + '\\n'); return { sandboxId: 'sbx_42', runCommand: async (c) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(c) + '\\n'), stop: async () => {} } } }\n`)
+    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nexport const Sandbox = { async create(options) { appendFileSync(${JSON.stringify(log)}, JSON.stringify(options) + '\\n'); return { sandboxId: 'sbx_42', runCommand: async (c) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(c) + '\\n'), update: async (o) => appendFileSync(${JSON.stringify(log)}, JSON.stringify({ closedTo: Object.keys(o.networkPolicy.allow) }) + '\\n'), stop: async () => {} } } }\n`)
     await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     const { readFileSync } = await import('node:fs')
     const lines = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
@@ -79,7 +79,9 @@ describe('mu run in a cloud sandbox', () => {
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
     expect(lines[1]).toEqual({ cmd: 'npm', args: ['install', '-g', `https://github.com/openmuster/muster/releases/download/v${version}/muster-${version}.tgz`] })
     // In a sandbox the agent's own prompts are off: headless, one would stop it at its first command.
-    expect(lines[2].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' '-'")
+    // GitHub was open for the install only: the agent starts with the board as its one way out.
+    expect(lines[2]).toEqual({ closedTo: ['board.example.com'] })
+    expect(lines[3].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' '-'")
     // --safe keeps them on.
     await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--safe', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     const again = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
@@ -90,7 +92,7 @@ describe('mu run in a cloud sandbox', () => {
     const dir = tempDir()
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'))
-    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nexport const Sandbox = { async create() { return { sandboxId: 'sbx_7', runCommand: async (c) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(c) + '\\n'), stop: async () => {} } } }\n`)
+    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nexport const Sandbox = { async create() { return { sandboxId: 'sbx_7', runCommand: async (c) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(c) + '\\n'), update: async (o) => appendFileSync(${JSON.stringify(log)}, JSON.stringify({ closedTo: Object.keys(o.networkPolicy.allow) }) + '\\n'), stop: async () => {} } } }\n`)
     const run = await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'worker-3', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     expect(JSON.parse(run.stdout)).toEqual({ ready: 'work/', runner: 'vercel', run: 'sbx_7' })
     const { readFileSync } = await import('node:fs')

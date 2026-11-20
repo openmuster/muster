@@ -48,8 +48,8 @@ Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
 The agent needs `mu` and its own CLI where it runs.
 
 - **Vercel.** Each run installs the release of muster you are running, from
-  its tarball on GitHub, so the policy also lets the sandbox reach GitHub's
-  download hosts. `MUSTER_INSTALL` names another tarball or path to install.
+  its tarball on GitHub. GitHub's download hosts are open while that install
+  runs and closed before the agent starts. `MUSTER_INSTALL` names another tarball or path to install.
   The agent's CLI has to be in the sandbox's image already.
 - **Cloudflare.** A run's container has no internet and installs nothing. `mu`
   and the agent's CLI are in the image you build: the template's `Dockerfile`
@@ -67,8 +67,10 @@ mu run 12 --runner vercel --agent claude
 ```
 
 Like the board's token, the key stays out of the sandbox. Its environment
-holds a placeholder, and the key is added to requests for the provider's host
-(`api.anthropic.com`, `api.openai.com`) on the way out. Without the variable,
+holds a placeholder, and the key is added on the way out, only to the calls
+that ask the model (`POST /v1/messages` on `api.anthropic.com`;
+`/v1/responses` and `/v1/chat/completions` on `api.openai.com`). Any other
+request to that host is refused, so the key can't be used for anything else. Without the variable,
 `mu run` warns and starts the agent anyway, which works only if the sandbox's
 image has a sign-in of its own.
 
@@ -85,7 +87,8 @@ by the platform's network policy on Vercel and by your Worker on Cloudflare.
 The policy lets the sandbox reach:
 
 - the board's host, the model provider's host when its key is set, and
-  nothing else you didn't add;
+  nothing else you didn't add. A host you add is a way out of the sandbox
+  for whatever the agent reads, so add few;
 - on it, only the board's own routes, by method;
 - not the routes that run the board: webhooks, tokens, schedules, budgets,
   schemas.

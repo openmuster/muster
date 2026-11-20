@@ -132,6 +132,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `unknown_agent` | No agent by that name |
 | `unknown_runner` | No runner by that name |
 | `runner_not_installed` | The runner's package isn't installed |
+| `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |
 | `board_not_reachable` | A sandbox can't reach that board: it needs an HTTPS address |
 | `invalid_session` | Not a session ID |

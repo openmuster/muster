@@ -101,7 +101,12 @@ describe('cloud runners', () => {
     const Sandbox = { create: async (options: any) => (calls.push(options), { name: 'sbx-2', runCommand: async (command: any) => void calls.push(command), stop: async () => {} }) }
     const run = await vercel({ Sandbox }).start({ ...request, model: { key: 'sk-real-key' } })
     expect(run.id).toBe('sbx-2')
-    expect(calls[0].networkPolicy.allow['api.anthropic.com']).toEqual([{ transform: [{ headers: { 'x-api-key': 'sk-real-key' } }] }])
+    // The key goes only on the calls that ask the model; whatever else it could do on that host is refused.
+    const model = calls[0].networkPolicy.allow['api.anthropic.com']
+    expect(model).toEqual([{ match: { path: { regex: expect.any(String) }, method: ['POST'] }, transform: [{ headers: { 'x-api-key': 'sk-real-key' } }] }, { response: { statusCode: 403 } }])
+    const asks = (path: string) => new RegExp(model[0].match.path.regex).test(path)
+    expect(['/v1/messages', '/v1/messages?beta=true', '/v1/messages/count_tokens'].map(asks)).toEqual([true, true, true])
+    expect(['/v1/files', '/v1/messages/batches', '/v1/organizations/api_keys', '/v1/messagesx', '/x/v1/messages'].map(asks)).toEqual([false, false, false, false, false])
     expect(calls[0].env).toMatchObject({ ANTHROPIC_API_KEY: 'set-by-the-network-policy', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' })
     expect(JSON.stringify([calls[0].env, ...calls.slice(1)])).not.toContain('sk-real-key')
     // Without a key the provider's host stays closed and no placeholder is set.
@@ -109,6 +114,23 @@ describe('cloud runners', () => {
     await vercel({ Sandbox: { create: async (options: any) => (bare.push(options), { name: 'sbx-3', runCommand: async () => {}, stop: async () => {} }) } }).start(request)
     expect(Object.keys(bare[0].networkPolicy.allow)).toEqual(['board.example.com'])
     expect(bare[0].env.ANTHROPIC_API_KEY).toBeUndefined()
+  })
+
+  it('vercel: the hosts its setup needs are closed before the agent starts', async () => {
+    const calls: any[] = []
+    const made = { name: 'sbx-4', runCommand: async (command: any) => void calls.push(['run', command.cmd]), update: async (options: any) => void calls.push(['update', Object.keys(options.networkPolicy.allow)]), stop: async () => void calls.push(['stop']) }
+    const Sandbox = { create: async (options: any) => (calls.push(['create', Object.keys(options.networkPolicy.allow).sort()]), made) }
+    await vercel({ Sandbox, setupHosts: ['github.com'] }).start(request)
+    expect(calls).toEqual([['create', ['board.example.com', 'github.com']], ['run', 'npm'], ['update', ['board.example.com']], ['run', 'sh']])
+    // A sandbox that can't be closed again is stopped, and the agent never starts in it.
+    calls.length = 0
+    const { update: _, ...old } = made
+    expect(await reason(vercel({ Sandbox: { create: async () => old }, setupHosts: ['github.com'] }).start(request))).toBe('runner_too_old')
+    expect(calls).toEqual([['run', 'npm'], ['stop']])
+    // With nothing to set up, the setup's hosts are never opened at all.
+    calls.length = 0
+    await vercel({ Sandbox, setupHosts: ['github.com'] }).start({ ...request, setup: [] })
+    expect(calls).toEqual([['create', ['board.example.com']], ['run', 'sh']])
   })
 
   it('cloudflare: asks your Worker to start the run, with the board rules for it to enforce and no token in the container\'s environment', async () => {
@@ -125,7 +147,7 @@ describe('cloud runners', () => {
     expect(calls[0]!.body.model).toBeUndefined()
     const keyed: any[] = []
     await cloudflare({ worker: 'https://w.example', secret: 's', fetch: (async (_url: any, init?: RequestInit) => (keyed.push(JSON.parse(String(init?.body))), Response.json({ id: 'r' }))) as typeof fetch }).start({ ...request, model: { key: 'sk-real-key' } })
-    expect(keyed[0].model).toEqual({ host: 'api.anthropic.com', headers: { 'x-api-key': 'sk-real-key' } })
+    expect(keyed[0].model).toEqual({ host: 'api.anthropic.com', paths: [expect.stringContaining('/v1/messages')], headers: { 'x-api-key': 'sk-real-key' } })
     expect(JSON.stringify(keyed[0].env)).not.toContain('sk-real-key')
     expect(calls[0]!.body.command).toEqual(['claude', '--print', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--disable-slash-commands', '--tools', 'Bash,Read,Edit,Write,Grep,Glob'])
     await run.stop()

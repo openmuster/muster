@@ -20,9 +20,10 @@ export type Agent = {
   /**
    * How the agent reaches its model from a sandbox: the provider's host, the variable its key is read
    * from on the machine that starts the run, the headers that carry the key, and what the sandbox's
-   * environment holds instead of it. Absent for an agent whose model isn't ours to know.
+   * environment holds instead of it. `paths` are the only requests the key is added to, as regular
+   * expressions over the path of a POST: asking the model, and nothing else that key can do. Absent for an agent whose model isn't ours to know.
    */
-  model?: { host: string; keyEnv: string; headers(key: string): Record<string, string>; env(placeholder: string): Record<string, string> }
+  model?: { host: string; keyEnv: string; paths: string[]; headers(key: string): Record<string, string>; env(placeholder: string): Record<string, string> }
   parse(stdout: string): Parsed
   classify(result: { code: number | null; signal: NodeJS.Signals | null; parsed: Parsed; stderr: string }): ExitKind
 }
@@ -80,6 +81,7 @@ export const claude: Agent = {
   model: {
     host: 'api.anthropic.com',
     keyEnv: 'ANTHROPIC_API_KEY',
+    paths: ['^/v1/messages(/count_tokens)?(\\?.*)?$'],
     headers: (key) => ({ 'x-api-key': key }),
     // Only the model's host is open to the sandbox, so the calls that go elsewhere (telemetry, updates) are turned off.
     env: (placeholder) => ({ ANTHROPIC_API_KEY: placeholder, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' }),
@@ -127,6 +129,7 @@ export const codex: Agent = {
   model: {
     host: 'api.openai.com',
     keyEnv: 'OPENAI_API_KEY',
+    paths: ['^/v1/(responses|chat/completions)(\\?.*)?$'],
     headers: (key) => ({ authorization: `Bearer ${key}` }),
     env: (placeholder) => ({ OPENAI_API_KEY: placeholder }),
   },

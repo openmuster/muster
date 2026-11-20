@@ -1,4 +1,5 @@
 import type { Agent, PermissionMode } from './agents.ts'
+import { Failure } from '../failure.ts'
 import { PLACEHOLDER, boardPolicy } from './policy.ts'
 
 /** What a cloud runner needs to start an agent on a task somewhere that isn't this machine. */
@@ -33,6 +34,8 @@ export type VercelSandbox = {
     sandboxId?: string
     name?: string
     runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<unknown>
+    /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
+    update?(options: { networkPolicy: VercelPolicy }): Promise<unknown>
     stop(): Promise<unknown>
   }>
 }
@@ -47,7 +50,11 @@ const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
  * network policy, added to requests on the way out, so the agent's environment holds placeholders
  * and nothing to steal.
  */
-export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; image?: string }): CloudRunner {
+/**
+ * `setupHosts` are open while the setup commands run, which are ours, and closed before the agent
+ * starts. `allowHosts` stay open to the agent, so each one is a way out of the sandbox: add few.
+ */
+export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string }): CloudRunner {
   return {
     name: 'vercel',
     async start(request) {
@@ -61,15 +68,29 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         ]
       }
       const model = request.model ? request.agent.model : undefined
-      if (model && request.model) allow[model.host] = [{ transform: [{ headers: model.headers(request.model.key) }] }]
+      // The key goes only on the calls that ask the model. Everything else the key could do on that host is refused.
+      if (model && request.model) {
+        allow[model.host] = [...model.paths.map((regex) => ({ match: { path: { regex }, method: ['POST'] }, transform: [{ headers: model.headers(request.model!.key) }] })), { response: { statusCode: 403 } }]
+      }
+      const setup = request.setup ?? []
+      const during: Record<string, VercelRule[]> = { ...allow }
+      if (setup.length) for (const host of options.setupHosts ?? []) during[host] ??= []
       const sandbox = await options.Sandbox.create({
-        networkPolicy: { allow },
+        networkPolicy: { allow: during },
         image: options.image ?? VERCEL_IMAGE,
         env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
-      for (const [cmd, ...args] of request.setup ?? []) await sandbox.runCommand({ cmd: cmd!, args })
+      for (const [cmd, ...args] of setup) await sandbox.runCommand({ cmd: cmd!, args })
+      // What the setup needed is closed before anything the agent decides runs.
+      if (setup.length && options.setupHosts?.length) {
+        if (!sandbox.update) {
+          await sandbox.stop()
+          throw new Failure('runner_too_old', "This @vercel/sandbox can't change a running sandbox's network policy, so the setup's hosts would stay open to the agent.", { hint: 'npm i @vercel/sandbox@latest' })
+        }
+        await sandbox.update({ networkPolicy: { allow } })
+      }
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag.
       await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
@@ -105,7 +126,7 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         ...(request.repo ? { repo: request.repo } : {}),
         setup: request.setup ?? [],
         // The Worker adds these to requests for the model's host, as it adds the board's token.
-        ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, headers: request.agent.model.headers(request.model.key) } } : {}),
+        ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, paths: request.agent.model.paths, headers: request.agent.model.headers(request.model.key) } } : {}),
         ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}),
       })
       return { id: made.id, stop: async () => void (await call(`/runs/${made.id}/stop`, {})) }

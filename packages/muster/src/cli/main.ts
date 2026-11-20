@@ -1082,7 +1082,8 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     } catch {
       throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
     }
-    runner = vercel({ Sandbox: sdk.Sandbox as never, allowHosts: Object.fromEntries(RELEASE_HOSTS.map((host) => [host, []])) })
+    // GitHub is open only while mu installs; the agent starts with it closed.
+    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS })
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
@@ -1102,6 +1103,8 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   // The model's key is read here and added to the sandbox's requests on the way out: it never enters the sandbox.
   const modelKey = agent.model ? env[agent.model.keyEnv] : undefined
   if (agent.model && !modelKey) run.io.err(`warning: ${agent.model.keyEnv} is not set here, so the agent can't reach its model unless the sandbox has a sign-in of its own`)
+  const safe = on(parsed.flags, 'safe')
+  if (!safe) run.io.err("note: in the sandbox the agent runs without its permission prompts; its network policy is the boundary (--safe keeps them)")
   const started = await runner.start({
     task,
     agent,
@@ -1111,7 +1114,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     ...(repo ? { repo } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
-    permissionMode: on(parsed.flags, 'safe') ? 'safe' : 'bypass',
+    permissionMode: safe ? 'safe' : 'bypass',
     // A Vercel sandbox gets the same release as this CLI, from its tarball: never a package looked up by name.
     // A Cloudflare container has no internet: mu is in the image you built.
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
