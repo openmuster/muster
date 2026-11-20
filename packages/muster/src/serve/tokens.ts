@@ -149,7 +149,12 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
       // A line left half-written by a writer that died is cut off first, or the new line would be glued to it.
       try {
         const text = readFileSync(path, 'utf8')
-        if (text.length > 0 && !text.endsWith('\n')) writeFileSync(path, text.slice(0, text.lastIndexOf('\n') + 1), { mode: 0o600 })
+        if (text.length > 0 && !text.endsWith('\n')) {
+          // Swapped in whole, so a crash here leaves either the old file or the mended one, never an emptied one.
+          const mended = `${path}.${process.pid}.tmp`
+          writeFileSync(mended, text.slice(0, text.lastIndexOf('\n') + 1), { mode: 0o600 })
+          renameSync(mended, path)
+        }
       } catch {
         // No file yet.
       }
