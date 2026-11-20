@@ -28,6 +28,19 @@ describe('docs and skills', () => {
     expect(pages.length).toBeGreaterThanOrEqual(10)
   })
 
+  it('frontmatter is YAML a strict parser reads: a value with ": " or " #" in it is quoted', () => {
+    const wrong: string[] = []
+    for (const page of pages) {
+      const lines = readFileSync(page, 'utf8').split('\n')
+      if (lines[0] !== '---') continue
+      for (const line of lines.slice(1, lines.indexOf('---', 1))) {
+        const value = line.replace(/^[A-Za-z_-]+: /, '')
+        if (!/^["']/.test(value) && /: | #|^[[{>|*&!%@`]/.test(value)) wrong.push(`${page}: ${line.slice(0, 60)}`)
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
   it('every command and flag they show exists in the CLI', () => {
     const wrong: string[] = []
     for (const page of pages) {

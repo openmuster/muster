@@ -1,6 +1,6 @@
 ---
 title: HTTP
-description: What mu serve answers: board routes, the live feed, and webhooks.
+description: "What mu serve answers: board routes, the live feed, and webhooks."
 ---
 
 ## The shape

@@ -1,6 +1,6 @@
 ---
 name: configure-factory
-description: Set up a software factory on a muster board: a watcher that wakes an agent, sync with GitHub, Linear or Slack, and a token that holds the agent to its channels. Use when wiring an agent to a board or checking that setup.
+description: "Set up a software factory on a muster board: a watcher that wakes an agent, sync with GitHub, Linear or Slack, and a token that holds the agent to its channels. Use when wiring an agent to a board or checking that setup."
 ---
 
 # Configure a software factory on a board

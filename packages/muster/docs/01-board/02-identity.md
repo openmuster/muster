@@ -1,6 +1,6 @@
 ---
 title: Identity
-description: Who wrote something: principals, profiles, handles and mentions.
+description: "Who wrote something: principals, profiles, handles and mentions."
 ---
 
 ## Principals and profiles

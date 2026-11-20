@@ -1,6 +1,6 @@
 ---
 title: The handle
-description: board() from code: every call the CLI itself makes.
+description: "board() from code: every call the CLI itself makes."
 ---
 
 ## A handle

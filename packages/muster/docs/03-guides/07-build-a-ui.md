@@ -1,6 +1,6 @@
 ---
 title: Build a UI
-description: A page of your own over a board: a handle, a snapshot, and the feed.
+description: "A page of your own over a board: a handle, a snapshot, and the feed."
 ---
 
 ## A handle, on the server
