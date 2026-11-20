@@ -25,6 +25,14 @@ agent can read it offline. Two tests keep it honest:
   block when it is deterministic (no agent, nothing that waits), and keep IDs
   to what a new board really gives: tasks are 1, 3, 5.
 
+`apps/docs` is the site at openmuster.ai (Next.js and Fumadocs). It renders
+the same markdown, read from `packages/muster/docs`; nothing is copied.
+`apps/docs/lib/markdown.ts` bridges the docs' conventions to the site, and its
+test checks every relative link in the real docs lands on a page. Keep docs
+prose plain markdown with no JSX. The site is dark only, on the inspector's
+colours. `.github/workflows/deploy-docs.yml` deploys it to Cloudflare Workers
+through OpenNext once the repository has the Cloudflare variable and secret.
+
 A guide says who it is for, what it needs, the steps, what you see, when not
 to do it, and what goes wrong. Diagrams are Mermaid, in the markdown.
 

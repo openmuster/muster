@@ -1,0 +1,133 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* One look for the product and its docs: the inspector's black, its greys, its hairlines. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root,
+.dark {
+  --muster-bg: #000000;
+  --muster-fg: #ededed;
+  --muster-dim: #8a8a8a;
+  --muster-line: #2a2a2a;
+  --muster-raise: #0a0a0a;
+  --muster-hover: #141414;
+
+  --color-fd-background: var(--muster-bg);
+  --color-fd-foreground: var(--muster-fg);
+  --color-fd-muted: var(--muster-raise);
+  --color-fd-muted-foreground: var(--muster-dim);
+  --color-fd-popover: var(--muster-raise);
+  --color-fd-popover-foreground: var(--muster-fg);
+  --color-fd-card: var(--muster-raise);
+  --color-fd-card-foreground: var(--muster-fg);
+  --color-fd-border: var(--muster-line);
+  --color-fd-primary: var(--muster-fg);
+  --color-fd-primary-foreground: var(--muster-bg);
+  --color-fd-secondary: var(--muster-raise);
+  --color-fd-secondary-foreground: var(--muster-fg);
+  --color-fd-accent: var(--muster-hover);
+  --color-fd-accent-foreground: var(--muster-fg);
+  --color-fd-ring: #5a5a5a;
+  color-scheme: dark;
+}
+
+html {
+  background: var(--muster-bg);
+}
+
+body {
+  background: var(--muster-bg);
+  color: var(--muster-fg);
+}
+
+/* Chrome is monospace, like the CLI and the inspector; prose stays in a reading face. */
+#nd-sidebar,
+#nd-nav,
+#nd-subnav,
+#nd-toc,
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-mono);
+}
+
+#nd-sidebar,
+#nd-nav,
+#nd-subnav {
+  background: var(--muster-bg);
+}
+
+/* Hairlines, not boxes. */
+#nd-sidebar {
+  border-color: var(--muster-line);
+}
+
+/* Nested pages hang from a thin guide line. */
+#nd-sidebar [data-state] > div > div,
+#nd-sidebar ul ul {
+  border-left: 1px solid var(--muster-line);
+  margin-left: 0.6rem;
+  padding-left: 0.4rem;
+}
+
+.prose h2 {
+  border-bottom: 1px solid var(--muster-line);
+  padding-bottom: 0.4rem;
+  font-size: 1.15rem;
+}
+
+.prose :where(code):not(:where(pre *)) {
+  border: 1px solid var(--muster-line);
+  background: transparent;
+}
+
+.prose table {
+  border-collapse: collapse;
+}
+
+.prose :where(th, td) {
+  border-color: var(--muster-line);
+}
+
+.muster-diagram {
+  margin: 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid var(--muster-line);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.muster-diagram svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  display: block;
+}
+
+.muster-diagram-source {
+  margin: 1.25rem 0;
+  padding: 1rem;
+  border: 1px solid var(--muster-line);
+  border-radius: 6px;
+  color: var(--muster-dim);
+  font: 12px/1.5 var(--font-mono);
+  overflow-x: auto;
+}
+
+:focus-visible {
+  outline: 2px solid #9a9a9a;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
