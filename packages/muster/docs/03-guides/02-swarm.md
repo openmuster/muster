@@ -14,6 +14,28 @@ they need, a hold for a person's answer, and a lease that hands a dropped task
 back. The lead's part is judgment: splitting the goal, answering questions,
 checking results.
 
+## When a swarm fits, and when it doesn't
+
+| It fits when | It doesn't when |
+| --- | --- |
+| The work splits into pieces that don't touch the same files | Pieces depend on each other's unfinished work |
+| Each piece can be described to a reader who knows nothing | The goal is still being worked out |
+| A command can show each piece is done | "Done" is a matter of taste |
+| Someone, or another agent, checks results | Nobody will read what comes back |
+
+If in doubt, start with [two agents](./10-two-agents.md). A swarm multiplies
+cost as well as speed: every worker starts its own session.
+
+## Split by file ownership
+
+Two tasks that change the same files at the same time collide. Give each task
+the paths it owns, and chain the ones that can't be separated:
+
+```bash
+mu tasks create work/checkout "Rate-limit the API. You own apps/api/checkout/." --as lead
+mu tasks create work/checkout "Show the limit in the UI. You own apps/web/checkout/." --needs 1 --as lead
+```
+
 ## By hand
 
 ```bash
