@@ -60,7 +60,9 @@ describe('mu run in a cloud sandbox', () => {
     worker.close()
     expect(got).toHaveLength(1)
     expect(got[0]).toMatchObject({ url: '/runs', auth: 'Bearer worker-secret', body: { task: 12, repo: 'https://github.com/acme/web.git', board: { host: 'board.example.com', token: board.MUSTER_AGENT_TOKEN }, env: { MUSTER_TOKEN: 'set-by-the-network-policy' } } })
-    expect(got[0].body.prompt).toContain('Claim task #12 first: mu tasks claim 12')
+    // What runs in the container is mu run itself: it claims the task, keeps the claim alive, and settles it.
+    expect(got[0].body.command).toEqual(['mu', 'run', '12', '--as', 'fixer', '--bypass-permissions', '--agent', 'claude'])
+    expect(got[0].body.env).toMatchObject({ IS_SANDBOX: '1', MUSTER_AGENT_ENV: expect.stringContaining('NODE_EXTRA_CA_CERTS') })
     // A container has no internet, so nothing is installed at run time: mu is in the image.
     expect(got[0].body.setup).toEqual([])
     expect(JSON.stringify(got[0].body.env)).not.toContain('mu1.')
@@ -75,7 +77,7 @@ describe('mu run in a cloud sandbox', () => {
     await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     const { readFileSync } = await import('node:fs')
     const lines = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
-    expect(lines[0].env).toEqual({ MUSTER_URL: board.MUSTER_URL, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '12' })
+    expect(lines[0].env).toMatchObject({ MUSTER_URL: board.MUSTER_URL, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '12' })
     expect(Object.keys(lines[0].networkPolicy.allow).sort()).toEqual(['board.example.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
     // The sandbox installs this CLI's own release from its tarball, never a package looked up by name.
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
@@ -83,11 +85,14 @@ describe('mu run in a cloud sandbox', () => {
     // In a sandbox the agent's own prompts are off: headless, one would stop it at its first command.
     // GitHub was open for the install only: the agent starts with the board as its one way out.
     expect(lines[2]).toEqual({ closedTo: ['board.example.com'] })
-    expect(lines[3].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' '-'")
+    expect(lines[3].args[1]).toContain("'mu' 'run' '12' '--bypass-permissions' '--agent' 'codex'")
+    // The agent's clean environment is told what the sandbox set that it must still see: the certificate for its intercepted connections.
+    expect(lines[0].env.MUSTER_AGENT_ENV.split(',')).toEqual(expect.arrayContaining(['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'GIT_SSL_CAINFO', 'IS_SANDBOX', 'OPENAI_API_KEY']))
     // --safe keeps them on.
     await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--safe', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     const again = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
-    expect(again.at(-1).args[1]).toContain("'--sandbox' 'workspace-write' '-'")
+    expect(again.at(-1).args[1]).toContain("'mu' 'run' '12' '--agent' 'codex'")
+    expect(again.at(-1).args[1]).not.toContain('--bypass-permissions')
   })
 
   it('with --ready the sandbox is a worker that takes tasks itself until none is ready', async () => {
@@ -99,7 +104,8 @@ describe('mu run in a cloud sandbox', () => {
     expect(JSON.parse(run.stdout)).toEqual({ ready: 'work/', runner: 'vercel', run: 'sbx_7' })
     const { readFileSync } = await import('node:fs')
     const started = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).at(-1)
-    expect(started.args[1]).toContain('writing as worker-3. Take the next ready task: mu tasks claim --ready work/ --wait 2m')
+    // A worker: the next ready task, a fresh agent on it, and again until none is ready.
+    expect(started.args[1]).toContain("'mu' 'run' '--ready' 'work/' '--loop' '--wait' '2m' '--as' 'worker-3' '--bypass-permissions' '--agent' 'claude'")
   })
 
   it('starts nothing with a token that would hand the sandbox more than one agent\'s reach, or with none', async () => {

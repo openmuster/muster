@@ -28,9 +28,11 @@ mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/ac
 mu run --ready work/ --runner cloudflare --agent codex --as worker-3
 ```
 
-The command starts the run and returns; nothing here stays with it. The agent
-claims and settles the task itself. With `--ready` the sandbox is a worker
-that takes one task after another.
+The command starts the run and returns. What runs in the sandbox is `mu run`
+itself, as it runs on your machine: it claims the task, keeps the claim alive
+while the agent works, fails the task if the agent leaves it open, and labels
+it with the session, tokens and cost. With `--ready` the sandbox is a worker
+that takes one task after another until none is ready.
 
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never

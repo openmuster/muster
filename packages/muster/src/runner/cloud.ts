@@ -14,6 +14,8 @@ export type CloudRequest = {
   permissionMode?: PermissionMode
   /** The key for the agent's model provider. It is added to requests to that provider's host on the way out, and never enters the sandbox. */
   model?: { key: string }
+  /** More for the sandbox's environment: settings, never secrets. */
+  env?: Record<string, string>
   /** Commands that prepare the sandbox before the agent starts, such as installing the agent's CLI. */
   setup?: string[][]
   timeoutMs?: number
@@ -41,6 +43,13 @@ export type VercelSandbox = {
     delete?(): Promise<unknown>
   }>
 }
+
+/**
+ * What a sandbox sets for the programs in it that the agent must still see: where the certificate for
+ * its intercepted connections is, and that it is a sandbox. `mu run` gives an agent a small, clean
+ * environment, so these are named for it to pass on.
+ */
+export const SANDBOX_ENV = ['NODE_EXTRA_CA_CERTS', 'NODE_USE_SYSTEM_CA', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'GIT_SSL_CAINFO', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'IS_SANDBOX']
 
 /** Vercel's image with Node, git and the coding agents' CLIs already in it. */
 export const VERCEL_IMAGE = 'vercel/sandbox/universal'
@@ -89,7 +98,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         image: options.image ?? VERCEL_IMAGE,
         // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
         persistent: false,
-        env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
+        env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), ...request.env, MUSTER_TASK: String(request.task) },
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
@@ -131,7 +140,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         task: request.task,
         command: [bin, ...args],
         prompt: request.prompt,
-        env: { ...env, ...(request.model && request.agent.model ? request.agent.model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
+        // In a container the agent runs as root, and Claude Code skips its prompts as root only when told it is sandboxed.
+        env: { ...env, ...(request.model && request.agent.model ? request.agent.model.env(PLACEHOLDER) : {}), IS_SANDBOX: '1', ...request.env, MUSTER_TASK: String(request.task) },
         // The Worker enforces this itself: the board's host with these routes, and the token it adds.
         board: { host: new URL(request.board.url).host, rules: networkPolicy.allow[new URL(request.board.url).host], token: request.board.token },
         ...(request.repo ? { repo: request.repo } : {}),

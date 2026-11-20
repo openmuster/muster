@@ -172,7 +172,8 @@ describe('cloud runners', () => {
     const run = await cloudflare({ worker: 'https://runner.example.workers.dev/', secret: 'worker-secret', fetch: fetcher }).start(request)
     expect(run.id).toBe('run-9')
     expect(calls[0]).toMatchObject({ url: 'https://runner.example.workers.dev/runs', auth: 'Bearer worker-secret' })
-    expect(calls[0]!.body.env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '7' })
+    // A container runs as root, where Claude Code skips its prompts only when told it is in a sandbox.
+    expect(calls[0]!.body.env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '7', IS_SANDBOX: '1' })
     expect(calls[0]!.body.board).toMatchObject({ host: 'board.example.com', token: 'mu1.secret' })
     expect(calls[0]!.body.model).toBeUndefined()
     const keyed: any[] = []
