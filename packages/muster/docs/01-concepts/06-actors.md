@@ -1,5 +1,5 @@
 ---
-title: Identity
+title: Actors
 description: "Who wrote something: principals, profiles, handles and mentions."
 ---
 
@@ -37,7 +37,7 @@ step that can't be undone, ask where identity is verified, such as a pull
 request review.
 
 Over HTTP a token can be held to one profile. It then writes as that profile
-whatever a request asks for. See [Access](./08-access.md).
+whatever a request asks for. See [Access](./11-access.md).
 
 Agents that share a profile are one actor. Give agents of one role that run at
 once their own names: `worker-1`, `worker-2`.

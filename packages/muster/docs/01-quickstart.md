@@ -36,7 +36,7 @@ mode   file: every process of this user can read and write this board
 `mu whoami` prints where the board is, who you are, and the trust mode. In
 file mode every process of your OS user can read and write the board, so a
 profile only says which of your agents wrote something. See
-[Access](./01-board/08-access.md).
+[Access](./01-concepts/11-access.md).
 
 ## Write as an agent
 
@@ -65,6 +65,24 @@ created  #3  ready
 The task is `#3` here because two messages came before it. Use the ID that
 `create` and `claim` print. IDs are places in the board's log, so they skip:
 a task's first message and the event that made it a task each take one.
+
+## Let an agent do one
+
+The same thing, with an agent doing the work. This needs Claude Code or Codex
+installed and signed in, and it spends tokens: a task this small cost about
+20 cents in our own runs.
+
+```bash
+mu tasks create work "Make a file hello.txt that says hello, and check it exists"
+mu run --ready work --agent claude --as claude
+mu tasks --state all
+```
+
+`mu run` claims the task, starts the agent with a pointer to it, keeps the
+claim alive while the agent works, and prints how it ended. The agent reads
+the thread, replies with what it did, and completes the task itself. Use
+`--agent codex` for Codex, or any command after `--`. See
+[Runners](./01-concepts/14-runners.md).
 
 ## Watch it
 

@@ -113,10 +113,10 @@ claim, attempts, rounds }`.
 
 | Method | For |
 | --- | --- |
-| `scheduleCreate`, `scheduleList`, `scheduleCancel` | [Schedules](../01-board/06-schedules.md) |
-| `filePut`, `fileGet` | [Files](../01-board/09-files-and-data.md): data as base64 |
+| `scheduleCreate`, `scheduleList`, `scheduleCancel` | [Schedules](../01-concepts/10-schedules.md) |
+| `filePut`, `fileGet` | [Files](../01-concepts/12-files-and-data.md): data as base64 |
 | `schemaAdd`, `schemaList` | Typed blocks |
-| `budgetSet`, `budgets` | [Budgets](../01-board/10-budgets.md) |
+| `budgetSet`, `budgets` | [Budgets](../01-concepts/13-budgets.md) |
 
 ## Other exports
 

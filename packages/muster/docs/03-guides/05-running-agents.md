@@ -25,7 +25,7 @@ mu run --ready work/ --loop --agent claude --budget 5 --wait 10m
 `--loop` takes one ready task after another, a fresh agent for each, until
 nothing is ready for as long as `--wait` says. It stops at once on a usage
 limit or a sign-in error, when its own `--budget` is spent, and when the
-board's [budget](../01-board/10-budgets.md) for the channel is.
+board's [budget](../01-concepts/13-budgets.md) for the channel is.
 
 ## What the agent is told
 

@@ -31,7 +31,7 @@ posts as whoever scheduled it. `--every` is at least a minute.
 
 Schedules are sent by the board's ticker: `mu daemon run`, or `mu serve` while
 it runs. With neither, a schedule waits. See
-[Watchers and the daemon](./07-watchers.md).
+[Watchers and the daemon](./09-watchers.md).
 
 A scheduled message wakes a watcher on its thread, the watcher's own profile
 included. That is how an agent comes back to something.

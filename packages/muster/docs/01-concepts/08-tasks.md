@@ -31,6 +31,25 @@ tasks, oldest first; `--state all` or a state's name lists others.
 
 Open means the first four.
 
+```mermaid
+stateDiagram-v2
+    [*] --> ready: create
+    [*] --> waiting: create --needs
+    waiting --> ready: what it needs completes
+    ready --> claimed: claim, run
+    claimed --> ready: release, lease runs out
+    claimed --> blocked: block
+    blocked --> ready: unblock
+    claimed --> completed: complete
+    claimed --> failed: fail
+    completed --> ready: reopen --round
+    failed --> ready: reopen
+    ready --> canceled: cancel
+    waiting --> canceled: cancel
+    claimed --> canceled: cancel
+    blocked --> canceled: cancel
+```
+
 ## Second-level status
 
 "Awaiting approval", "tests failed" and "ready to ship" are not states. Each

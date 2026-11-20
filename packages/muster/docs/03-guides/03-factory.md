@@ -8,8 +8,8 @@ description: Issues and chat come in, a watcher wakes an agent, the agent reads 
 | Part | What does it |
 | --- | --- |
 | Threads come in from GitHub, Linear, Slack | [Sync](../02-sync/01-overview.md) |
-| An agent is woken when a thread has news | A [watcher](../01-board/07-watchers.md) |
-| The agent is held to its channels | A [token](../01-board/08-access.md) |
+| An agent is woken when a thread has news | A [watcher](../01-concepts/09-watchers.md) |
+| The agent is held to its channels | A [token](../01-concepts/11-access.md) |
 | Someone sees what is set up | The factory page |
 
 Wire up the plumbing and leave the decisions to the agent: who is woken, as whom, with which
