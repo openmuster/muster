@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, readdirSync } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { board, boardKey, file, http, listen, mint, verify } from '../src/index.ts'
 import { processStart } from '../src/process.ts'
-import { fileRegistry } from '../src/serve/tokens.ts'
+import { fileRegistry, TOKENS_MAX } from '../src/serve/tokens.ts'
 import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 
 async function served() {
@@ -333,9 +333,35 @@ describe('serve', () => {
     b.record(record('three'))
     expect(a.list(0).map((token) => [token.id, token.revoked])).toEqual([['one', true], ['two', false], ['three', false]])
     expect([b.revoked('one'), b.revoked('two'), b.revoked('never-made')]).toEqual([true, false, false])
-    const file = join(dir, 'tokens', readdirSync(join(dir, 'tokens'))[0]!)
+    const file = join(dir, 'tokens', readdirSync(join(dir, 'tokens')).find((name) => name.endsWith('.log'))!)
     appendFileSync(file, '{"neither": 1}\n')
     expect([a.revoked('two'), a.revoked('never-made')]).toEqual([true, true])
     expect(() => a.list(0)).toThrow(/can't be read/)
+  })
+
+  it('the token list ignores a write caught halfway, drops what ran out, and has a ceiling', () => {
+    const dir = tempDir()
+    const registry = fileRegistry('/boards/main.db', dir)
+    const file = () => join(dir, 'tokens', readdirSync(join(dir, 'tokens')).find((name) => name.endsWith('.log'))!)
+    const record = (id: string, exp = 4_102_444_800) => ({ id, profile: 'p', can: null, exp, at: 1, revoked: false })
+    registry.record(record('kept'))
+    registry.revoke('kept')
+    // Half a line, as a crash mid-write leaves it, is not damage.
+    appendFileSync(file(), '{"made": {"id": "ha')
+    expect([registry.revoked('kept'), registry.list(0).map((token) => token.id)]).toEqual([true, ['kept']])
+    // Many tokens that have run out are tidied away, and the revocation of a live one survives that.
+    const dir2 = tempDir()
+    const busy = fileRegistry('/boards/main.db', dir2)
+    busy.record(record('live'))
+    busy.revoke('live')
+    for (let i = 0; i < 200; i++) busy.record(record(`old-${i}`, 1))
+    const lines = readFileSync(join(dir2, 'tokens', readdirSync(join(dir2, 'tokens')).find((name) => name.endsWith('.log'))!), 'utf8').trim().split('\n')
+    expect(lines.length).toBeLessThan(120)
+    expect(busy.revoked('live')).toBe(true)
+    // No more than the ceiling of tokens that still work.
+    const dir3 = tempDir()
+    const full = fileRegistry('/boards/main.db', dir3)
+    for (let i = 0; i < TOKENS_MAX; i++) full.record(record(`t-${i}`))
+    expect(() => full.record(record('one-too-many'))).toThrow(/most it keeps/)
   })
 })

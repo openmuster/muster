@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 import { Failure, misuse } from '../failure.ts'
@@ -42,7 +42,23 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
   const path = join(folder, createHash('sha256').update(where).digest('hex').slice(0, 16) + '.log')
   type Line = { made: TokenRecord } | { revoked: string }
   /** Every token and whether it was stopped, or null when the file is there but can't be read as what we wrote. */
+  let cached: { stamp: string; tokens: Map<string, TokenRecord> | null } | null = null
+  /** Read once per change to the file, not once per request. */
   const load = (): Map<string, TokenRecord> | null => {
+    let stamp: string
+    try {
+      const stat = statSync(path)
+      stamp = `${stat.size}:${stat.mtimeMs}`
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
+      return null
+    }
+    if (cached?.stamp === stamp) return cached.tokens
+    const tokens = parse()
+    cached = { stamp, tokens }
+    return tokens
+  }
+  const parse = (): Map<string, TokenRecord> | null => {
     let text: string
     try {
       text = readFileSync(path, 'utf8')
@@ -50,6 +66,8 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
       return null
     }
+    // A last line with no newline is a write caught halfway: it isn't there yet, and isn't damage.
+    if (!text.endsWith('\n')) text = text.slice(0, text.lastIndexOf('\n') + 1)
     const tokens = new Map<string, TokenRecord>()
     const stopped = new Set<string>()
     try {
@@ -71,10 +89,52 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
     }
     return tokens
   }
-  const add = (line: Line) => {
+  /** One writer at a time, so tidying the log can't drop a line another process is adding. */
+  const locked = <T>(work: () => T): T => {
     mkdirSync(folder, { recursive: true, mode: 0o700 })
-    appendFileSync(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
+    const lock = `${path}.lock`
+    for (let tries = 0; ; tries++) {
+      try {
+        writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })
+        break
+      } catch {
+        // A lock left by a writer that died is taken over; a live one is held for microseconds.
+        let age = 0
+        try {
+          age = Date.now() - statSync(lock).mtimeMs
+        } catch {
+          continue
+        }
+        if (age > 5000 || tries > 2000) rmSync(lock, { force: true })
+      }
+    }
+    try {
+      return work()
+    } finally {
+      rmSync(lock, { force: true })
+    }
   }
+  const add = (line: Line) =>
+    locked(() => {
+      const tokens = parse()
+      if (tokens === null) throw unreadable()
+      const live = [...tokens.values()].filter((token) => token.exp * 1000 > Date.now())
+      if ('made' in line && live.filter((token) => !token.revoked).length >= TOKENS_MAX) {
+        throw new Failure('too_many_tokens', `This board has ${TOKENS_MAX} live tokens, which is the most it keeps.`, { hint: 'Revoke some with mu token revoke, or wait for them to run out.' })
+      }
+      // The log is rewritten without what ran out once that is most of it, so it can't grow without end.
+      if (tokens.size > 64 && live.length < tokens.size / 2) {
+        const kept: Line[] = []
+        for (const token of live) {
+          if (token.at > 0) kept.push({ made: { ...token, revoked: false } })
+          if (token.revoked) kept.push({ revoked: token.id })
+        }
+        const next = `${path}.${process.pid}.tmp`
+        writeFileSync(next, kept.map((entry) => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 })
+        renameSync(next, path)
+      }
+      appendFileSync(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
+    })
   const unreadable = () => new Failure('token_list_unreadable', `The board's list of tokens at ${path} can't be read.`, { hint: 'Until it can, no token with an ID is accepted. Restore the file, or move it aside and make new tokens.' })
   return {
     record: (token) => add({ made: token }),
@@ -97,6 +157,9 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
     },
   }
 }
+
+/** How many tokens that still work a board keeps at once. A run's token lives minutes, so this is far more than a team needs. */
+export const TOKENS_MAX = 1000
 
 export const PERMISSIONS: Permission[] = ['read', 'post', 'react', 'label', 'manage']
 /** The longest a token made over HTTP lives. One for a person, made on the board's machine, has no such cap. */

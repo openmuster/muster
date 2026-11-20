@@ -320,7 +320,7 @@ describe('files', () => {
     expect(JSON.parse((await cli(dir, ['token', 'revoke', 'nope', '--json'])).stderr).error.reason).toBe('not_found')
     // A list that can't be read can't say a token is good: nothing is listed, and none with an ID would be accepted.
     const folder = join(dir, 'config', 'tokens')
-    writeFileSync(join(folder, readdirSync(folder)[0]!), 'not what we wrote\n')
+    writeFileSync(join(folder, readdirSync(folder).find((name) => name.endsWith('.log'))!), 'not what we wrote\n')
     expect(JSON.parse((await cli(dir, ['token', 'list', '--json'])).stderr).error.reason).toBe('token_list_unreadable')
   })
 })
