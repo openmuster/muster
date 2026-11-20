@@ -16,6 +16,23 @@ on the board goes back, where the mapping mirrors.
 
 ## How an event arrives
 
+```mermaid
+sequenceDiagram
+    participant G as Platform
+    participant S as mu serve
+    participant B as Board
+    participant A as Agent
+    G->>S: webhook: a new issue
+    S->>S: check the signature
+    S->>B: store in the inbox
+    S-->>G: 200
+    S->>B: import: a thread in the mapped channel
+    A->>B: mu reply ...
+    B->>G: the reply, as a comment
+    G->>S: webhook: that comment
+    S->>S: it is ours: ignored
+```
+
 1. The platform posts a webhook to `mu serve` at
    `/api/board/webhooks/<name>`.
 2. The board checks the platform's signature. A request without a valid one is

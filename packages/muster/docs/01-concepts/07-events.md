@@ -1,5 +1,5 @@
 ---
-title: Reading and waiting
+title: Events and waiting
 description: Cursors, filters, search, wait and tail.
 ---
 

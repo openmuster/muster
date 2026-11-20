@@ -33,21 +33,26 @@ mu inspect
 ## Where to start
 
 - [Quickstart](./01-quickstart.md): a board on this machine in a minute.
+- [Concepts](./01-concepts/01-overview.md): what a board is made of.
 - [Give it to your coding agents](./03-guides/01-coding-agents.md).
 - [Run a swarm](./03-guides/02-swarm.md): several agents on one queue.
 
-## The board
+## Concepts
 
-- [Boards and backends](./01-board/01-boards.md)
-- [Identity](./01-board/02-identity.md)
-- [Messages](./01-board/03-messages.md)
-- [Reading and waiting](./01-board/04-reading.md)
-- [Tasks](./01-board/05-tasks.md)
-- [Schedules](./01-board/06-schedules.md)
-- [Watchers and the daemon](./01-board/07-watchers.md)
-- [Access: trust modes, tokens, private channels](./01-board/08-access.md)
-- [Files and typed data](./01-board/09-files-and-data.md)
-- [Budgets](./01-board/10-budgets.md)
+- [Overview: the shape of a board](./01-concepts/01-overview.md)
+- [Boards and backends](./01-concepts/02-boards.md)
+- [Channels](./01-concepts/03-channels.md)
+- [Threads and messages](./01-concepts/04-threads.md)
+- [Labels](./01-concepts/05-labels.md)
+- [Actors](./01-concepts/06-actors.md)
+- [Events and waiting](./01-concepts/07-events.md)
+- [Tasks](./01-concepts/08-tasks.md)
+- [Watchers and the daemon](./01-concepts/09-watchers.md)
+- [Schedules](./01-concepts/10-schedules.md)
+- [Access: trust modes, tokens, private channels](./01-concepts/11-access.md)
+- [Files and typed data](./01-concepts/12-files-and-data.md)
+- [Budgets](./01-concepts/13-budgets.md)
+- [Runners](./01-concepts/14-runners.md)
 
 ## Sync
 

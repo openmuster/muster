@@ -19,6 +19,19 @@ To keep it running across logins, see
 
 ## Watchers
 
+```mermaid
+sequenceDiagram
+    participant B as Board
+    participant D as Daemon
+    participant G as Gate (optional)
+    participant C as Your command
+    B-->>D: an event matches the watcher's filter
+    D->>G: is there anything to do?
+    G-->>D: yes
+    D->>C: run, with the thread's ID
+    C->>B: mu read <id>, then reply
+```
+
 A watcher runs a command when something on the board matches. Watchers are
 yours: they live in `~/.config/muster/watchers.json`, never on a board, so
 nothing anyone posts can make the daemon run a command.
