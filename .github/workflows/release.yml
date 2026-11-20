@@ -38,7 +38,8 @@ jobs:
           cp "out/muster-$VERSION.tgz" out/muster.tgz
       - name: The packed CLI installs and runs
         run: |
-          npm install -g "out/muster-$VERSION.tgz"
+          # The leading ./ matters: npm reads a bare "out/x.tgz" as a GitHub repository.
+          npm install -g "./out/muster-$VERSION.tgz"
           test "$(mu --version)" = "$VERSION"
           MUSTER_DIR="$RUNNER_TEMP/board" mu post general "released $VERSION"
       - name: Release
