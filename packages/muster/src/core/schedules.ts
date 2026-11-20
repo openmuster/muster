@@ -1,7 +1,7 @@
 import { Failure, misuse } from '../failure.ts'
 import { channelPath, messageText, type By, type Caller } from '../model.ts'
 import { append } from '../store/log.ts'
-import { authorize, byOf, findMessage, messageFor, type Context } from './context.ts'
+import { allowed, authorize, byOf, findMessage, messageFor, type Context } from './context.ts'
 
 export type Schedule = {
   id: number
@@ -78,6 +78,9 @@ export function create(ctx: Context, caller: Caller, request: ScheduleRequest): 
   })
 }
 
+/** Whether `caller` made the schedule: the same principal, and as a profile only that profile's own. */
+const mine = (caller: Caller, schedule: Schedule) => caller.principal === schedule.by.principal && (caller.profile === null || caller.profile === schedule.by.profile)
+
 const find = (ctx: Context, id: number) => {
   const row = ctx.db.raw.prepare('select * from schedules where id = ?').get(id) as Row | undefined
   return row ? toSchedule(row) : null
@@ -85,14 +88,16 @@ const find = (ctx: Context, id: number) => {
 
 export function list(ctx: Context, caller: Caller): { schedules: Schedule[] } {
   const rows = ctx.db.raw.prepare('select * from schedules where canceled = 0 and next_at is not null order by id').all() as Row[]
-  return { schedules: rows.map(toSchedule).filter((schedule) => schedule.by.principal === caller.principal || caller.can === undefined) }
+  return { schedules: rows.map(toSchedule).filter((schedule) => allowed(caller, schedule.channel, 'read') && (mine(caller, schedule) || caller.can === undefined || allowed(caller, schedule.channel, 'manage'))) }
 }
 
 export function cancel(ctx: Context, caller: Caller, request: { id: number }): Schedule {
   return ctx.db.write(() => {
     const schedule = find(ctx, request.id)
     if (!schedule) throw new Failure('not_found', `No schedule ${request.id}.`)
-    if (schedule.by.principal !== caller.principal) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
+    // One a caller can't see doesn't exist for it; one it can see is its own to cancel, or its channel's manager's.
+    if (!allowed(caller, schedule.channel, 'read')) throw new Failure('not_found', `No schedule ${request.id}.`)
+    if (!mine(caller, schedule) && !(caller.can !== undefined && allowed(caller, schedule.channel, 'manage'))) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
     if (!schedule.canceled) append(ctx.db, { type: 'schedule.canceled', by: byOf(caller), channel: schedule.channel, thread: schedule.thread, data: { id: schedule.id } }, ctx.now().toISOString())
     return find(ctx, request.id)!
   })

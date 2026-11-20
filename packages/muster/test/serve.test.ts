@@ -105,6 +105,21 @@ describe('serve', () => {
     await server.close()
   })
 
+  it('a narrowed token sees and cancels only schedules in channels it can read, and only its own', async () => {
+    const { as, owner, server } = await served()
+    const secret = await owner.scheduleCreate({ channel: 'security', text: 'rotate keys', every: 600 })
+    const shared = await owner.as('lead').scheduleCreate({ channel: 'factory/intake', text: 'standup', every: 600 })
+    const agent = as({ profile: 'fixer', can: { 'factory/': ['read', 'post'] } })
+    const own = await agent.scheduleCreate({ channel: 'factory/intake', text: 'check the PR', every: 600 })
+    expect((await agent.scheduleList()).schedules.map((schedule) => schedule.id)).toEqual([own.id])
+    expect(await reason(agent.scheduleCancel({ id: secret.id }))).toBe('not_found')
+    expect(await reason(agent.scheduleCancel({ id: shared.id }))).toBe('not_yours')
+    expect((await agent.scheduleCancel({ id: own.id })).canceled).toBe(true)
+    const manager = as({ profile: 'ops', can: { 'factory/': ['manage'] } })
+    expect((await manager.scheduleCancel({ id: shared.id })).canceled).toBe(true)
+    await server.close()
+  })
+
   it('only a token that may manage registers a schema', async () => {
     const { as, server } = await served()
     expect(await reason(as({ can: { '*': ['read', 'post', 'label'] } }).schemaAdd({ name: 'a@1', schema: {} }))).toBe('forbidden')

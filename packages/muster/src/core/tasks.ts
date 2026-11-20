@@ -656,10 +656,16 @@ export function list(
   return { tasks, more }
 }
 
+/** Holds an open task whose first message was changed by someone other than its owner. Sync calls it for edits a platform sends. */
+export function holdIfEdited(ctx: Context, editor: By, message: Message, emit: Emit) {
+  hooks.edited?.(ctx, { principal: editor.principal, profile: editor.profile }, message, emit as never)
+}
+
 // A task's root has rules a plain message doesn't: an edit by someone else holds it, and deleting it cancels it.
 hooks.edited = (ctx, caller, message, emit) => {
   const row = message.re === null ? rowOf(ctx, message.id) : undefined
-  if (!row || !OPEN_STATES.includes(row.state) || caller.principal === row.owner) return
+  // The same test as every other owner check: the principal, and as a profile only the one that made the task.
+  if (!row || !OPEN_STATES.includes(row.state) || owns(caller, row)) return
   if (row.state === 'blocked' && row.hold_kind === 'edited') return
   emit({
     type: 'task.blocked',

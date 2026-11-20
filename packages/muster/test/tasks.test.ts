@@ -331,4 +331,13 @@ describe('tasks', () => {
     expect((await team.budgets()).budgets).toEqual([])
     expect(await reason(team.budgetSet({ channel: 'work', usd: -1 }))).toBe('invalid_budget')
   })
+
+  it("another profile of the owner's principal editing a task's brief holds it too: ownership is the principal and the profile", async () => {
+    const { team } = memoryBoard()
+    const { task } = await team.as('lead').taskCreate({ channel: 'work', text: 'fix /login' })
+    await team.as('lead').edit({ id: task.id, text: 'fix /login and /signin' })
+    expect((await team.task(task.id))?.state).toBe('ready')
+    await team.edit({ id: task.id, text: 'the principal itself may' })
+    expect((await team.task(task.id))?.state).toBe('ready')
+  })
 })

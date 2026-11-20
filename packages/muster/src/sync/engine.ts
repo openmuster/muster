@@ -2,6 +2,7 @@ import { Failure } from '../failure.ts'
 import type { Context } from '../core/context.ts'
 import { findMessage } from '../core/context.ts'
 import { head } from '../core/reads.ts'
+import { holdIfEdited } from '../core/tasks.ts'
 import type { By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
 import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, type Inbound, type Provider, type Received } from './types.ts'
@@ -89,7 +90,11 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     const who: By = { principal: `${key}:user:${event.author}`, profile: null }
     const when = ctx.now().toISOString()
     if (event.kind === 'delete') append(ctx.db, { type: 'message.deleted', by: who, channel: target.channel, thread: target.thread, data: { id: target.id, origin: { key } } }, when)
-    else if (event.text !== undefined && event.text !== target.text) append(ctx.db, { type: 'message.edited', by: who, channel: target.channel, thread: target.thread, data: { id: target.id, text: event.text, revision: target.revision + 1, mentions: [], origin: { key } } }, when)
+    else if (event.text !== undefined && event.text !== target.text) {
+      append(ctx.db, { type: 'message.edited', by: who, channel: target.channel, thread: target.thread, data: { id: target.id, text: event.text, revision: target.revision + 1, mentions: [], origin: { key } } }, when)
+      // A task's brief changed from outside is instructions nobody on the board wrote: its owner looks first.
+      holdIfEdited(ctx, who, target, (draft) => append(ctx.db, draft, when))
+    }
     return
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return

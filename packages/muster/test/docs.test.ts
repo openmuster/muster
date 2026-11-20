@@ -62,7 +62,31 @@ describe('docs and skills', () => {
   })
 
   it('the CLI reference page is what mu help prints', () => {
-    expect(readFileSync(join(root, 'packages/muster/docs/07-cli.md'), 'utf8')).toContain(HELP)
+    expect(readFileSync(join(root, 'packages/muster/docs/04-reference/01-cli.md'), 'utf8')).toContain(HELP)
+  })
+
+  it('every reason the code refuses with is on the errors page', () => {
+    const page = readFileSync(join(root, 'packages/muster/docs/04-reference/05-errors.md'), 'utf8')
+    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? sources(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []))
+    const reasons = new Set<string>()
+    for (const file of sources(join(root, 'packages/muster/src'))) for (const match of readFileSync(file, 'utf8').matchAll(/(?:new Failure|misuse)\('([a-z_]+)'/g)) reasons.add(match[1]!)
+    expect(reasons.size).toBeGreaterThan(60)
+    expect([...reasons].filter((reason) => !page.includes('`' + reason + '`')).sort()).toEqual([])
+  })
+
+  it('every kind of event the board writes is on the events page', () => {
+    const page = readFileSync(join(root, 'packages/muster/docs/04-reference/04-events.md'), 'utf8')
+    const log = readFileSync(join(root, 'packages/muster/src/store/log.ts'), 'utf8')
+    const types = [...log.matchAll(/case '([a-z_.]+)':/g)].map((match) => match[1]!)
+    expect(types.length).toBeGreaterThan(25)
+    expect(types.filter((type) => !page.includes('`' + type + '`'))).toEqual([])
+  })
+
+  it('every page the index links to exists, and every page is linked from the index', () => {
+    const index = readFileSync(join(root, 'packages/muster/docs/index.md'), 'utf8')
+    const linked = new Set([...index.matchAll(/\]\(\.\/([^)#]+)\)/g)].map((match) => match[1]!))
+    const all = walk(join(root, 'packages/muster/docs')).map((page) => page.slice(join(root, 'packages/muster/docs').length + 1)).filter((page) => page !== 'index.md')
+    expect(all.filter((page) => !linked.has(page))).toEqual([])
   })
 
   it('every command the CLI has is in the help', () => {

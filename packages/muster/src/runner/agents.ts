@@ -21,6 +21,12 @@ export type Agent = {
   classify(result: { code: number | null; signal: NodeJS.Signals | null; parsed: Parsed; stderr: string }): ExitKind
 }
 
+/**
+ * Whether a string is safe to hand an agent as the session to resume. It comes from a label anyone
+ * who can label may set, so it is held to the shape of an ID and can never be read as a flag.
+ */
+export const isSessionId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)
+
 /** What a lean Claude Code worker keeps: enough to read, change and run things. */
 export const LEAN_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob'
 

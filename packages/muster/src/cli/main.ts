@@ -21,7 +21,7 @@ import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
 import { inspect } from '../inspect/server.ts'
 import { spawn as spawnProcess } from 'node:child_process'
-import { AGENTS, generic } from '../runner/agents.ts'
+import { AGENTS, generic, isSessionId } from '../runner/agents.ts'
 import { runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
@@ -992,7 +992,11 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const timeout = str(parsed.flags, 'timeout')
   // An agent that worked this task before picks its own session back up: it remembers what it read and tried.
   const before = (await run.team.readThread({ id: task })).message.labels
-  const resume = str(parsed.flags, 'resume') ?? (on(parsed.flags, 'fresh') || before.agent !== agent.name ? undefined : before.session)
+  const asked = str(parsed.flags, 'resume')
+  if (asked !== undefined && !isSessionId(asked)) throw misuse('invalid_session', `"${asked}" isn't a session ID.`)
+  // The label is one anyone who may label can set: a value that isn't shaped like an ID is ignored, never passed on.
+  const remembered = on(parsed.flags, 'fresh') || before.agent !== agent.name || !isSessionId(before.session) ? undefined : before.session
+  const resume = asked ?? remembered
   const started = runLocal({
     agent,
     prompt: agentPrompt(task, me.profile),

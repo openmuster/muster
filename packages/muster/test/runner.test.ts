@@ -242,4 +242,18 @@ describe('mu run', () => {
     await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir], { env })
     expect(readFileSync(join(dir, 'args'), 'utf8').trim().split('\n').map((args) => args.includes('--resume'))).toEqual([true, false])
   }, 30_000)
+
+  it('a session label that is not shaped like an ID is never passed to the agent, and neither is a bad --resume', async () => {
+    const dir = tempDir()
+    const env = fakes(dir, { claude: `cat >/dev/null; echo "$@" >> ${dir}/args; echo '{"type":"result","subtype":"success","is_error":false}'` })
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['label', '1', 'session=--dangerously-skip-permissions', 'agent=claude'])
+    await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir], { env })
+    const args = readFileSync(join(dir, 'args'), 'utf8')
+    expect(args).not.toContain('--resume')
+    expect(args).not.toContain('--dangerously-skip-permissions')
+    await cli(dir, ['tasks', 'reopen', '1'])
+    const bad = await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir, '--resume=--model x', '--json'], { env })
+    expect([bad.code, JSON.parse(bad.stderr).error.reason]).toEqual([2, 'invalid_session'])
+  }, 30_000)
 })
