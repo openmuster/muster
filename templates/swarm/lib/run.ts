@@ -44,6 +44,7 @@ export async function launch(team: Board, swarm: string, request: Launch, spawn:
   if (request.runner && request.runner !== 'local') {
     if (request.agent !== 'claude' && request.agent !== 'codex') throw new Error('A cloud sandbox runs claude or codex.')
     if (!process.env.MUSTER_URL) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set.')
+    if (!process.env.MUSTER_AGENT_TOKEN) throw new Error('A cloud sandbox needs a token made for its agents: set MUSTER_AGENT_TOKEN to one held to a profile and to this swarm\'s channels (mu token create).')
   }
   if (!Number.isInteger(request.agents) || request.agents < 1 || request.agents > AGENTS_MAX) throw new Error(`A run has 1 to ${AGENTS_MAX} agents.`)
   const channel = `${swarm}/${request.slug}`

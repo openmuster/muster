@@ -18,11 +18,31 @@ const held = (ctx: Context) => {
   return map
 }
 
+/** What a narrowed token may store in a day. A full caller is the board's owner, and has no allowance to run out. */
+export const FILE_ALLOWANCE = 100 * 1024 * 1024
+
+const spent = new WeakMap<object, Map<string, { day: number; bytes: number }>>()
+/** Counts a narrowed caller's bytes for the day, in this process: enough to stop one token filling the disk. */
+function spend(ctx: Context, caller: Caller, bytes: number) {
+  let map = spent.get(ctx.db.raw)
+  if (!map) spent.set(ctx.db.raw, (map = new Map()))
+  const key = `${caller.principal}+${caller.profile ?? ''}`
+  const day = Math.floor(ctx.now().getTime() / 86_400_000)
+  const used = map.get(key)?.day === day ? map.get(key)!.bytes : 0
+  if (used + bytes > FILE_ALLOWANCE) throw new Failure('file_allowance', "This token has stored its day's allowance of files (100 MB).", { hint: 'Attach less, or ask whoever runs the board to store it.' })
+  map.set(key, { day, bytes: used + bytes })
+}
+
 /** Stores a file and returns the record a message carries. The same bytes stored twice are one file. */
-export function filePut(ctx: Context, _caller: Caller, request: { name: string; type?: string; data: string }): Attachment {
+export function filePut(ctx: Context, caller: Caller, request: { name: string; type?: string; data: string }): Attachment {
   if (typeof request.name !== 'string' || request.name.length === 0 || request.name.length > 255) throw misuse('invalid_file', 'A file needs a name of at most 255 characters.')
+  // A file is only ever carried by a message, so a caller who may post nowhere has no use for storing one.
+  if (caller.can && !Object.values(caller.can).some((permissions) => permissions.includes('post') || permissions.includes('manage'))) {
+    throw new Failure('forbidden', "This token can't post, so it can't store a file.")
+  }
   const bytes = Buffer.from(request.data, 'base64')
   if (bytes.length > FILE_MAX) throw new Failure('file_too_large', `${request.name} is over 25 MB.`, { hint: 'Compress it, or link to it.' })
+  if (caller.can) spend(ctx, caller, bytes.length)
   const id = createHash('sha256').update(bytes).digest('hex')
   const dir = filesDir(ctx)
   if (dir === null) held(ctx).set(id, bytes)

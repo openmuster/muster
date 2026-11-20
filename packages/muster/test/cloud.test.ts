@@ -1,11 +1,24 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyPolicy, board, boardPolicy, claude, cloudflare, file, http, listen, mint, vercel } from '../src/index.ts'
+import { SANDBOX_CLOSED, SANDBOX_ROUTES } from '../src/runner/policy.ts'
+import { ROUTES } from '../src/serve/server.ts'
 import { reason } from './helpers.ts'
 
 const URL_ = 'https://board.example.com/api/board'
 
 describe('the sandbox network policy', () => {
+  it('opens a named list of board routes to a sandbox, and every route is either on it or closed for a reason', () => {
+    expect([...SANDBOX_ROUTES].sort()).toEqual([
+      'actors', 'budgets', 'channels', 'createChannel', 'edit', 'events', 'fileGet', 'filePut', 'head', 'label', 'post', 'react', 'readChannel', 'readThread', 'remove', 'reply', 'schemaList', 'search',
+      'task', 'taskAssign', 'taskBlock', 'taskCancel', 'taskClaim', 'taskComplete', 'taskCreate', 'taskFail', 'taskList', 'taskNeeds', 'taskPlan', 'taskRelease', 'taskRenew', 'taskReopen', 'taskUnblock',
+    ])
+    // A route added to the board is in neither list until someone decides, and this fails until they do.
+    expect([...SANDBOX_ROUTES, ...SANDBOX_CLOSED].sort()).toEqual([...ROUTES].sort())
+    const { networkPolicy } = boardPolicy({ url: URL_, token: 'T' })
+    for (const closed of SANDBOX_CLOSED) expect(applyPolicy(networkPolicy, { url: `${URL_}/${closed}`, method: 'POST' })).toBeNull()
+  })
+
   it('gives a sandbox the board with no credential inside it: the environment holds a placeholder', () => {
     const { env, networkPolicy } = boardPolicy({ url: URL_, token: 'mu1.secret.token' })
     expect(env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy' })
@@ -16,9 +29,9 @@ describe('the sandbox network policy', () => {
   it('adds the credential only to the board\'s own routes, by method, and passes nothing else', () => {
     const { networkPolicy } = boardPolicy({ url: URL_, token: 'T' })
     const pass = (url: string, method = 'POST') => applyPolicy(networkPolicy, { url, method })
-    expect(pass(`${URL_}/post`)).toEqual({ authorization: 'Bearer T' })
-    expect(pass(`${URL_}/taskClaim`)).toEqual({ authorization: 'Bearer T' })
-    expect(pass(`${URL_}/whoami`, 'GET')).toEqual({ authorization: 'Bearer T' })
+    expect(pass(`${URL_}/post`)).toEqual({ authorization: 'Bearer T', host: 'board.example.com' })
+    expect(pass(`${URL_}/taskClaim`)).toEqual({ authorization: 'Bearer T', host: 'board.example.com' })
+    expect(pass(`${URL_}/whoami`, 'GET')).toEqual({ authorization: 'Bearer T', host: 'board.example.com' })
     for (const [url, method] of [
       [`${URL_}/post`, 'GET'],
       [`${URL_}/webhooks/gh`, 'POST'],
@@ -84,7 +97,9 @@ describe('cloud runners', () => {
     // refuses what the others didn't claim, since allowing a host otherwise allows every request to it.
     const rules = created.networkPolicy.allow['board.example.com']
     expect(rules[0].match.path).toEqual({ regex: expect.stringContaining('^/api/board/(') })
-    expect(rules[0].transform).toEqual([{ headers: { authorization: 'Bearer mu1.secret' } }])
+    // The Host header is the sandbox's to write, and the match is on the connection's name alone: it is set with the credential.
+    expect(rules[0].transform).toEqual([{ headers: { authorization: 'Bearer mu1.secret', host: 'board.example.com' } }])
+    expect(created.persistent).toBe(false)
     expect(rules.at(-1)).toEqual({ response: { statusCode: 403 } })
     expect(created.image).toBe('vercel/sandbox/universal')
     expect(created.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git' })
@@ -103,7 +118,7 @@ describe('cloud runners', () => {
     expect(run.id).toBe('sbx-2')
     // The key goes only on the calls that ask the model; whatever else it could do on that host is refused.
     const model = calls[0].networkPolicy.allow['api.anthropic.com']
-    expect(model).toEqual([{ match: { path: { regex: expect.any(String) }, method: ['POST'] }, transform: [{ headers: { 'x-api-key': 'sk-real-key' } }] }, { response: { statusCode: 403 } }])
+    expect(model).toEqual([{ match: { path: { regex: expect.any(String) }, method: ['POST'] }, transform: [{ headers: { 'x-api-key': 'sk-real-key', host: 'api.anthropic.com' } }] }, { response: { statusCode: 403 } }])
     const asks = (path: string) => new RegExp(model[0].match.path.regex).test(path)
     expect(['/v1/messages', '/v1/messages?beta=true', '/v1/messages/count_tokens'].map(asks)).toEqual([true, true, true])
     expect(['/v1/files', '/v1/messages/batches', '/v1/organizations/api_keys', '/v1/messagesx', '/x/v1/messages'].map(asks)).toEqual([false, false, false, false, false])
@@ -118,7 +133,7 @@ describe('cloud runners', () => {
 
   it('vercel: the hosts its setup needs are closed before the agent starts', async () => {
     const calls: any[] = []
-    const made = { name: 'sbx-4', runCommand: async (command: any) => void calls.push(['run', command.cmd]), update: async (options: any) => void calls.push(['update', Object.keys(options.networkPolicy.allow)]), stop: async () => void calls.push(['stop']) }
+    const made = { name: 'sbx-4', runCommand: async (command: any) => void calls.push(['run', command.cmd]), update: async (options: any) => void calls.push(['update', options.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(options.networkPolicy.allow)]), stop: async () => void calls.push(['stop']) }
     const Sandbox = { create: async (options: any) => (calls.push(['create', Object.keys(options.networkPolicy.allow).sort()]), made) }
     await vercel({ Sandbox, setupHosts: ['github.com'] }).start(request)
     expect(calls).toEqual([['create', ['board.example.com', 'github.com']], ['run', 'npm'], ['update', ['board.example.com']], ['run', 'sh']])
@@ -131,6 +146,19 @@ describe('cloud runners', () => {
     calls.length = 0
     await vercel({ Sandbox, setupHosts: ['github.com'] }).start({ ...request, setup: [] })
     expect(calls).toEqual([['create', ['board.example.com']], ['run', 'sh']])
+  })
+
+  it('vercel: ending a run closes its way out and removes the sandbox, so nothing of it is kept', async () => {
+    const calls: unknown[] = []
+    const made = { name: 'sbx-5', runCommand: async () => {}, update: async (options: any) => void calls.push(['update', options.networkPolicy === 'deny-all' ? 'deny-all' : 'policy']), delete: async () => void calls.push(['delete']), stop: async () => void calls.push(['stop']) }
+    const run = await vercel({ Sandbox: { create: async () => made } }).start({ ...request, setup: [] })
+    await run.stop()
+    expect(calls).toEqual([['update', 'deny-all'], ['delete']])
+    // An SDK that can't remove one stops it instead.
+    calls.length = 0
+    const { delete: _, ...old } = made
+    await (await vercel({ Sandbox: { create: async () => old } }).start({ ...request, setup: [] })).stop()
+    expect(calls).toEqual([['update', 'deny-all'], ['stop']])
   })
 
   it('cloudflare: asks your Worker to start the run, with the board rules for it to enforce and no token in the container\'s environment', async () => {

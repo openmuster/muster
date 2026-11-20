@@ -5,6 +5,32 @@ versions are affected.
 
 ## Unreleased
 
+### Security
+
+Affects 0.1.0 and 0.1.1, for anyone who started an agent in a cloud sandbox
+(`mu run --runner vercel|cloudflare`). Local use is not affected.
+
+- A cloud run with no `MUSTER_AGENT_TOKEN` handed the sandbox your own token.
+  It now refuses to start, and refuses an agent token that isn't held to a
+  profile and to named channels.
+- On Vercel, the hosts opened to install muster stayed open to the agent, and
+  the model provider's host took any request with your key added. Both are
+  closed: the install hosts before the agent starts, and the model's host to
+  everything but the calls that ask the model.
+- A Vercel sandbox was kept after its run, with the repository and the
+  credentials' policy in it. It is now removed.
+- Credentials are sent only to the host they are for, whatever Host header the
+  sandbox writes.
+- A sandbox can no longer move a stored cursor, and reaches a named list of
+  board routes instead of everything not excluded.
+- Storing a file needs a token that may post; a narrowed token has a daily
+  allowance. A process ID sent over HTTP is ignored.
+- `--repo` refuses an address with a credential in it.
+
+Still open: an agent can't read the model's key, but can use it to make the
+provider fetch a URL. Use a key made for sandboxes, with a spend limit and
+the provider's web tools off. See the sandbox guide.
+
 ### Fixed
 
 - The stated minimum Node was wrong. muster needs Node 22.22.3 or later on the

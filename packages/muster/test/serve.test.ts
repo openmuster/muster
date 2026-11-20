@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { board, boardKey, file, http, listen, mint, verify } from '../src/index.ts'
+import { processStart } from '../src/process.ts'
 import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 
 async function served() {
@@ -222,5 +223,27 @@ describe('serve', () => {
     const dir = tempDir()
     const run = await cli(dir, ['read', 'general', '--url', 'http://127.0.0.1:9/api/board', '--json'])
     expect([run.code, JSON.parse(run.stderr).error.reason]).toEqual([1, 'unauthorized'])
+  })
+
+  it('a process ID sent over HTTP is dropped: it could only name a process on the board\'s machine', async () => {
+    const { server, as, time, owner } = await served()
+    const task = (await owner.taskCreate({ channel: 'work', text: 't' })).task
+    // This test's own process is alive here. Over a file that would keep a lapsed claim; over HTTP it must not.
+    await as({ profile: 'a' }).taskClaim({ id: task.id, lease: 60, pid: process.pid, pidStart: processStart(process.pid) ?? undefined })
+    time.advance(61_000)
+    expect((await as({ profile: 'b' }).taskClaim({ id: task.id })).task.claim!.by.profile).toBe('b')
+    await server.close()
+  })
+
+  it('a token that may post nowhere stores no file, and a narrowed one has a day\'s allowance', async () => {
+    const { server, as } = await served()
+    const data = Buffer.alloc(24 * 1024 * 1024, 1).toString('base64')
+    expect(await reason(as({ profile: 'r', can: { 'work/': ['read', 'react', 'label'] } }).filePut({ name: 'f', data: 'eA==' }))).toBe('forbidden')
+    const writer = as({ profile: 'w', can: { 'work/': ['read', 'post'] } })
+    for (let i = 0; i < 4; i++) await writer.filePut({ name: `f${i}`, data })
+    expect(await reason(writer.filePut({ name: 'f5', data }))).toBe('file_allowance')
+    // The allowance is each token holder's own, and the owner has none to run out of.
+    expect((await as({ profile: 'x', can: { 'work/': ['post'] } }).filePut({ name: 'f', data: 'eA==' })).size).toBe(1)
+    await server.close()
   })
 })

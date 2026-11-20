@@ -5,8 +5,23 @@ import { MOUNT, ROUTES } from '../serve/server.ts'
 export type Rule = { match: { path: string; method: string[] }; transform: { headers: Record<string, string> }[] }
 export type NetworkPolicy = { allow: Record<string, Rule[]> }
 
-/** What a sandbox's agent may call. Reading and writing the board, never running it: no tokens, no webhooks. */
-export const SANDBOX_ROUTES = ROUTES.filter((route) => !route.startsWith('schedule') && route !== 'schemaAdd' && route !== 'budgetSet')
+/**
+ * What a sandbox's agent may call, by name: reading and writing the board, never running it. A route
+ * is here because an agent doing a task needs it. A new route is closed to sandboxes until it is added.
+ */
+export const SANDBOX_ROUTES = [
+  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel',
+  'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head',
+  'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
+  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',
+  'schemaList', 'filePut', 'fileGet', 'budgets',
+] as const satisfies readonly (typeof ROUTES)[number][]
+
+/**
+ * What stays closed, and why: schedules and schemas change what the board does later, a budget is the
+ * owner's to set, and a stored cursor is how a watcher knows where it is, so moving one silences it.
+ */
+export const SANDBOX_CLOSED = ['scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'budgetSet', 'cursorGet', 'cursorSet'] as const satisfies readonly (typeof ROUTES)[number][]
 
 export const PLACEHOLDER = 'set-by-the-network-policy'
 
@@ -23,7 +38,8 @@ export function boardPolicy(options: { url: string; token: string }): { networkP
   if (url.protocol !== 'https:') throw new Failure('board_not_reachable', 'A sandbox reaches a board over HTTPS only: a credential added to plain HTTP crosses the network in the clear.')
   const base = url.pathname.replace(/\/$/, '') || MOUNT
   const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const headers = { authorization: `Bearer ${options.token}` }
+  // The match is on the name the connection asked for; the Host header is the sandbox's to write, so it is set here too.
+  const headers = { authorization: `Bearer ${options.token}`, host: url.host }
   return {
     networkPolicy: {
       allow: {

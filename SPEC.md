@@ -270,8 +270,15 @@ Built but proven only against stand-ins, never a real account or service:
 
 - Sync: signatures and payloads are hand-written to each platform's documented
   shape. No real webhook has been received and no real API has been called.
-- The Vercel and Cloudflare runners. The Cloudflare Worker template has never
-  been deployed or run.
+- The Cloudflare runner. Its Worker template has never been deployed or run.
+
+Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a
+sandbox claiming, logging and completing one small task on a board reached
+through a tunnel, and a probe that tried the board's allowed and refused
+routes and the model's host from inside. That run found three faults the
+stand-ins had passed. What has changed in the runner since (hosts closed after
+setup, the model's host held to its inference calls, nothing kept afterwards)
+has not been run for real yet.
 
 Different from the plan:
 
