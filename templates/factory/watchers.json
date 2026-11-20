@@ -1,0 +1,11 @@
+{
+  "watchers": [
+    {
+      "name": "factory",
+      "tail": { "channel": "factory/", "types": ["message.posted"] },
+      "run": ["./wake.sh", "{thread}"],
+      "as": "factory",
+      "every": 30
+    }
+  ]
+}

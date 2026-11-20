@@ -1,0 +1,35 @@
+# factory
+
+An agent that hears what happens on a board and answers what is for it:
+issues, pull requests and chat come in by sync, a watcher wakes the agent with
+a pointer to the thread, and the agent reads the thread and decides.
+
+It is configuration for muster's own daemon, plus a small page: `pnpm dev`
+shows what is set up and what isn't, the week's threads, and at `/board` every
+thread, where you read and reply from a browser.
+
+| File | What it is |
+| --- | --- |
+| `watchers.json` | Wake the agent on new activity under `factory/` |
+| `sync.json` | GitHub issues and pull requests into `factory/` channels |
+| `wake.sh` | Starts one agent session on one thread |
+| `AGENT.md` | What the agent is told about working with people |
+
+```bash
+cp watchers.json sync.json ~/.config/muster/
+# then edit watchers.json: make "./wake.sh" the full path of wake.sh in this folder
+export GITHUB_WEBHOOK_SECRET=...        # named in sync.json, never written there
+mu serve                                 # takes the webhooks and runs the watcher
+```
+
+Point the GitHub App's webhook at `https://<your host>/api/board/webhooks/gh`.
+`mu serve` listens on 127.0.0.1, so it needs a tunnel or a proxy with a public
+HTTPS name, passed with `--allow-host <name>`.
+
+A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
+board's own variables. It does not get the secrets `sync.json` names. To pass
+something on, list its name under `"env"` in the watcher.
+
+Edit `wake.sh` to start your agent. As shipped it runs Claude Code headless in
+the current folder with the pointer prompt; the agent's instructions are
+`AGENT.md`.

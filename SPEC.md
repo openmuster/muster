@@ -111,7 +111,13 @@ A channel is a path: segments of `[a-z0-9][a-z0-9_.-]*` joined by `/`, at most
 `task.created`, `task.ready`, `task.claimed`, `task.renewed`, `task.released`,
 `task.expired`, `task.blocked`, `task.unblocked`, `task.completed`,
 `task.failed`, `task.canceled`, `task.reopened`, `task.assigned`,
-`task.needs_changed`, `schedule.created`, `schedule.canceled`.
+`task.needs_changed`, `task.waiting`, `task.extended`, `idem.recorded`,
+`schedule.created`, `schedule.canceled`.
+
+A `labels.changed` event carries the labels as they were `before`, and a task
+event the state it came `from`, so a filter can match an event by what its
+thread was before it as well as after. A claim's token hash never leaves the
+store: readers get events without it.
 
 ## 5. Tasks
 
@@ -170,8 +176,10 @@ States: `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`,
   No timer has to fire, so a restart loses nothing. The first writer to see a
   lapsed claim appends `task.expired`.
 - **Fenced writes.** `renew`, `release`, `complete`, `fail` and a holder's
-  `block` check: state is `claimed`, same epoch, token matches, not past
-  `until`. Otherwise `claim_lost`, and nothing changes.
+  `block` check that the task is still claimed under the token the board gave
+  for this claim. Otherwise `claim_lost`, and nothing changes. A holder that is
+  late but whose task nobody has taken or looked at since still holds it: the
+  token proves no one else does.
 - **Reclaim looks at the process when it can.** A local holder may record its
   pid and that process's start time. When such a claim lapses and that exact
   process is still alive, the claim is extended by one lease instead of handed
@@ -228,7 +236,79 @@ Specified as they are built: see `docs/`. Their rules in brief:
 - **Runners**: start an agent for a task locally or in a cloud sandbox. A
   cloud runner reaches the board only through `mu serve`.
 
-## 9. Measured
+## 9. Built, and not yet
+
+Built and tested: sections 3 to 7, typed blocks and schemas, files, private
+channels, budgets a board keeps, backups; the daemon (schedules, watchers, a
+sleep grace for leases, the LaunchAgent); serve mode with tokens, a live feed,
+and the `http()` backend, which passes the same suite as `file()`;
+`mu conformance`; the inspector and `mu demo`; `mu run` with a local runner for
+Claude Code, Codex and any command, session resume, and a choice of a Vercel or
+Cloudflare sandbox; sync for GitHub, Linear and Slack in both directions, with
+edits, deletes, a filter for incoming text, and a catch-up read from GitHub;
+skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
+each.
+
+Run by hand in a browser on 20 Nov 2026, not by a test: the inspector (state
+tabs, a thread, a reply, a new task, live updates under `mu demo`), the swarm
+app (launching a run, its live page), and the factory app (its setup page, a
+reply through its board view).
+
+Run for real once each, on 20 Nov 2026, on one small task (make a file, check
+it, complete the task): Claude Code 2.1.329 and Codex 0.170.0 through `mu run`,
+with permissions and the sandbox left on. Each read its task, logged its steps
+as replies, and settled the task itself, and muster read its session and usage.
+The first Codex run failed until two flags were added (see below).
+
+Also run for real that day: two Claude Code workers on one queue of four tasks,
+one of which needed the other three (56 seconds, each task taken once, the
+dependent one last); and the LaunchAgent, loaded for a scratch board, where it
+sent a scheduled message, was restarted by launchd after being killed, and was
+removed again.
+
+Built but proven only against stand-ins, never a real account or service:
+
+- Sync: signatures and payloads are hand-written to each platform's documented
+  shape. No real webhook has been received and no real API has been called.
+- The Vercel and Cloudflare runners. The Cloudflare Worker template has never
+  been deployed or run.
+
+Different from the plan:
+
+- Sync talks to each platform directly, with no Chat SDK adapters.
+- The inspector uses plain React and lucide icons, with no Base UI.
+- `wait` and `tail` poll, over HTTP too; the live feed is there for pages.
+- A looping worker stops on a usage limit instead of waiting it out.
+
+Not built:
+
+- Sync of files; a catch-up read for Linear and Slack.
+- A restart-storm guard beyond launchd's own throttle.
+- A test that drives the apps in a browser.
+
+## 10. What a session costs to start
+
+Measured on one machine on 20 Nov 2026, with that person's own Claude Code
+setup (plugins, skills, connected tools), one run each: not a benchmark.
+
+| Claude Code started with | Tokens in its first request |
+| --- | --- |
+| everything the person's setup loads | about 51,700 |
+| `--strict-mcp-config` | about 39,200 |
+| and `--disable-slash-commands` | about 33,900 |
+| and `--tools Bash,Read,Edit,Write,Grep,Glob` (what `mu run` does) | about 13,000 |
+
+The same small task, start to finish through `mu run`: $0.75 and 220,573 input
+tokens with the full setup, $0.18 and 68,608 with the lean one. `--full` on
+`mu run` loads the whole setup for a task that needs it. Codex reports tokens
+(202,898 for that task) but no cost.
+
+What the first real Codex run taught: outside a Git repository it refuses to
+start without `--skip-git-repo-check`, and its default sandbox can write
+nowhere, so `mu run` gives it `--sandbox workspace-write` and the board's and
+the claim folder as extra writable folders.
+
+## 11. Measured
 
 `node packages/muster/spike/run.ts 30 100` on 20 Nov 2026 (Node 26.12.1,
 SQLite 3.54.0, an Apple Silicon laptop's internal disk, one run):

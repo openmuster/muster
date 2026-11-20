@@ -1,0 +1,293 @@
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { cli, cliStart, tempDir } from './helpers.ts'
+
+const lines = (text: string) => text.trimEnd().split('\n')
+
+describe('cli', () => {
+  it('whoami says where the board is, who you are, and that file mode is one trust domain', async () => {
+    const dir = tempDir()
+    const text = await cli(dir, ['whoami', '--as', 'claude'])
+    expect(lines(text.stdout)).toEqual([
+      `board  ${join(dir, 'board', 'main.db')}`,
+      expect.stringMatching(/^you    claude via \S+$/),
+      expect.stringMatching(/^id     local:user:\S+\+claude$/),
+      'mode   file: every process of this user can read and write this board',
+    ])
+    const json = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout)
+    expect(json).toMatchObject({ profile: null, mode: 'file' })
+  })
+
+  it('post, reply, read: one line per fact, and a thread read back in order', async () => {
+    const dir = tempDir()
+    expect((await cli(dir, ['post', 'dev', 'deploy is red', '--label', 'kind=bug', '--as', 'lead'])).stdout).toBe('posted  #1  #dev\n')
+    expect((await cli(dir, ['reply', '1', 'looking', '--as', 'claude'])).stdout).toBe('replied  #2  in #1\n')
+    const thread = lines((await cli(dir, ['read', '#1'])).stdout)
+    expect(thread[0]).toMatch(/^#1  lead via \S+ · \d+s  #dev$/)
+    expect(thread.slice(1, 3)).toEqual(['    deploy is red', '    kind=bug'])
+    expect(thread[4]).toMatch(/^#2  claude via \S+ · \d+s$/)
+    expect(thread[5]).toBe('    looking')
+    const channel = lines((await cli(dir, ['read', 'dev'])).stdout)
+    expect(channel[0]).toBe('cursor 2')
+    expect(channel.at(-1)).toMatch(/^    1 reply, last by claude via \S+ · \d+s$/)
+  })
+
+  it('text comes from an argument, a file, or stdin', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'note.txt'), 'from a file\nwith two lines')
+    await cli(dir, ['post', 'dev', '--file', join(dir, 'note.txt')])
+    await cli(dir, ['post', 'dev', '-'], { input: 'from stdin' })
+    const page = JSON.parse((await cli(dir, ['read', 'dev', '--json'])).stdout)
+    expect(page.threads.map((thread: { message: { text: string } }) => thread.message.text).sort()).toEqual(['from a file\nwith two lines', 'from stdin'])
+  })
+
+  it('--json prints one document on success and one on failure, with a reason to branch on', async () => {
+    const dir = tempDir()
+    const ok = await cli(dir, ['post', 'dev', 'hello', '--json'])
+    expect(JSON.parse(ok.stdout).message).toMatchObject({ id: 1, channel: 'dev', text: 'hello' })
+    const failed = await cli(dir, ['read', '99', '--json'])
+    expect(failed.code).toBe(1)
+    expect(failed.stdout).toBe('')
+    expect(JSON.parse(failed.stderr)).toEqual({ error: { reason: 'not_found', message: 'No message 99.' } })
+  })
+
+  it('exit codes: 0 for success, 1 for a failure, 2 for misuse', async () => {
+    const dir = tempDir()
+    expect((await cli(dir, ['post', 'dev', 'x'])).code).toBe(0)
+    expect((await cli(dir, ['read', '99'])).code).toBe(1)
+    for (const misuse of [['nope'], ['post'], ['post', 'Dev', 'x'], ['read', 'dev', '--bogus'], ['reply', 'abc', 'x'], ['tasks', 'claim'], ['tasks', 'fail', '1'], ['wait', '--timeout', 'soon']]) {
+      const run = await cli(dir, misuse)
+      expect([misuse.join(' '), run.code]).toEqual([misuse.join(' '), 2])
+      expect(run.stderr).toMatch(/^error: /)
+    }
+  })
+
+  it('an error says what failed and gives at most two ways out, indented under a blank line', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['tasks', 'claim', '1', '--as', 'a'])
+    const run = await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'b'])
+    expect(run.code).toBe(1)
+    expect(lines(run.stderr)).toEqual(['error: You no longer hold task 1.', '', "  Stop working it and say so in its thread. Don't settle it.", '  mu read 1'])
+  })
+
+  it('prints no colour and no line over 80 columns for ordinary output', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'db/storage', 'Write-ahead log', '--label', 'group=storage'])
+    for (const args of [['whoami'], ['tasks'], ['read', 'db/storage'], ['channels'], ['actors'], ['help']]) {
+      const out = (await cli(dir, args)).stdout
+      expect(out).not.toMatch(/\u001b\[/)
+      for (const line of lines(out).filter((text) => !text.startsWith('board  '))) expect([args[0], line.length <= 80, line]).toEqual([args[0], true, line])
+    }
+  })
+
+  it('the tasks list shows each open task with its state, labels, holder and time left, and what it waits for', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'db/storage', 'Write-ahead log', '--label', 'kind=plan', '--as', 'lead'])
+    await cli(dir, ['tasks', 'create', 'db/storage', 'Crash recovery', '--needs', '1', '--as', 'lead'])
+    await cli(dir, ['tasks', 'claim', '--ready', 'db/', '--as', 'ada', '--lease', '5m'])
+    const rows = lines((await cli(dir, ['tasks'])).stdout)
+    expect(rows[0]).toMatch(/^#1      claimed    Write-ahead log  kind=plan  ada via \S+ · [45]:\d\d left  #db\/storage$/)
+    expect(rows[1]).toBe('#3      waiting    Crash recovery  needs #1  #db/storage')
+    expect((await cli(dir, ['tasks', '--state', 'failed'])).stdout).toBe('no failed tasks\n')
+  })
+
+  it("keeps a claim's token for the profile that took it, in a file only you can read, and forgets it on settling", async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['tasks', 'claim', '1', '--as', 'worker'])
+    const folder = join(dir, 'config', 'claims')
+    const board = readdirSync(folder)[0]!
+    expect(readdirSync(join(folder, board))).toEqual(['1-worker.json'])
+    expect((await cli(dir, ['tasks', 'renew', '1'])).code).toBe(1)
+    expect((await cli(dir, ['tasks', 'renew', '1', '--as', 'worker', '--lease', '10m'])).stdout).toMatch(/^#1  yours for (10m|9m)\n$/)
+    expect((await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'worker'])).stdout).toBe('completed  #1\n')
+    expect(existsSync(join(folder, board, '1-worker.json'))).toBe(false)
+  })
+
+  it('completing a task names the tasks it readied', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 'build'])
+    await cli(dir, ['tasks', 'create', 'work', 'ship', '--needs', '1'])
+    await cli(dir, ['tasks', 'claim', '1'])
+    expect((await cli(dir, ['tasks', 'complete', '1', 'built'])).stdout).toBe('completed  #1\nready      #3\n')
+  })
+
+  it('queues a plan from a file', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'plan.json'), JSON.stringify([{ key: 'limiter', text: 'Add a rate limiter' }, { key: 'review', text: 'Review it', needs: [{ key: 'limiter' }] }]))
+    const run = await cli(dir, ['tasks', 'create', 'work/checkout', '--file', join(dir, 'plan.json'), '--idempotency-key', 'p1', '--as', 'lead'])
+    expect(lines(run.stdout)).toEqual(['created  #1  ready     limiter', 'created  #3  waiting   review'])
+    const again = await cli(dir, ['tasks', 'create', 'work/checkout', '--file', join(dir, 'plan.json'), '--idempotency-key', 'p1', '--as', 'lead'])
+    expect(again.stdout).toBe(run.stdout)
+  })
+
+  it('tasks run completes on exit 0, fails with the exit code otherwise, and hands the command the task ID', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 'passes'])
+    await cli(dir, ['tasks', 'create', 'work', 'fails'])
+    const ok = await cli(dir, ['tasks', 'run', '1', '--result', 'tests pass', '--', 'sh', '-c', 'echo task=$MUSTER_TASK'])
+    expect([ok.code, ok.stdout]).toEqual([0, 'task=1\ncompleted 1\n'])
+    const bad = await cli(dir, ['tasks', 'run', '3', '--', 'sh', '-c', 'exit 7'])
+    expect([bad.code, bad.stdout]).toEqual([7, 'failed 3\n'])
+    const all = JSON.parse((await cli(dir, ['tasks', '--state', 'all', '--json'])).stdout).tasks
+    expect(all.map((task: { state: string; result: string | null; reason: string | null }) => [task.state, task.result ?? task.reason])).toEqual([['completed', 'tests pass'], ['failed', 'exited 7']])
+  })
+
+  it('tasks run with --json keeps stdout to one document and sends the command\'s output to stderr', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    const run = await cli(dir, ['tasks', 'run', '--ready', 'work', '--json', '--', 'sh', '-c', 'echo noise; exit 2'])
+    expect(run.code).toBe(2)
+    expect(JSON.parse(run.stdout)).toEqual({ task: 1, outcome: 'failed', code: 2, signal: null })
+    expect(run.stderr).toBe('noise\n')
+  })
+
+  it('tasks run releases the task and exits 143 when it is told to stop, and its command stops too', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 'long'])
+    const marker = join(dir, 'still-running')
+    const running = cliStart(dir, ['tasks', 'run', '1', '--', 'sh', '-c', `sleep 3; touch ${marker}`])
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    running.child.kill('SIGTERM')
+    const ended = await running.done
+    expect(ended.code).toBe(143)
+    expect(ended.stdout).toBe('released 1\n')
+    expect(JSON.parse((await cli(dir, ['tasks', '--json'])).stdout).tasks[0].state).toBe('ready')
+    await new Promise((resolve) => setTimeout(resolve, 2800))
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('tasks run that cannot start its command releases the task', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    const run = await cli(dir, ['tasks', 'run', '1', '--', 'no-such-command-anywhere'])
+    expect(run.code).toBe(1)
+    expect(run.stderr).toMatch(/^error: couldn't start no-such-command-anywhere/)
+    expect(JSON.parse((await cli(dir, ['tasks', '--json'])).stdout).tasks[0].state).toBe('ready')
+  })
+
+  it("wait hears another process's write, prints it, and says where to wait from next", async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'question?'])
+    const waiting = cliStart(dir, ['wait', '--re', '1', '--timeout', '20s', '--json'])
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await cli(dir, ['post', 'other', 'not this'])
+    await cli(dir, ['reply', '1', 'answer', '--as', 'lead'])
+    const ended = await waiting.done
+    expect(ended.code).toBe(0)
+    const heard = JSON.parse(ended.stdout)
+    expect(heard.event).toMatchObject({ type: 'message.posted', thread: 1, message: { text: 'answer' } })
+    expect(heard.next).toBe(`mu wait --after ${heard.cursor}`)
+  })
+
+  it('wait --after counts something that landed before the wait started', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'question?'])
+    await cli(dir, ['reply', '1', 'already answered'])
+    const run = await cli(dir, ['wait', 'work', '--after', '1', '--timeout', '5s', '--json'])
+    expect(JSON.parse(run.stdout).event.message.text).toBe('already answered')
+  })
+
+  it('a wait that times out exits 1 with the reason timeout and the cursor it reached', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'x'])
+    const run = await cli(dir, ['wait', 'work', '--timeout', '300ms', '--json'])
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'timeout', data: { cursor: 1 } })
+  })
+
+  it('claim --wait takes a task that becomes ready while it waits, and times out with exit 1 when none does', async () => {
+    const dir = tempDir()
+    const waiting = cliStart(dir, ['tasks', 'claim', '--ready', 'work', '--wait', '20s', '--as', 'worker', '--json'])
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await cli(dir, ['tasks', 'create', 'work', 'here you go'])
+    const ended = await waiting.done
+    expect([ended.code, JSON.parse(ended.stdout).task.id]).toEqual([0, 1])
+    const none = await cli(dir, ['tasks', 'claim', '--ready', 'work', '--wait', '300ms', '--json'])
+    expect([none.code, JSON.parse(none.stderr).error.reason]).toEqual([1, 'timeout'])
+  })
+
+  it('tail prints each event as it happens, one JSON line each with --json, and exits 130 on Ctrl-C', async () => {
+    const dir = tempDir()
+    const tailing = cliStart(dir, ['tail', 'work', '--json'])
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await cli(dir, ['post', 'work', 'one'])
+    await cli(dir, ['post', 'work', 'two'])
+    await new Promise((resolve) => setTimeout(resolve, 1300))
+    tailing.child.kill('SIGINT')
+    const ended = await tailing.done
+    expect(ended.code).toBe(130)
+    expect(lines(ended.stdout).map((line) => JSON.parse(line).data.text)).toEqual(['one', 'two'])
+  })
+
+  it('read --cursor remembers where a profile read to', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'first'])
+    expect((await cli(dir, ['read', 'work', '--cursor', 'inbox', '--as', 'lead'])).stdout).toMatch(/first/)
+    expect(lines((await cli(dir, ['read', 'work', '--cursor', 'inbox', '--as', 'lead'])).stdout).at(-1)).toBe('nothing new')
+    await cli(dir, ['post', 'work', 'second'])
+    const news = (await cli(dir, ['read', 'work', '--cursor', 'inbox', '--as', 'lead'])).stdout
+    expect(news).toMatch(/second/)
+    expect(news).not.toMatch(/first/)
+  })
+
+  it('MUSTER_PROFILE names the profile when --as is not given', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'x'], { env: { MUSTER_PROFILE: 'codex' } })
+    expect(JSON.parse((await cli(dir, ['read', '1', '--json'])).stdout).message.by.profile).toBe('codex')
+  })
+
+  it('every command in the help exists, and help is what a bare mu prints', async () => {
+    const dir = tempDir()
+    const help = (await cli(dir, [])).stdout
+    expect(help).toBe((await cli(dir, ['help'])).stdout)
+    const named = [...help.matchAll(/^  ([a-z]+)[ \n]/gm)].map((match) => match[1]!).filter((name) => !['Text', 'Every'].includes(name))
+    for (const name of new Set(named)) {
+      const run = await cli(dir, [name, '--bogus-flag-for-test'])
+      expect([name, run.stderr.includes('Unknown command')]).toEqual([name, false])
+    }
+  })
+})
+
+describe('files', () => {
+  it('a message carries files: attached by path, stored once by what they hold, and downloaded under their own names', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'trace.json'), '{"spans": 3}')
+    writeFileSync(join(dir, 'notes.txt'), 'hello')
+    const posted = JSON.parse((await cli(dir, ['post', 'work', 'here is the trace', '--attach', join(dir, 'trace.json'), '--attach', join(dir, 'notes.txt'), '--json'])).stdout)
+    expect(posted.message.attachments.map((file: { name: string; type: string; size: number }) => [file.name, file.type, file.size])).toEqual([['trace.json', 'application/json', 12], ['notes.txt', 'text/plain', 5]])
+    await cli(dir, ['reply', '1', 'again', '--attach', join(dir, 'trace.json')])
+    expect(readdirSync(join(dir, 'board', 'main.files'))).toHaveLength(2)
+    expect((await cli(dir, ['read', '1'])).stdout).toContain('[trace.json] [notes.txt]')
+    const saved = await cli(dir, ['download', '1', '--to', join(dir, 'out')])
+    expect(saved.stdout).toBe(`saved  ${join(dir, 'out', 'trace.json')}\nsaved  ${join(dir, 'out', 'notes.txt')}\n`)
+    expect(readFileSync(join(dir, 'out', 'trace.json'), 'utf8')).toBe('{"spans": 3}')
+  })
+
+  it('refuses a file that is not there, an eleventh file, and a download from a message with none', async () => {
+    const dir = tempDir()
+    expect((await cli(dir, ['post', 'work', 'x', '--attach', join(dir, 'missing.txt')])).code).toBe(2)
+    const many = Array.from({ length: 11 }, (_, i) => {
+      writeFileSync(join(dir, `f${i}.txt`), String(i))
+      return ['--attach', join(dir, `f${i}.txt`)]
+    }).flat()
+    const run = await cli(dir, ['post', 'work', 'too many', ...many, '--json'])
+    expect(JSON.parse(run.stderr).error.reason).toBe('too_many_attachments')
+    await cli(dir, ['post', 'work', 'plain'])
+    expect(JSON.parse((await cli(dir, ['download', '1', '--json'])).stderr).error.reason).toBe('no_files')
+  })
+
+  it("a download uses only a file's own name, so a message can't write outside the folder", async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'a.txt'), 'x')
+    const posted = JSON.parse((await cli(dir, ['post', 'work', 'x', '--attach', join(dir, 'a.txt'), '--json'])).stdout)
+    const team = (await import('../src/index.ts')).board({ dir: join(dir, 'board') })
+    await team.post({ channel: 'work', text: 'evil', attachments: [{ ...posted.message.attachments[0], name: '../../escaped.txt' }] })
+    team.close()
+    await cli(dir, ['download', '2', '--to', join(dir, 'out', 'deep')])
+    expect(existsSync(join(dir, 'out', 'deep', 'escaped.txt'))).toBe(true)
+    expect(existsSync(join(dir, 'escaped.txt'))).toBe(false)
+  })
+})

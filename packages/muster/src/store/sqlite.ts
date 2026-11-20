@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Failure } from '../failure.ts'
@@ -7,6 +7,8 @@ import { Failure } from '../failure.ts'
 export const SQLITE_FLOOR = [3, 51, 3] as const
 
 const BUSY_TRIES = 8
+/** Opening a new file takes locks no busy timeout covers, so thirty processes making one board at once wait their turn here. */
+const OPEN_TRIES = 60
 
 /** Whether `version` ("3.54.0") is at least the floor. */
 export function atLeastFloor(version: string, floor: readonly number[] = SQLITE_FLOOR): boolean {
@@ -31,6 +33,19 @@ function pause(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
+/** Runs `fn`, again after a jittered pause while the file is busy. For steps that can't be half done. */
+export function whileBusy<T>(fn: () => T, tries = OPEN_TRIES): T {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn()
+    } catch (error) {
+      if (!isBusy(error)) throw error
+      if (attempt >= tries) throw new Failure('busy', 'The board is busy: other writers held it too long.', { hint: 'Run the command again.' })
+      pause(20 + Math.floor(Math.random() * 130))
+    }
+  }
+}
+
 /** An open board file. */
 export type Db = {
   readonly raw: DatabaseSync
@@ -52,6 +67,20 @@ export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
   } catch (error) {
     throw new Failure('no_store', `Couldn't open the board at ${path}.`, { hint: String((error as Error).message) })
   }
+  raw.exec('pragma busy_timeout = 5000')
+  if (path !== ':memory:') {
+    // A file that isn't a database, or one SQLite can no longer read, is set aside and never written over.
+    try {
+      whileBusy(() => raw.prepare('select count(*) from sqlite_master').get())
+    } catch (error) {
+      raw.close()
+      const message = String((error as Error).message)
+      if (!/not a database|malformed|corrupt/i.test(message)) throw error
+      const aside = `${path}.corrupt-${Date.now()}`
+      if (existsSync(path)) copyFileSync(path, aside)
+      throw new Failure('store_corrupt', `The board at ${path} can't be read: ${message}.`, { hint: `A copy is at ${aside}. Restore a backup; muster won't write over this file.` })
+    }
+  }
   const version = (raw.prepare('select sqlite_version() as v').get() as { v: string }).v
   if (!atLeastFloor(version)) {
     raw.close()
@@ -59,19 +88,20 @@ export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
       hint: 'Use a newer Node.',
     })
   }
-  raw.exec('pragma busy_timeout = 5000')
   if (!options.readonly) {
-    const mode = (raw.prepare('pragma journal_mode = wal').get() as { journal_mode: string }).journal_mode
+    const mode = whileBusy(() => (raw.prepare('pragma journal_mode = wal').get() as { journal_mode: string }).journal_mode)
     if (path !== ':memory:' && mode !== 'wal') {
       raw.close()
       throw new Failure('no_wal', `The filesystem under ${path} can't keep a write-ahead log.`, {
         hint: 'Keep the board on a local disk: pass --dir or set MUSTER_DIR.',
       })
     }
-    raw.exec('pragma synchronous = full')
-    raw.exec('pragma checkpoint_fullfsync = 1')
-    raw.exec('pragma wal_autocheckpoint = 100')
-    raw.exec('pragma journal_size_limit = 8388608')
+    whileBusy(() => {
+      raw.exec('pragma synchronous = full')
+      raw.exec('pragma checkpoint_fullfsync = 1')
+      raw.exec('pragma wal_autocheckpoint = 100')
+      raw.exec('pragma journal_size_limit = 8388608')
+    })
   }
   raw.exec('pragma foreign_keys = on')
 
@@ -81,7 +111,8 @@ export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
         raw.exec(sql)
         return
       } catch (error) {
-        if (!isBusy(error) || attempt >= BUSY_TRIES) throw error
+        if (!isBusy(error)) throw error
+        if (attempt >= BUSY_TRIES) throw new Failure('busy', 'The board is busy: other writers held it too long.', { hint: 'Run the command again.' })
         pause(20 + Math.floor(Math.random() * 130))
       }
     }

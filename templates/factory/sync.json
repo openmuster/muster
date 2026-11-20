@@ -1,0 +1,7 @@
+{
+  "gh": {
+    "type": "github",
+    "secret": "env:GITHUB_WEBHOOK_SECRET",
+    "repos": { "acme/web": { "issues": "factory/issues", "pulls": "factory/prs" } }
+  }
+}
