@@ -14,6 +14,16 @@ export const ROUTES = [
 ] as const
 const ALLOWED = new Set<string>(ROUTES)
 
+/** Removes `pid` and `pidStart` from a request, at any depth. */
+function withoutPids(value: unknown, depth = 0): void {
+  if (!value || typeof value !== 'object' || depth > 6) return
+  if (!Array.isArray(value)) {
+    delete (value as { pid?: unknown }).pid
+    delete (value as { pidStart?: unknown }).pidStart
+  }
+  for (const inner of Object.values(value)) withoutPids(inner, depth + 1)
+}
+
 export const MOUNT = '/api/board'
 /** Room for one file, as base64, and its envelope. */
 const BODY_MAX = 36 * 1024 * 1024
@@ -129,10 +139,8 @@ export function createHandler(options: ServeOptions) {
       const args = Array.isArray(body.args) ? body.args : []
       // A process ID is checked on this machine, and the caller's process is on another: one sent over HTTP
       // could only ever name a process here, and keep a lapsed claim alive by it.
-      if (route === 'taskClaim' && args[0] && typeof args[0] === 'object') {
-        delete (args[0] as { pid?: unknown }).pid
-        delete (args[0] as { pidStart?: unknown }).pidStart
-      }
+      // Wherever one rides in a request: a claim, or a task made already claimed.
+      withoutPids(args)
       const result = await (options.backend[route as (typeof ROUTES)[number]] as (caller: Caller, ...rest: unknown[]) => Promise<unknown>)(caller, ...args)
       send(res, 200, { ok: result === undefined ? null : result })
     } catch (error) {

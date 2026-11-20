@@ -232,6 +232,10 @@ describe('serve', () => {
     await as({ profile: 'a' }).taskClaim({ id: task.id, lease: 60, pid: process.pid, pidStart: processStart(process.pid) ?? undefined })
     time.advance(61_000)
     expect((await as({ profile: 'b' }).taskClaim({ id: task.id })).task.claim!.by.profile).toBe('b')
+    // The same for a task made already claimed: that request carries one too.
+    const made = (await as({ profile: 'a' }).taskCreate({ channel: 'work', text: 'u', claim: { lease: 60, pid: process.pid, pidStart: processStart(process.pid) ?? undefined } })).task
+    time.advance(61_000)
+    expect((await as({ profile: 'b' }).taskClaim({ id: made.id })).task.claim!.by.profile).toBe('b')
     await server.close()
   })
 
