@@ -28,7 +28,6 @@ import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { listen } from '../serve/server.ts'
 import { boardKey, mint } from '../serve/token.ts'
-import { fileRegistry } from '../serve/tokens.ts'
 import type { Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -658,7 +657,7 @@ const commands: Record<string, Command> = {
       const port = Number(str(parsed.flags, 'port') ?? run.io.env.MUSTER_PORT ?? 4100)
       let serving
       try {
-        serving = await listen({ backend: run.team.backend, key, tokens: fileRegistry(me.where), port, hosts: list(parsed.flags, 'allow-host') })
+        serving = await listen({ backend: run.team.backend, key, port, hosts: list(parsed.flags, 'allow-host') })
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
         throw error

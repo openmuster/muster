@@ -1,11 +1,9 @@
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { board, boardKey, file, http, listen, mint, verify } from '../src/index.ts'
 import { processStart } from '../src/process.ts'
-import { fileRegistry, TOKENS_MAX } from '../src/serve/tokens.ts'
+import { TOKENS_MAX } from '../src/serve/tokens.ts'
 import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 
 async function served() {
@@ -321,53 +319,39 @@ describe('serve', () => {
     await server.close()
   })
 
-  it('the token list on a file loses nothing to two writers, and refuses every listed token when it can\'t be read', () => {
+  it('the token list is the board\'s own: two handles on one file see each other\'s tokens and revocations, and it has a ceiling', async () => {
     const dir = tempDir()
-    const a = fileRegistry('/boards/main.db', dir)
-    const b = fileRegistry('/boards/main.db', dir)
-    const record = (id: string) => ({ id, profile: 'p', can: null, exp: 4_102_444_800, at: 1, revoked: false })
-    a.record(record('one'))
-    b.record(record('two'))
-    expect(a.revoke('one')).toBe(true)
-    // A writer that read before the revocation can't undo it by adding its own line.
-    b.record(record('three'))
-    expect(a.list(0).map((token) => [token.id, token.revoked])).toEqual([['one', true], ['two', false], ['three', false]])
-    expect([b.revoked('one'), b.revoked('two'), b.revoked('never-made')]).toEqual([true, false, false])
-    const file = join(dir, 'tokens', readdirSync(join(dir, 'tokens')).find((name) => name.endsWith('.log'))!)
-    appendFileSync(file, '{"neither": 1}\n')
-    expect([a.revoked('two'), a.revoked('never-made')]).toEqual([true, true])
-    expect(() => a.list(0)).toThrow(/can't be read/)
+    const a = board({ dir, principal: 'local:user:ada' })
+    const b = board({ dir, principal: 'local:user:ada' })
+    const one = await a.backend.tokens.create({ profile: 'p', can: { 'work/': ['read'] }, ttl: 600 })
+    const two = await b.backend.tokens.create({ profile: 'q', can: { 'work/': ['read'] }, ttl: 600 })
+    await a.backend.tokens.revoke({ id: one.record.id })
+    await b.backend.tokens.create({ profile: 'r', can: { 'work/': ['read'] }, ttl: 600 })
+    expect((await b.backend.tokens.list()).tokens.map((token) => [token.profile, token.revoked]).sort()).toEqual([['p', true], ['q', false], ['r', false]])
+    expect([a.backend.registry!().revoked(one.record.id), a.backend.registry!().revoked(two.record.id), a.backend.registry!().revoked('never-made')]).toEqual([true, false, false])
+    // No more than the ceiling of tokens that still work; what ran out makes room.
+    const time = clock()
+    const full = file({ memory: true, principal: 'local:user:ada', now: time.now })
+    for (let i = 0; i < TOKENS_MAX; i++) await full.tokens.create({ profile: 'p', can: { 'work/': ['read'] }, ttl: 600 })
+    expect(await reason(full.tokens.create({ profile: 'p', can: { 'work/': ['read'] }, ttl: 600 }))).toBe('too_many_tokens')
+    time.advance(601_000)
+    expect((await full.tokens.create({ profile: 'p', can: { 'work/': ['read'] }, ttl: 600 })).record.profile).toBe('p')
   })
 
-  it('the token list ignores a write caught halfway, drops what ran out, and has a ceiling', () => {
-    const dir = tempDir()
-    const registry = fileRegistry('/boards/main.db', dir)
-    const file = () => join(dir, 'tokens', readdirSync(join(dir, 'tokens')).find((name) => name.endsWith('.log'))!)
-    const record = (id: string, exp = 4_102_444_800) => ({ id, profile: 'p', can: null, exp, at: 1, revoked: false })
-    registry.record(record('kept'))
-    registry.revoke('kept')
-    // Half a line, as a crash mid-write leaves it, is not damage.
-    appendFileSync(file(), '{"made": {"id": "ha')
-    expect([registry.revoked('kept'), registry.list(0).map((token) => token.id)]).toEqual([true, ['kept']])
-    // Many tokens that have run out are tidied away, and the revocation of a live one survives that.
-    const dir2 = tempDir()
-    const busy = fileRegistry('/boards/main.db', dir2)
-    busy.record(record('live'))
-    busy.revoke('live')
-    for (let i = 0; i < 200; i++) busy.record(record(`old-${i}`, 1))
-    const lines = readFileSync(join(dir2, 'tokens', readdirSync(join(dir2, 'tokens')).find((name) => name.endsWith('.log'))!), 'utf8').trim().split('\n')
-    expect(lines.length).toBeLessThan(120)
-    expect(busy.revoked('live')).toBe(true)
-    // A lock left by a process that died is taken over; one held by a live process is not stolen.
-    const lock = `${file()}.lock`
-    writeFileSync(lock, '2147483646:dead')
-    registry.record(record('after-a-dead-writer'))
-    expect(registry.list(0).map((token) => token.id)).toContain('after-a-dead-writer')
-    expect(existsSync(lock)).toBe(false)
-    // No more than the ceiling of tokens that still work.
-    const dir3 = tempDir()
-    const full = fileRegistry('/boards/main.db', dir3)
-    for (let i = 0; i < TOKENS_MAX; i++) full.record(record(`t-${i}`))
-    expect(() => full.record(record('one-too-many'))).toThrow(/most it keeps/)
+  it('a token revoked from the command line is refused by a board being served from the same file', async () => {
+    const time = clock()
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now })
+    const key = randomBytes(32)
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    const made = await file({ memory: true }).tokens.create({ profile: 'x', can: { 'w/': ['read'] }, ttl: 600 }).catch(() => null)
+    expect(made).not.toBeNull()
+    // The owner, on the board's machine, makes a token with the server's key and later stops it.
+    const mine = mint(key, { sub: 'local:user:ada', profile: 'fixer', can: { 'work/': ['read', 'post'] }, exp: Math.floor(time.now().getTime() / 1000) + 600, jti: 'tok-1' })
+    backend.registry!().record({ id: 'tok-1', profile: 'fixer', can: { 'work/': ['read', 'post'] }, exp: Math.floor(time.now().getTime() / 1000) + 600, at: 1, revoked: false })
+    const agent = board({ backend: http({ url: server.url, token: mine }) })
+    await agent.post({ channel: 'work', text: 'before' })
+    await backend.tokens.revoke({ id: 'tok-1' })
+    expect(await reason(agent.post({ channel: 'work', text: 'after' }))).toBe('unauthorized')
+    await server.close()
   })
 })

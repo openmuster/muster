@@ -58,7 +58,7 @@ export type ServeOptions = {
   backend: Backend
   key: Buffer
   now?: () => number
-  /** The board's list of tokens it made. Default: one that lasts as long as this process. */
+  /** The board's list of tokens it made. Default: the backend's own. */
   tokens?: Registry
   /** Host names requests may come for, beside the address it listens on. */
   hosts?: readonly string[]
@@ -74,7 +74,8 @@ export function createHandler(options: ServeOptions) {
   const now = options.now ?? (() => Date.now())
   const extra = new Set((options.hosts ?? []).map((host) => host.toLowerCase()))
 
-  const tokens = options.tokens ?? memoryRegistry()
+  // The board's own list where it keeps one, so a token stopped with `mu token revoke` is stopped here too.
+  const tokens = options.tokens ?? options.backend.registry?.() ?? memoryRegistry()
   const claimsOf = (req: IncomingMessage): Claims => {
     const header = req.headers.authorization
     const claims = verify(options.key, header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())

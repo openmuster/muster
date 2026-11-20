@@ -85,7 +85,7 @@ describe('store', () => {
     expect((await team.scheduleCreate({ channel: 'work', text: 'x', every: 600 })).next).not.toBeNull()
     team.close()
     const after = openDb(join(dir, 'main.db'))
-    expect((after.raw.prepare('pragma user_version').get() as { user_version: number }).user_version).toBe(4)
+    expect((after.raw.prepare('pragma user_version').get() as { user_version: number }).user_version).toBe(5)
     after.close()
   })
 

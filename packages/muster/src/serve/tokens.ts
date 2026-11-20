@@ -1,15 +1,13 @@
-import { createHash, randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { configDir } from '../cli/claims.ts'
+import { randomBytes } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
 import { profileName, type Permission } from '../model.ts'
+import type { Db } from '../store/sqlite.ts'
 import { mint, type Claims } from './token.ts'
 
 /** What the board remembers of a token it made: enough to list it and to stop it, never the token itself. */
 export type TokenRecord = { id: string; profile: string | null; can: Record<string, Permission[]> | null; exp: number; at: number; revoked: boolean }
 
-/** The tokens a board has made, kept beside its key: outside the board's file, with the operator's own things. */
+/** The tokens a board has made. */
 export type Registry = {
   record(token: TokenRecord): void
   revoke(id: string): boolean
@@ -33,163 +31,29 @@ export function memoryRegistry(): Registry {
 }
 
 /**
- * The registry for a board on a file: a log, one line per token made and one per token stopped.
- * Lines are only ever added, so two processes writing at once lose nothing, and a revocation can't
- * be undone by a write that read the file a moment earlier.
+ * The registry for a board: a table in the board's own file. The store already writes one
+ * transaction at a time and never half a row, so a revocation can't be lost to another writer or to
+ * a crash, and there is no file of ours to lock, mend or tidy.
  */
-export function fileRegistry(where: string, dir = configDir()): Registry {
-  const folder = join(dir, 'tokens')
-  const path = join(folder, createHash('sha256').update(where).digest('hex').slice(0, 16) + '.log')
-  type Line = { made: TokenRecord } | { revoked: string }
-  /** Every token and whether it was stopped, or null when the file is there but can't be read as what we wrote. */
-  let cached: { stamp: string; tokens: Map<string, TokenRecord> | null } | null = null
-  /** Read once per change to the file, not once per request. */
-  const load = (): Map<string, TokenRecord> | null => {
-    let stamp: string
-    try {
-      const stat = statSync(path)
-      stamp = `${stat.size}:${stat.mtimeMs}`
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
-      return null
-    }
-    if (cached?.stamp === stamp) return cached.tokens
-    const tokens = parse()
-    cached = { stamp, tokens }
-    return tokens
-  }
-  const parse = (): Map<string, TokenRecord> | null => {
-    let text: string
-    try {
-      text = readFileSync(path, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
-      return null
-    }
-    // A last line with no newline is a write caught halfway: it isn't there yet, and isn't damage.
-    if (!text.endsWith('\n')) text = text.slice(0, text.lastIndexOf('\n') + 1)
-    const tokens = new Map<string, TokenRecord>()
-    const stopped = new Set<string>()
-    try {
-      for (const raw of text.split('\n')) {
-        if (!raw) continue
-        const line = JSON.parse(raw) as Line
-        if ('made' in line) tokens.set(line.made.id, { ...line.made, revoked: false })
-        else if (typeof line.revoked === 'string') stopped.add(line.revoked)
-        else return null
-      }
-    } catch {
-      return null
-    }
-    for (const id of stopped) {
-      const found = tokens.get(id)
-      if (found) found.revoked = true
-      // A revocation for a token whose own line is missing still counts.
-      else tokens.set(id, { id, profile: null, can: null, exp: Number.MAX_SAFE_INTEGER, at: 0, revoked: true })
-    }
-    return tokens
-  }
-  /** One writer at a time, so tidying the log can't drop a line another process is adding. */
-  const locked = <T>(work: () => T): T => {
-    mkdirSync(folder, { recursive: true, mode: 0o700 })
-    const lock = `${path}.lock`
-    const mine = `${process.pid}:${randomBytes(6).toString('hex')}`
-    const pause = new Int32Array(new SharedArrayBuffer(4))
-    const waited = Date.now()
-    for (;;) {
-      try {
-        writeFileSync(lock, mine, { flag: 'wx', mode: 0o600 })
-        break
-      } catch {
-        // Someone holds it. It is taken over only when its holder is provably gone: the process that
-        // wrote it no longer runs, or it has sat there far longer than any write takes.
-        let gone = false
-        try {
-          const holder = Number(readFileSync(lock, 'utf8').split(':')[0])
-          const age = Date.now() - statSync(lock).mtimeMs
-          gone = age > 30_000 || (Number.isInteger(holder) && holder > 0 && !running(holder))
-        } catch {
-          // It went away between the two looks: try again.
-        }
-        if (gone) rmSync(lock, { force: true })
-        else if (Date.now() - waited > 60_000) throw new Failure('token_list_busy', "The board's list of tokens is being written by another process.", { hint: 'Try again.' })
-        else Atomics.wait(pause, 0, 0, 5)
-      }
-    }
-    try {
-      return work()
-    } finally {
-      // Only our own lock is ours to remove.
-      try {
-        if (readFileSync(lock, 'utf8') === mine) rmSync(lock, { force: true })
-      } catch {
-        // Already gone.
-      }
-    }
-  }
-  const add = (line: Line) =>
-    locked(() => {
-      const tokens = parse()
-      if (tokens === null) throw unreadable()
-      const live = [...tokens.values()].filter((token) => token.exp * 1000 > Date.now())
-      if ('made' in line && live.filter((token) => !token.revoked).length >= TOKENS_MAX) {
-        throw new Failure('too_many_tokens', `This board has ${TOKENS_MAX} live tokens, which is the most it keeps.`, { hint: 'Revoke some with mu token revoke, or wait for them to run out.' })
-      }
-      // The log is rewritten without what ran out once that is most of it, so it can't grow without end.
-      if (tokens.size > 64 && live.length < tokens.size / 2) {
-        const kept: Line[] = []
-        for (const token of live) {
-          if (token.at > 0) kept.push({ made: { ...token, revoked: false } })
-          if (token.revoked) kept.push({ revoked: token.id })
-        }
-        const next = `${path}.${process.pid}.tmp`
-        writeFileSync(next, kept.map((entry) => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 })
-        renameSync(next, path)
-      }
-      // A line left half-written by a writer that died is cut off first, or the new line would be glued to it.
-      try {
-        const text = readFileSync(path, 'utf8')
-        if (text.length > 0 && !text.endsWith('\n')) {
-          // Swapped in whole, so a crash here leaves either the old file or the mended one, never an emptied one.
-          const mended = `${path}.${process.pid}.tmp`
-          writeFileSync(mended, text.slice(0, text.lastIndexOf('\n') + 1), { mode: 0o600 })
-          renameSync(mended, path)
-        }
-      } catch {
-        // No file yet.
-      }
-      appendFileSync(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
-    })
-  const unreadable = () => new Failure('token_list_unreadable', `The board's list of tokens at ${path} can't be read.`, { hint: 'Until it can, no token with an ID is accepted. Restore the file, or move it aside and make new tokens.' })
+export function dbRegistry(db: Db, clock: () => number = () => Date.now()): Registry {
+  type Row = { id: string; profile: string | null; can: string | null; exp: number; at: number; revoked: number }
+  const view = (row: Row): TokenRecord => ({ id: row.id, profile: row.profile, can: row.can ? (JSON.parse(row.can) as Record<string, Permission[]>) : null, exp: row.exp, at: row.at, revoked: row.revoked === 1 })
   return {
-    record: (token) => add({ made: token }),
+    record(token) {
+      db.write(() => {
+        const now = Math.floor(clock() / 1000)
+        // What ran out opens nothing, so it is forgotten as new ones are made.
+        db.raw.prepare('delete from tokens where exp <= ?').run(now)
+        const live = (db.raw.prepare('select count(*) as n from tokens where revoked = 0').get() as { n: number }).n
+        if (live >= TOKENS_MAX) throw new Failure('too_many_tokens', `This board has ${TOKENS_MAX} live tokens, which is the most it keeps.`, { hint: 'Revoke some with mu token revoke, or wait for them to run out.' })
+        db.raw.prepare('insert into tokens (id, profile, can, exp, at, revoked) values (?, ?, ?, ?, ?, 0)').run(token.id, token.profile, token.can ? JSON.stringify(token.can) : null, token.exp, token.at)
+      })
+    },
     revoke(id) {
-      const tokens = load()
-      if (tokens === null) throw unreadable()
-      if (!tokens.has(id)) return false
-      add({ revoked: id })
-      return true
+      return db.write(() => (db.raw.prepare('update tokens set revoked = 1 where id = ? returning id').get(id) as { id: string } | undefined) !== undefined)
     },
-    // A list that can't be read can't say a token is still good, so none is.
-    revoked: (id) => {
-      const tokens = load()
-      return tokens === null || tokens.get(id)?.revoked === true
-    },
-    list(now) {
-      const tokens = load()
-      if (tokens === null) throw unreadable()
-      return [...tokens.values()].filter((token) => token.exp * 1000 > now && token.at > 0)
-    },
-  }
-}
-
-const running = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // No such process means gone; not being allowed to signal it means it is there.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
+    revoked: (id) => (db.raw.prepare('select revoked from tokens where id = ?').get(id) as { revoked: number } | undefined)?.revoked === 1,
+    list: (now) => (db.raw.prepare('select * from tokens where exp > ? order by at, id').all(Math.floor(now / 1000)) as Row[]).map(view),
   }
 }
 

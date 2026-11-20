@@ -136,8 +136,6 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `agent_token_missing` | A cloud run was started with no name for the agent and no token made for it |
 | `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
 | `too_many_tokens` | The board already keeps as many live tokens as it will |
-| `token_list_busy` | Another process has been writing the board's list of tokens for a minute |
-| `token_list_unreadable` | The board's list of tokens can't be read, so no token with an ID is accepted |
 | `invalid_token` | A token was asked for that isn't held to a profile and named channels, or reaches too far |
 | `invalid_ttl` | A token's lifetime is too short, or over a day for one made from another machine |
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |

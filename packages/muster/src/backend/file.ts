@@ -16,7 +16,7 @@ import { ensureSchema } from '../store/schema.ts'
 import { openDb, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, importPending, receive, type Sync } from '../sync/engine.ts'
 import { boardKey } from '../serve/token.ts'
-import { fileRegistry, memoryRegistry, mintToken, type Registry } from '../serve/tokens.ts'
+import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
 import type { Backend } from './types.ts'
 
 export type FileOptions = {
@@ -73,9 +73,8 @@ export function file(options: FileOptions = {}): Backend {
     return opened
   }
   const ctx = (): Context => ({ db: open(), now: options.now ?? (() => new Date()), alive: options.alive ?? sameProcess })
-  let kept: Registry | null = null
-  /** The board's list of the tokens it made: beside its key for a board on a file, in memory otherwise. */
-  const registry = (): Registry => (kept ??= options.tokens ?? (options.memory ? memoryRegistry() : fileRegistry(where())))
+  /** The board's list of the tokens it made: a table in the board itself. */
+  const registry = (): Registry => options.tokens ?? dbRegistry(open(), () => (options.now ?? (() => new Date()))().getTime())
   const principal = options.principal ?? `local:user:${userInfo().username.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`
 
   // A caller held to some channels is told which are private, so the rules can keep it out of them.
@@ -97,6 +96,7 @@ export function file(options: FileOptions = {}): Backend {
     async self(profile) {
       return { principal, profile: profile === null ? null : profileName(profile) }
     },
+    registry,
     // On the board's own machine the caller is its owner, who may make any token.
     tokens: {
       create: async (request) => mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, request, (options.now ?? (() => new Date()))().getTime()),

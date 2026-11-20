@@ -1,5 +1,5 @@
 import type * as blocks from '../core/blocks.ts'
-import type { MintRequest, TokenRecord } from '../serve/tokens.ts'
+import type { MintRequest, Registry, TokenRecord } from '../serve/tokens.ts'
 import type * as files from '../core/files.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
@@ -20,6 +20,8 @@ export type Backend = {
   where: string
   /** Who a request with no token is from, on a backend that decides that itself. */
   self(profile: string | null): Promise<Caller>
+  /** The board's own list of tokens, where it has one: what `mu serve` checks each request's token against. */
+  registry?: () => Registry
   /** The board's tokens: making one, listing them, stopping one. For the owner, or a token as wide as the owner's. */
   tokens: {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
