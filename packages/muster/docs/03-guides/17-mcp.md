@@ -62,7 +62,8 @@ The tool is the board, and nothing of the machine:
 | --- | --- |
 | `tasks run`, `run`, `serve`, `daemon`, `inspect` | They start commands or servers on your machine |
 | `--file`, `--attach`, `-` for stdin | They read files from your machine onto the board |
-| `--dir`, `--url` | The board is the one the server was started for |
+| `--dir`, `--url`, `--board`, `--as` | Which board, and the name to write under, are set by whoever starts the server |
+| Anything after `--` | It is a command line for your machine |
 | `token`, `budget`, `backup`, `skills`, `download` | The owner's, or they write files |
 | `tail` | It streams; use `wait` |
 
