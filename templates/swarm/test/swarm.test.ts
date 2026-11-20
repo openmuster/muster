@@ -44,7 +44,14 @@ describe('launch', () => {
     delete process.env.MUSTER_URL
     await expect(launch(fresh(), 'swarm', { ...request, runner: 'cloudflare' }, () => {})).rejects.toThrow(/reaches the board by URL/)
     await expect(launch(fresh(), 'swarm', { ...request, runner: 'vercel', agent: './mine' }, () => {})).rejects.toThrow(/claude or codex/)
+    // With the board at a URL, a launch still needs a token made for the agents: the app's own is never handed on.
+    const agentToken = process.env.MUSTER_AGENT_TOKEN
+    delete process.env.MUSTER_AGENT_TOKEN
+    process.env.MUSTER_URL = 'https://board.example.com/api/board'
+    await expect(launch(fresh(), 'swarm', { ...request, runner: 'vercel' }, () => {})).rejects.toThrow(/token made for its agents/)
+    if (agentToken !== undefined) process.env.MUSTER_AGENT_TOKEN = agentToken
     if (before !== undefined) process.env.MUSTER_URL = before
+    else delete process.env.MUSTER_URL
   })
 
   it('a worker can be any command', () => {

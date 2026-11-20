@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { conformance } from '../src/index.ts'
+import { conformance, mint } from '../src/index.ts'
 import { cli, memoryBoard, tempDir } from './helpers.ts'
 
 describe('conformance', () => {
@@ -37,7 +37,9 @@ describe('conformance', () => {
 })
 
 describe('mu run in a cloud sandbox', () => {
-  const board = { MUSTER_URL: 'https://board.example.com/api/board', MUSTER_TOKEN: 'mu1.mine', MUSTER_AGENT_TOKEN: 'mu1.agent' }
+  // A token as the board's owner would make one for an agent: one profile, its own channels.
+  const agent = (claims: object = { profile: 'fixer', can: { 'work/': ['read', 'post', 'react', 'label'] } }) => mint(Buffer.alloc(32, 1), { sub: 'local:user:ada', exp: 4_102_444_800, profile: null, ...claims } as Parameters<typeof mint>[1])
+  const board = { MUSTER_URL: 'https://board.example.com/api/board', MUSTER_TOKEN: 'mu1.mine', MUSTER_AGENT_TOKEN: agent() }
 
   it('cloudflare: asks your Worker to start the run with the agent\'s own token, and says what it started', async () => {
     const got: any[] = []
@@ -57,7 +59,7 @@ describe('mu run in a cloud sandbox', () => {
     const run = await cli(dir, ['run', '12', '--runner', 'cloudflare', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--as', 'fixer', '--json'], { env })
     worker.close()
     expect(got).toHaveLength(1)
-    expect(got[0]).toMatchObject({ url: '/runs', auth: 'Bearer worker-secret', body: { task: 12, repo: 'https://github.com/acme/web.git', board: { host: 'board.example.com', token: 'mu1.agent' }, env: { MUSTER_TOKEN: 'set-by-the-network-policy' } } })
+    expect(got[0]).toMatchObject({ url: '/runs', auth: 'Bearer worker-secret', body: { task: 12, repo: 'https://github.com/acme/web.git', board: { host: 'board.example.com', token: board.MUSTER_AGENT_TOKEN }, env: { MUSTER_TOKEN: 'set-by-the-network-policy' } } })
     expect(got[0].body.prompt).toContain('Claim task #12 first: mu tasks claim 12')
     // A container has no internet, so nothing is installed at run time: mu is in the image.
     expect(got[0].body.setup).toEqual([])
@@ -98,6 +100,29 @@ describe('mu run in a cloud sandbox', () => {
     const { readFileSync } = await import('node:fs')
     const started = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).at(-1)
     expect(started.args[1]).toContain('writing as worker-3. Take the next ready task: mu tasks claim --ready work/ --wait 2m')
+  })
+
+  it('starts nothing with a token that would hand the sandbox more than one agent\'s reach, or with none', async () => {
+    const dir = tempDir()
+    const refused = async (token: string | undefined, args: string[] = []) => {
+      const { MUSTER_AGENT_TOKEN: _, ...rest } = board
+      const run = await cli(dir, ['run', '1', '--runner', 'vercel', '--agent', 'claude', ...args, '--json'], { env: { ...rest, ...(token ? { MUSTER_AGENT_TOKEN: token } : {}), MUSTER_VERCEL_SDK: '/no/such/module.mjs' } })
+      return JSON.parse(run.stderr).error.reason
+    }
+    // Your own token is never passed on in its place.
+    expect(await refused(undefined)).toBe('agent_token_missing')
+    expect(await refused(agent({ profile: 'fixer' }))).toBe('agent_token_too_wide')
+    expect(await refused(agent({ profile: 'fixer', can: {} }))).toBe('agent_token_too_wide')
+    expect(await refused(agent({ profile: null, can: { 'work/': ['read', 'post'] } }))).toBe('agent_token_too_wide')
+    expect(await refused(agent({ profile: 'fixer', can: { '*': ['read', 'post'] } }))).toBe('agent_token_too_wide')
+    expect(await refused(agent({ profile: 'fixer', can: { 'work/': ['manage'] } }))).toBe('agent_token_too_wide')
+    expect(await refused('not-a-token')).toBe('agent_token_too_wide')
+    // One that is narrow gets as far as loading the runner.
+    expect(await refused(agent())).toMatch(/runner_not_installed|network_error/)
+    // A repository address with a credential in it, or not over HTTPS, would put that in the sandbox.
+    expect(await refused(agent(), ['--repo', 'https://x-access-token:ghp_x@github.com/acme/web.git'])).toBe('invalid_repo')
+    expect(await refused(agent(), ['--repo', 'git@github.com:acme/web.git'])).toBe('invalid_repo')
+    expect(await refused(agent(), ['--repo', 'http://github.com/acme/web.git'])).toBe('invalid_repo')
   })
 
   it('says what is missing: no board URL, no Worker, no SDK, or a runner it does not know', async () => {

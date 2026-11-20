@@ -59,7 +59,6 @@ export default async function Page() {
             <select id="runner" name="runner" defaultValue="local">
               <option value="local">on this machine</option>
               <option value="vercel">in Vercel Sandbox</option>
-              <option value="cloudflare">in Cloudflare</option>
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>

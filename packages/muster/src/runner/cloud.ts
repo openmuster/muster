@@ -30,13 +30,15 @@ export type VercelPolicy = { allow: Record<string, VercelRule[]> }
 
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
-  create(options: { networkPolicy: VercelPolicy; image?: string; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } }): Promise<{
+  create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } }): Promise<{
     sandboxId?: string
     name?: string
     runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<unknown>
     /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
-    update?(options: { networkPolicy: VercelPolicy }): Promise<unknown>
+    update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
     stop(): Promise<unknown>
+    /** Removes the sandbox and what it kept. */
+    delete?(): Promise<unknown>
   }>
 }
 
@@ -50,6 +52,13 @@ const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
  * network policy, added to requests on the way out, so the agent's environment holds placeholders
  * and nothing to steal.
  */
+/** Ends a sandbox so nothing of it is left: its way out is closed first, then it is removed, or stopped where it can't be. */
+async function end(sandbox: Awaited<ReturnType<VercelSandbox['create']>>): Promise<void> {
+  await sandbox.update?.({ networkPolicy: 'deny-all' }).catch(() => {})
+  if (sandbox.delete) await sandbox.delete().catch(() => sandbox.stop())
+  else await sandbox.stop()
+}
+
 /**
  * `setupHosts` are open while the setup commands run, which are ours, and closed before the agent
  * starts. `allowHosts` stay open to the agent, so each one is a way out of the sandbox: add few.
@@ -70,7 +79,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const model = request.model ? request.agent.model : undefined
       // The key goes only on the calls that ask the model. Everything else the key could do on that host is refused.
       if (model && request.model) {
-        allow[model.host] = [...model.paths.map((regex) => ({ match: { path: { regex }, method: ['POST'] }, transform: [{ headers: model.headers(request.model!.key) }] })), { response: { statusCode: 403 } }]
+        allow[model.host] = [...model.paths.map((regex) => ({ match: { path: { regex }, method: ['POST'] }, transform: [{ headers: { ...model.headers(request.model!.key), host: model.host } }] })), { response: { statusCode: 403 } }]
       }
       const setup = request.setup ?? []
       const during: Record<string, VercelRule[]> = { ...allow }
@@ -78,6 +87,8 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const sandbox = await options.Sandbox.create({
         networkPolicy: { allow: during },
         image: options.image ?? VERCEL_IMAGE,
+        // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
+        persistent: false,
         env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
@@ -86,7 +97,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       // What the setup needed is closed before anything the agent decides runs.
       if (setup.length && options.setupHosts?.length) {
         if (!sandbox.update) {
-          await sandbox.stop()
+          await end(sandbox)
           throw new Failure('runner_too_old', "This @vercel/sandbox can't change a running sandbox's network policy, so the setup's hosts would stay open to the agent.", { hint: 'npm i @vercel/sandbox@latest' })
         }
         await sandbox.update({ networkPolicy: { allow } })
@@ -94,7 +105,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag.
       await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
-      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: async () => void (await sandbox.stop()) }
+      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox) }
     },
   }
 }

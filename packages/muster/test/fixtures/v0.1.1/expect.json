@@ -1,0 +1,9 @@
+{
+  "hello": 1,
+  "done": 4,
+  "open": 9,
+  "waiting": 11,
+  "blocked": 13,
+  "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "token": "mu1.eyJzdWIiOiJsb2NhbDp1c2VyOmFkYSIsInByb2ZpbGUiOiJ3b3JrZXItMSIsImNhbiI6eyJ3b3JrLyI6WyJyZWFkIiwicG9zdCIsImxhYmVsIl19LCJleHAiOjQxMDI0NDQ4MDB9.CwrpiUlD1Vgf2e5g7Brd1KGgOgl2kt332sGcb4qFdnU"
+}

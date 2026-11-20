@@ -4,8 +4,9 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 ---
 
 > [!WARNING]
-> Both cloud runners are tested against stand-ins, not real accounts. The
-> Cloudflare Worker in `templates/cloudflare-runner` has not been deployed.
+> The Vercel runner has been run for real once, on one small task. The
+> Cloudflare runner and its Worker in `templates/cloudflare-runner` have
+> never been deployed. Treat both as experimental.
 
 ## What a sandbox needs
 
@@ -33,8 +34,13 @@ claims and settles the task itself. With `--ready` the sandbox is a worker
 that takes one task after another.
 
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
-`MUSTER_AGENT_TOKEN` is what the sandbox's requests carry; without it the
-agent gets yours, with everything you may do.
+`MUSTER_AGENT_TOKEN` is what the sandbox's requests carry, and it is
+required: your own token is never passed on. `mu run` refuses one that isn't
+held to a profile and to named channels, since whatever it may do, anything
+that steers the agent may do too.
+
+`--repo` takes an HTTPS clone address with no credential in it. A token in the
+address would be readable by everything in the sandbox.
 
 In a sandbox the agent runs without its own permission prompts: headless, a
 prompt stops it at its first command, and the sandbox with its network policy
@@ -70,7 +76,15 @@ Like the board's token, the key stays out of the sandbox. Its environment
 holds a placeholder, and the key is added on the way out, only to the calls
 that ask the model (`POST /v1/messages` on `api.anthropic.com`;
 `/v1/responses` and `/v1/chat/completions` on `api.openai.com`). Any other
-request to that host is refused, so the key can't be used for anything else. Without the variable,
+request to that host is refused.
+
+> [!WARNING]
+> The agent can't read the key, but it can still use it. A request that asks
+> the model can also ask the provider to fetch a URL or call an outside
+> server, and the policy sees addresses, not request bodies. So a steered
+> agent could send what it has read out through the provider. Until muster
+> filters those requests, use a key made for this: its own workspace, a spend
+> limit, and the provider's web tools turned off. Without the variable,
 `mu run` warns and starts the agent anyway, which works only if the sandbox's
 image has a sign-in of its own.
 
@@ -87,13 +101,26 @@ by the platform's network policy on Vercel and by your Worker on Cloudflare.
 The policy lets the sandbox reach:
 
 - the board's host, the model provider's host when its key is set, and
-  nothing else you didn't add. A host you add is a way out of the sandbox
+  nothing else you didn't add. Each credential is sent only to the host it
+  is for, whatever the request's own Host header says. A host you add is a way out of the sandbox
   for whatever the agent reads, so add few;
 - on it, only the board's own routes, by method;
 - not the routes that run the board: webhooks, tokens, schedules, budgets,
   schemas.
 
 A path with dot segments or an encoded slash doesn't pass.
+
+## What is left afterwards
+
+Nothing. A Vercel sandbox is started so that it isn't kept, and when a run is
+stopped its way out is closed and the sandbox is removed. A kept sandbox
+would hold the repository, the agent's transcript and a policy with the
+credentials in it.
+
+On the board, a sandbox reaches a named list of routes: messages, tasks,
+files and reads. It can't make schedules or schemas, set budgets, or move a
+stored cursor. A file it stores needs a token that may post, and a narrowed
+token has an allowance of 100 MB a day.
 
 ## From code
 

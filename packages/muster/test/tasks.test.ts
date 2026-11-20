@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { memoryBoard, reason } from './helpers.ts'
+import { memoryBoard, reason, HTTP } from './helpers.ts'
 
 const MIN = 60_000
 
@@ -73,7 +73,8 @@ describe('tasks', () => {
     expect(feed.events.map((event) => event.type)).toEqual(['task.expired', 'task.claimed'])
   })
 
-  it('a lapsed claim is kept while the process that holds it is still running, for an hour at most', async () => {
+  // On a file only: a process ID sent over HTTP names nothing on the board's machine, and is dropped there.
+  it.skipIf(HTTP)('a lapsed claim is kept while the process that holds it is still running, for an hour at most', async () => {
     const { team, time, alive } = memoryBoard()
     const { task } = await team.taskCreate({ channel: 'work', text: 'slow model call' })
     alive.add('4242@Mon Jan  1 00:00:00 2026')

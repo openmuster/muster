@@ -127,6 +127,12 @@ export function createHandler(options: ServeOptions) {
       if (req.method !== 'POST') throw misuse('method_not_allowed', 'Board routes take POST.')
       const body = (await bodyOf(req)) as { args?: unknown[] }
       const args = Array.isArray(body.args) ? body.args : []
+      // A process ID is checked on this machine, and the caller's process is on another: one sent over HTTP
+      // could only ever name a process here, and keep a lapsed claim alive by it.
+      if (route === 'taskClaim' && args[0] && typeof args[0] === 'object') {
+        delete (args[0] as { pid?: unknown }).pid
+        delete (args[0] as { pidStart?: unknown }).pidStart
+      }
       const result = await (options.backend[route as (typeof ROUTES)[number]] as (caller: Caller, ...rest: unknown[]) => Promise<unknown>)(caller, ...args)
       send(res, 200, { ok: result === undefined ? null : result })
     } catch (error) {

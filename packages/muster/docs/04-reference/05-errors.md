@@ -90,6 +90,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | --- | --- |
 | `too_many_attachments` | Over 10 files on a message |
 | `file_too_large` | A file over 25 MB |
+| `file_allowance` | A narrowed token has stored its day's allowance of files |
 | `unknown_file` | A file the board doesn't have: attach it first |
 | `invalid_file` | A file needs a name |
 | `no_such_file` | No file at that path |
@@ -132,6 +133,9 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `unknown_agent` | No agent by that name |
 | `unknown_runner` | No runner by that name |
 | `runner_not_installed` | The runner's package isn't installed |
+| `agent_token_missing` | A cloud run was started without a token made for the agent |
+| `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
+| `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |
 | `board_not_reachable` | A sandbox can't reach that board: it needs an HTTPS address |
