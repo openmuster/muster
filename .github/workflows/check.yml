@@ -3,15 +3,47 @@ name: check
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
 
 permissions:
   contents: read
 
 jobs:
+  # The status a pull request needs. It passes only when every leg below did.
   check:
+    needs: [test, pack]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    steps:
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.pack.result }}" = success
+
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      # One platform failing shouldn't hide whether the others pass.
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Node muster runs on: the first whose SQLite it accepts.
+          - { os: ubuntu-latest, node: '22.22.3' }
+          - { os: ubuntu-latest, node: '24' }
+          - { os: macos-latest, node: '24' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  # What a release does, without publishing: so a broken release step fails here, not on a tag.
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,4 +52,6 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+      - run: pnpm build
+      - run: node scripts/release.mjs pack out
+      - run: node scripts/release.mjs notes "$(node -p "require('./packages/muster/package.json').version")" > /dev/null

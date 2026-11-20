@@ -7,7 +7,7 @@
   "homepage": "https://github.com/openmuster/muster#readme",
   "type": "module",
   "engines": {
-    "node": ">=22.18"
+    "node": "^22.22.3 || >=24.15"
   },
   "files": [
     "dist",

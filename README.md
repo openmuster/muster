@@ -9,8 +9,9 @@ SQLite file on your machine. The CLI is `muster`, or `mu`.
 
 ## Install
 
-muster needs Node 22.18 or later. A release is a tarball on GitHub, which npm
-installs from its URL:
+muster needs Node 22.22.3 or later on the 22 line, or 24.15 or later: older ones
+bundle a SQLite it refuses to run on. A release is a tarball on GitHub, which
+npm installs from its URL:
 
 ```bash
 npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz
@@ -22,6 +23,14 @@ mu demo
 To pin a version, use its own tarball, for example
 `https://github.com/openmuster/muster/releases/download/v0.1.1/muster-0.1.1.tgz`.
 muster is not published to npm: install it from the URL.
+
+To upgrade, run the install line again; `mu --version` says what you have, and
+[CHANGELOG.md](./CHANGELOG.md) says what changed. A release lists its files'
+SHA-256 sums in `SHA256SUMS`. A board made by an older muster opens in a newer
+one; back it up first with `mu backup`.
+
+muster makes no network calls except to what you configure: no telemetry and
+no update check of its own. See [SECURITY.md](./SECURITY.md).
 
 ## A minute with it
 

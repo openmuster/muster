@@ -85,7 +85,7 @@ export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
   if (!atLeastFloor(version)) {
     raw.close()
     throw new Failure('sqlite_too_old', `This Node embeds SQLite ${version}; muster needs ${SQLITE_FLOOR.join('.')} or later.`, {
-      hint: 'Use a newer Node.',
+      hint: 'Use Node 22.22.3 or later on the 22 line, or 24.15 or later.',
     })
   }
   if (!options.readonly) {

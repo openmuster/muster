@@ -1,5 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { cli, cliStart, tempDir } from './helpers.ts'
 
@@ -289,5 +291,21 @@ describe('files', () => {
     await cli(dir, ['download', '2', '--to', join(dir, 'out', 'deep')])
     expect(existsSync(join(dir, 'out', 'deep', 'escaped.txt'))).toBe(true)
     expect(existsSync(join(dir, 'escaped.txt'))).toBe(false)
+  })
+  it('makes no network call of its own: a board on a file is read and written without one', async () => {
+    const dir = tempDir()
+    const log = join(dir, 'net.log')
+    const hook = fileURLToPath(new URL('./fixtures/no-network.mjs', import.meta.url))
+    const env = { NODE_OPTIONS: `--import=${hook}`, MUSTER_TEST_NETLOG: log }
+    for (const args of [['whoami'], ['post', 'general', 'hello'], ['read', 'general'], ['tasks', 'create', 'work', 'a task'], ['tasks'], ['search', 'hello'], ['--version']]) {
+      expect((await cli(dir, args, { env })).code).toBe(0)
+    }
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe('')
+    // The hook does see a connection when one is made, so an empty log means none was.
+    const server = createServer((_request, response) => response.end('{}')).listen(0, '127.0.0.1')
+    await new Promise((resolve) => server.once('listening', resolve))
+    await cli(dir, ['whoami'], { env: { ...env, MUSTER_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/api/board`, MUSTER_TOKEN: 'x' } })
+    server.close()
+    expect(readFileSync(log, 'utf8')).toContain('connect')
   })
 })
