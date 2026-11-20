@@ -2,7 +2,8 @@ name: deploy docs
 
 # The docs site (apps/docs) as a Cloudflare Worker: production on a push to main, a preview Worker
 # per pull request, removed when the pull request closes. Nothing here runs until the repository has
-# a CLOUDFLARE_ACCOUNT_ID variable and a CLOUDFLARE_API_TOKEN secret.
+# a CLOUDFLARE_ACCOUNT_ID variable and a CLOUDFLARE_API_TOKEN secret. Previews also need the
+# CLOUDFLARE_PREVIEWS variable set to true and a CLOUDFLARE_PREVIEW_API_TOKEN secret.
 on:
   push:
     branches: [main]
@@ -37,10 +38,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
     steps:
+      # No credential is in reach of the install or the build: a token is set on the one step that
+      # deploys, and nowhere else.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -56,6 +56,9 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: pnpm exec wrangler deploy
         working-directory: apps/docs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Smoke test production
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: node scripts/smoke-docs.mjs https://openmuster.ai
@@ -63,8 +66,11 @@ jobs:
           # An edge can serve the previous version for a few seconds after a deploy returns.
           SMOKE_SETTLE_MS: '10000'
 
+      # Previews are off until asked for (the CLOUDFLARE_PREVIEWS variable), and use a token of their
+      # own: one that can deploy Workers but has no say over the openmuster.ai zone, so a pull
+      # request's code can never reach the real site's domain with it.
       - name: Deploy preview
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && vars.CLOUDFLARE_PREVIEWS == 'true'
         id: preview
         run: |
           # Its own config, with no custom domain: a preview must never take over the real one.
@@ -72,6 +78,9 @@ jobs:
           pnpm exec wrangler deploy --config wrangler.preview.jsonc --name "$NAME" 2>&1 | tee deploy-output.txt
           echo "url=$(grep -oP 'https://[^\s]+\.workers\.dev' deploy-output.txt | head -1)" >> "$GITHUB_OUTPUT"
         working-directory: apps/docs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Comment the preview's address
         if: github.event_name == 'pull_request' && steps.preview.outputs.url
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -84,12 +93,13 @@ jobs:
             else await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body })
       # Not gated on the address: if it was never found, this fails loudly instead of not running.
       - name: Smoke test preview
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && vars.CLOUDFLARE_PREVIEWS == 'true'
         run: node scripts/smoke-docs.mjs "${{ steps.preview.outputs.url }}"
 
   cleanup-preview:
     if: >-
       vars.CLOUDFLARE_ACCOUNT_ID != '' &&
+      vars.CLOUDFLARE_PREVIEWS == 'true' &&
       github.event_name == 'pull_request' &&
       github.event.action == 'closed' &&
       github.actor != 'dependabot[bot]' &&
@@ -107,5 +117,5 @@ jobs:
         run: pnpm exec wrangler delete --name "muster-docs-preview-${{ github.event.pull_request.number }}" --force || true
         working-directory: apps/docs
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
