@@ -146,6 +146,13 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
         writeFileSync(next, kept.map((entry) => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 })
         renameSync(next, path)
       }
+      // A line left half-written by a writer that died is cut off first, or the new line would be glued to it.
+      try {
+        const text = readFileSync(path, 'utf8')
+        if (text.length > 0 && !text.endsWith('\n')) writeFileSync(path, text.slice(0, text.lastIndexOf('\n') + 1), { mode: 0o600 })
+      } catch {
+        // No file yet.
+      }
       appendFileSync(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
     })
   const unreadable = () => new Failure('token_list_unreadable', `The board's list of tokens at ${path} can't be read.`, { hint: 'Until it can, no token with an ID is accepted. Restore the file, or move it aside and make new tokens.' })
