@@ -93,25 +93,38 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
   const locked = <T>(work: () => T): T => {
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     const lock = `${path}.lock`
-    for (let tries = 0; ; tries++) {
+    const mine = `${process.pid}:${randomBytes(6).toString('hex')}`
+    const pause = new Int32Array(new SharedArrayBuffer(4))
+    const waited = Date.now()
+    for (;;) {
       try {
-        writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })
+        writeFileSync(lock, mine, { flag: 'wx', mode: 0o600 })
         break
       } catch {
-        // A lock left by a writer that died is taken over; a live one is held for microseconds.
-        let age = 0
+        // Someone holds it. It is taken over only when its holder is provably gone: the process that
+        // wrote it no longer runs, or it has sat there far longer than any write takes.
+        let gone = false
         try {
-          age = Date.now() - statSync(lock).mtimeMs
+          const holder = Number(readFileSync(lock, 'utf8').split(':')[0])
+          const age = Date.now() - statSync(lock).mtimeMs
+          gone = age > 30_000 || (Number.isInteger(holder) && holder > 0 && !running(holder))
         } catch {
-          continue
+          // It went away between the two looks: try again.
         }
-        if (age > 5000 || tries > 2000) rmSync(lock, { force: true })
+        if (gone) rmSync(lock, { force: true })
+        else if (Date.now() - waited > 60_000) throw new Failure('token_list_busy', "The board's list of tokens is being written by another process.", { hint: 'Try again.' })
+        else Atomics.wait(pause, 0, 0, 5)
       }
     }
     try {
       return work()
     } finally {
-      rmSync(lock, { force: true })
+      // Only our own lock is ours to remove.
+      try {
+        if (readFileSync(lock, 'utf8') === mine) rmSync(lock, { force: true })
+      } catch {
+        // Already gone.
+      }
     }
   }
   const add = (line: Line) =>
@@ -155,6 +168,16 @@ export function fileRegistry(where: string, dir = configDir()): Registry {
       if (tokens === null) throw unreadable()
       return [...tokens.values()].filter((token) => token.exp * 1000 > now && token.at > 0)
     },
+  }
+}
+
+const running = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // No such process means gone; not being allowed to signal it means it is there.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 

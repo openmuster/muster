@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
@@ -358,6 +358,12 @@ describe('serve', () => {
     const lines = readFileSync(join(dir2, 'tokens', readdirSync(join(dir2, 'tokens')).find((name) => name.endsWith('.log'))!), 'utf8').trim().split('\n')
     expect(lines.length).toBeLessThan(120)
     expect(busy.revoked('live')).toBe(true)
+    // A lock left by a process that died is taken over; one held by a live process is not stolen.
+    const lock = `${file()}.lock`
+    writeFileSync(lock, '2147483646:dead')
+    registry.record(record('after-a-dead-writer'))
+    expect(registry.list(0).map((token) => token.id)).toContain('after-a-dead-writer')
+    expect(existsSync(lock)).toBe(false)
     // No more than the ceiling of tokens that still work.
     const dir3 = tempDir()
     const full = fileRegistry('/boards/main.db', dir3)
