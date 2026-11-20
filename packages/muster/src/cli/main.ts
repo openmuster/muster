@@ -1198,6 +1198,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     io.out(VERSION)
     return 0
   }
+  if (name === 'mcp') return fail(io, json, misuse('not_a_terminal_command', 'mu mcp is started by an agent, as an MCP server on its pipes.', 'Add it to your agent: command "mu", argument "mcp".'))
   const command = commands[name]
   if (!command) return fail(io, json, misuse('unknown_command', `Unknown command "${name}".`, 'mu help lists the commands.'))
   let team: Board | null = null
@@ -1237,4 +1238,4 @@ export { VERSION }
 export const TASK_STATE_NAMES = TASK_STATES
 
 /** What each command takes, for the test that checks the docs against the CLI. */
-export const SPECS: Record<string, Spec> = Object.fromEntries(Object.entries(commands).map(([name, command]) => [name, command.spec]))
+export const SPECS: Record<string, Spec> = { ...Object.fromEntries(Object.entries(commands).map(([name, command]) => [name, command.spec])), mcp: {} }

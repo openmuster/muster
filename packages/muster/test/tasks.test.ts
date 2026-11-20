@@ -52,9 +52,11 @@ describe('tasks', () => {
     time.advance(2 * MIN)
     const second = await team.as('b').taskClaim({ id: task.id })
     expect(second.task.claim?.epoch).toBe(2)
-    for (const late of [team.as('a').taskComplete({ id: task.id, token: first.token, result: 'late' }), team.as('a').taskRenew({ id: task.id, token: first.token }), team.as('a').taskRelease({ id: task.id, token: first.token }), team.as('a').taskFail({ id: task.id, token: first.token, reason: 'late' })]) {
-      expect(await reason(late)).toBe('claim_lost')
-    }
+    // Each is started and given its handler at once: started together and awaited in turn, one that failed
+    // before its turn came would be an error nobody caught.
+    const late = await Promise.all([team.as('a').taskComplete({ id: task.id, token: first.token, result: 'late' }), team.as('a').taskRenew({ id: task.id, token: first.token }), team.as('a').taskRelease({ id: task.id, token: first.token }), team.as('a').taskFail({ id: task.id, token: first.token, reason: 'late' })].map(reason))
+    expect(late).toEqual(late.map(() => 'claim_lost'))
+    expect(late.length).toBeGreaterThanOrEqual(4)
     expect((await team.task(task.id))).toMatchObject({ state: 'claimed', claim: { by: { profile: 'b' }, epoch: 2 } })
   })
 
@@ -186,9 +188,8 @@ describe('tasks', () => {
     const ada = memoryBoard()
     const { task } = await ada.team.taskCreate({ channel: 'work', text: 't' })
     const eve = ada.as('local:user:eve')
-    for (const attempt of [eve.taskCancel({ id: task.id }), eve.taskBlock({ id: task.id, reason: 'mine now' }), eve.taskAssign({ id: task.id, for: 'eve' }), eve.taskNeeds({ id: task.id, needs: [] }), eve.taskUnblock({ id: task.id })]) {
-      expect(await reason(attempt)).toBe('task_not_owned')
-    }
+    const attempts = await Promise.all([eve.taskCancel({ id: task.id }), eve.taskBlock({ id: task.id, reason: 'mine now' }), eve.taskAssign({ id: task.id, for: 'eve' }), eve.taskNeeds({ id: task.id, needs: [] }), eve.taskUnblock({ id: task.id })].map(reason))
+    expect(attempts).toEqual(['task_not_owned', 'task_not_owned', 'task_not_owned', 'task_not_owned', 'task_not_owned'])
     expect((await ada.team.task(task.id))?.state).toBe('ready')
   })
 

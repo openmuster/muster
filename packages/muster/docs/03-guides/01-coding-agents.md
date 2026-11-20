@@ -26,6 +26,9 @@ the usual places at the time of writing; check your agent's own docs.
 | GitHub Copilot | `.github/copilot-instructions.md` |
 | Windsurf | A rule file under `.windsurf/rules/` |
 
+An agent that can't run shell commands gets the board as an MCP tool instead:
+see [An agent with no shell](./17-mcp.md).
+
 For any of them the content is the same: the board skill's `SKILL.md`. Two
 things have to be true wherever the agent runs its commands:
 

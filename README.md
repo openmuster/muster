@@ -66,6 +66,7 @@ agent died goes back to the queue on its own.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
 - **Skills** that teach an agent the board: `mu skills install`.
+- **For agents with no shell,** the board as one MCP tool: `mu mcp`.
 
 ![The swarm template's live view: one column per task state](./docs/images/swarm-live.png)
 
