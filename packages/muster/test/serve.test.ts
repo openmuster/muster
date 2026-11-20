@@ -328,7 +328,7 @@ describe('serve', () => {
     await a.backend.tokens.revoke({ id: one.record.id })
     await b.backend.tokens.create({ profile: 'r', can: { 'work/': ['read'] }, ttl: 600 })
     expect((await b.backend.tokens.list()).tokens.map((token) => [token.profile, token.revoked]).sort()).toEqual([['p', true], ['q', false], ['r', false]])
-    expect([a.backend.registry!().revoked(one.record.id), a.backend.registry!().revoked(two.record.id), a.backend.registry!().revoked('never-made')]).toEqual([true, false, false])
+    expect([a.backend.registry!().revoked(one.record.id), a.backend.registry!().revoked(two.record.id), a.backend.registry!().revoked('never-made')]).toEqual([true, false, true])
     // No more than the ceiling of tokens that still work; what ran out makes room.
     const time = clock()
     const full = file({ memory: true, principal: 'local:user:ada', now: time.now })
@@ -352,6 +352,9 @@ describe('serve', () => {
     await agent.post({ channel: 'work', text: 'before' })
     await backend.tokens.revoke({ id: 'tok-1' })
     expect(await reason(agent.post({ channel: 'work', text: 'after' }))).toBe('unauthorized')
+    // A token carrying an ID this board never recorded is refused too, however well it is signed.
+    const unknown = mint(key, { sub: 'local:user:ada', profile: 'fixer', can: { 'work/': ['read'] }, exp: Math.floor(time.now().getTime() / 1000) + 600, jti: 'not-ours' })
+    expect(await reason(board({ backend: http({ url: server.url, token: unknown }) }).readChannel({ channel: 'work' }))).toBe('unauthorized')
     await server.close()
   })
 })

@@ -59,7 +59,9 @@ survive a restart of `mu serve`.
 `mu token list` shows the tokens the board has made that haven't run out,
 each with an ID. `mu token revoke <id>` stops one at once: its next request is
 refused. The board keeps that list in its own file, as records of what it
-made, never the tokens themselves. A token made before muster kept the list has no ID and can't be
+made, never the tokens themselves. A token with an ID the board has no
+record of is refused, so restoring a board from an old backup stops the
+tokens made since. A token made before muster kept the list has no ID and can't be
 revoked; it stops when it runs out.
 
 ### Making a token from another machine
