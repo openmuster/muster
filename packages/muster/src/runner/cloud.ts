@@ -1,5 +1,5 @@
 import type { Agent, PermissionMode } from './agents.ts'
-import { boardPolicy, type NetworkPolicy } from './policy.ts'
+import { PLACEHOLDER, boardPolicy } from './policy.ts'
 
 /** What a cloud runner needs to start an agent on a task somewhere that isn't this machine. */
 export type CloudRequest = {
@@ -11,6 +11,8 @@ export type CloudRequest = {
   /** The repository to work in, as a clone URL. Its credential is the platform's to add, not ours to pass. */
   repo?: string
   permissionMode?: PermissionMode
+  /** The key for the agent's model provider. It is added to requests to that provider's host on the way out, and never enters the sandbox. */
+  model?: { key: string }
   /** Commands that prepare the sandbox before the agent starts, such as installing the agent's CLI. */
   setup?: string[][]
   timeoutMs?: number
@@ -21,29 +23,49 @@ export type CloudRun = { id: string; stop(): Promise<void> }
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
 export type CloudRunner = { name: string; start(request: CloudRequest): Promise<CloudRun> }
 
+/** Vercel's own network policy, as `@vercel/sandbox` 4 takes it: a path is a matcher object, and a rule can answer a request itself. */
+export type VercelRule = { match?: { path?: { regex: string }; method?: string[] }; transform: { headers: Record<string, string> }[] } | { response: { statusCode: number } }
+export type VercelPolicy = { allow: Record<string, VercelRule[]> }
+
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
-  create(options: { networkPolicy: NetworkPolicy; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } }): Promise<{
-    sandboxId: string
-    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; stdin?: string }): Promise<unknown>
+  create(options: { networkPolicy: VercelPolicy; image?: string; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } }): Promise<{
+    sandboxId?: string
+    name?: string
+    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<unknown>
     stop(): Promise<unknown>
   }>
 }
 
+/** Vercel's image with Node, git and the coding agents' CLIs already in it. */
+export const VERCEL_IMAGE = 'vercel/sandbox/universal'
+
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 /**
- * Runs an agent in a Vercel Sandbox. The board's credential is in the sandbox's network policy, added
- * to requests on the way out, so the agent's environment holds a placeholder and nothing to steal.
+ * Runs an agent in a Vercel Sandbox. The board's credential and the model's key are in the sandbox's
+ * network policy, added to requests on the way out, so the agent's environment holds placeholders
+ * and nothing to steal.
  */
-export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]> }): CloudRunner {
+export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; image?: string }): CloudRunner {
   return {
     name: 'vercel',
     async start(request) {
       const { networkPolicy, env } = boardPolicy(request.board)
+      const allow: Record<string, VercelRule[]> = { ...options.allowHosts }
+      for (const [host, rules] of Object.entries(networkPolicy.allow)) {
+        allow[host] = [
+          ...rules.map((rule) => ({ match: { path: { regex: rule.match.path }, method: rule.match.method }, transform: rule.transform })),
+          // Allowing a host allows every request to it, so whatever the rules above didn't claim is answered here.
+          { response: { statusCode: 403 } },
+        ]
+      }
+      const model = request.model ? request.agent.model : undefined
+      if (model && request.model) allow[model.host] = [{ transform: [{ headers: model.headers(request.model.key) }] }]
       const sandbox = await options.Sandbox.create({
-        networkPolicy: { allow: { ...options.allowHosts, ...networkPolicy.allow } },
-        env: { ...env, MUSTER_TASK: String(request.task) },
+        networkPolicy: { allow },
+        image: options.image ?? VERCEL_IMAGE,
+        env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
@@ -51,7 +73,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag.
       await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
-      return { id: sandbox.sandboxId, stop: async () => void (await sandbox.stop()) }
+      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: async () => void (await sandbox.stop()) }
     },
   }
 }
@@ -77,11 +99,13 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         task: request.task,
         command: [bin, ...args],
         prompt: request.prompt,
-        env: { ...env, MUSTER_TASK: String(request.task) },
+        env: { ...env, ...(request.model && request.agent.model ? request.agent.model.env(PLACEHOLDER) : {}), MUSTER_TASK: String(request.task) },
         // The Worker enforces this itself: the board's host with these routes, and the token it adds.
         board: { host: new URL(request.board.url).host, rules: networkPolicy.allow[new URL(request.board.url).host], token: request.board.token },
         ...(request.repo ? { repo: request.repo } : {}),
         setup: request.setup ?? [],
+        // The Worker adds these to requests for the model's host, as it adds the board's token.
+        ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, headers: request.agent.model.headers(request.model.key) } } : {}),
         ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}),
       })
       return { id: made.id, stop: async () => void (await call(`/runs/${made.id}/stop`, {})) }

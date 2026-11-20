@@ -2,7 +2,7 @@
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
 
 type Rule = { match: { path: string; method: string[] }; transform: { headers: Record<string, string> }[] }
-type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: { host: string; rules: Rule[]; token: string }; repo?: string; setup: string[][] }
+type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: { host: string; rules: Rule[]; token: string }; model?: { host: string; headers: Record<string, string> }; repo?: string; setup: string[][] }
 type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run> }
 
 /** The only way out of the container: requests to the board, on the board's own routes, with the token added here. */
@@ -22,11 +22,25 @@ export class BoardGate extends WorkerEntrypoint<Env, { host: string; rules: Rule
   }
 }
 
+/** The way to the agent's model: requests to the provider's host, with its key added here and nowhere else. */
+export class ModelGate extends WorkerEntrypoint<Env, { host: string; headers: Record<string, string> }> {
+  fetch(request: Request): Promise<Response> | Response {
+    const url = new URL(request.url)
+    const { host, headers } = this.ctx.props
+    if (url.protocol !== 'https:' || url.host !== host) return new Response('Forbidden', { status: 403 })
+    const out = new Request(url, request)
+    for (const [name, value] of Object.entries(headers)) out.headers.set(name, value)
+    // A redirect is handed back to the container, so the key never follows one to another host.
+    return fetch(out, { redirect: 'manual' })
+  }
+}
+
 export class Run extends DurableObject<Env> {
   async start(input: Start): Promise<void> {
     const container = this.ctx.container!
     if (container.running) return
     await container.interceptOutboundHttps(input.board.host, this.ctx.exports.BoardGate({ props: input.board }))
+    if (input.model) await container.interceptOutboundHttps(input.model.host, this.ctx.exports.ModelGate({ props: input.model }))
     container.start({ image: container.images.base, enableInternet: false, env: input.env })
     for (const command of input.setup) await (await container.exec(command, { cwd: '/workspace' })).output()
     if (input.repo) await (await container.exec(['git', 'clone', '--depth', '1', '--', input.repo, 'repo'], { cwd: '/workspace' })).output()

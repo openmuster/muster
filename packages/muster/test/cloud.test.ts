@@ -80,6 +80,13 @@ describe('cloud runners', () => {
     const created = calls[0][1]
     expect(created.env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '7' })
     expect(Object.keys(created.networkPolicy.allow).sort()).toEqual(['board.example.com', 'github.com'])
+    // The policy is in the shape @vercel/sandbox 4 takes: a path is a matcher object, and the last rule
+    // refuses what the others didn't claim, since allowing a host otherwise allows every request to it.
+    const rules = created.networkPolicy.allow['board.example.com']
+    expect(rules[0].match.path).toEqual({ regex: expect.stringContaining('^/api/board/(') })
+    expect(rules[0].transform).toEqual([{ headers: { authorization: 'Bearer mu1.secret' } }])
+    expect(rules.at(-1)).toEqual({ response: { statusCode: 403 } })
+    expect(created.image).toBe('vercel/sandbox/universal')
     expect(created.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git' })
     expect(JSON.stringify(created.env)).not.toContain('mu1.secret')
     expect(calls[1][1]).toEqual({ cmd: 'npm', args: ['install', '-g', 'https://example.com/muster.tgz'] })
@@ -87,6 +94,21 @@ describe('cloud runners', () => {
     expect(calls[2][1].args[1]).toBe(`printf %s 'it'\\''s a prompt with '\\''quotes'\\''' | 'claude' '--print' '--output-format' 'stream-json' '--verbose' '--strict-mcp-config' '--disable-slash-commands' '--tools' 'Bash,Read,Edit,Write,Grep,Glob'`)
     await run.stop()
     expect(calls.at(-1)).toEqual(['stop'])
+  })
+
+  it('vercel: the model\'s key is added to requests for the provider\'s host and never enters the sandbox', async () => {
+    const calls: any[] = []
+    const Sandbox = { create: async (options: any) => (calls.push(options), { name: 'sbx-2', runCommand: async (command: any) => void calls.push(command), stop: async () => {} }) }
+    const run = await vercel({ Sandbox }).start({ ...request, model: { key: 'sk-real-key' } })
+    expect(run.id).toBe('sbx-2')
+    expect(calls[0].networkPolicy.allow['api.anthropic.com']).toEqual([{ transform: [{ headers: { 'x-api-key': 'sk-real-key' } }] }])
+    expect(calls[0].env).toMatchObject({ ANTHROPIC_API_KEY: 'set-by-the-network-policy', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' })
+    expect(JSON.stringify([calls[0].env, ...calls.slice(1)])).not.toContain('sk-real-key')
+    // Without a key the provider's host stays closed and no placeholder is set.
+    const bare: any[] = []
+    await vercel({ Sandbox: { create: async (options: any) => (bare.push(options), { name: 'sbx-3', runCommand: async () => {}, stop: async () => {} }) } }).start(request)
+    expect(Object.keys(bare[0].networkPolicy.allow)).toEqual(['board.example.com'])
+    expect(bare[0].env.ANTHROPIC_API_KEY).toBeUndefined()
   })
 
   it('cloudflare: asks your Worker to start the run, with the board rules for it to enforce and no token in the container\'s environment', async () => {
@@ -100,6 +122,11 @@ describe('cloud runners', () => {
     expect(calls[0]).toMatchObject({ url: 'https://runner.example.workers.dev/runs', auth: 'Bearer worker-secret' })
     expect(calls[0]!.body.env).toEqual({ MUSTER_URL: URL_, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '7' })
     expect(calls[0]!.body.board).toMatchObject({ host: 'board.example.com', token: 'mu1.secret' })
+    expect(calls[0]!.body.model).toBeUndefined()
+    const keyed: any[] = []
+    await cloudflare({ worker: 'https://w.example', secret: 's', fetch: (async (_url: any, init?: RequestInit) => (keyed.push(JSON.parse(String(init?.body))), Response.json({ id: 'r' }))) as typeof fetch }).start({ ...request, model: { key: 'sk-real-key' } })
+    expect(keyed[0].model).toEqual({ host: 'api.anthropic.com', headers: { 'x-api-key': 'sk-real-key' } })
+    expect(JSON.stringify(keyed[0].env)).not.toContain('sk-real-key')
     expect(calls[0]!.body.command).toEqual(['claude', '--print', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--disable-slash-commands', '--tools', 'Bash,Read,Edit,Write,Grep,Glob'])
     await run.stop()
     expect(calls[1]!.url).toBe('https://runner.example.workers.dev/runs/run-9/stop')

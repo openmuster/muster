@@ -78,7 +78,12 @@ describe('mu run in a cloud sandbox', () => {
     // The sandbox installs this CLI's own release from its tarball, never a package looked up by name.
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
     expect(lines[1]).toEqual({ cmd: 'npm', args: ['install', '-g', `https://github.com/openmuster/muster/releases/download/v${version}/muster-${version}.tgz`] })
-    expect(lines[2].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--sandbox' 'workspace-write' '-'")
+    // In a sandbox the agent's own prompts are off: headless, one would stop it at its first command.
+    expect(lines[2].args[1]).toContain("'codex' 'exec' '--json' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' '-'")
+    // --safe keeps them on.
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--safe', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
+    const again = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    expect(again.at(-1).args[1]).toContain("'--sandbox' 'workspace-write' '-'")
   })
 
   it('with --ready the sandbox is a worker that takes tasks itself until none is ready', async () => {

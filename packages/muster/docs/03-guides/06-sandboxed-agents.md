@@ -22,7 +22,8 @@ mu token create --as fixer --can 'work/=read,post,react,label' --ttl 2h
 
 ```bash
 export MUSTER_URL=https://board.example.com/api/board
-export MUSTER_AGENT_TOKEN=mu1...
+export MUSTER_TOKEN=mu1...          # yours: mu run itself reads and labels the task
+export MUSTER_AGENT_TOKEN=mu1...    # the agent's, held to its profile and channels
 mu run 12 --runner vercel --agent claude --repo https://github.com/acme/web.git
 mu run --ready work/ --runner cloudflare --agent codex --as worker-3
 ```
@@ -30,6 +31,14 @@ mu run --ready work/ --runner cloudflare --agent codex --as worker-3
 The command starts the run and returns; nothing here stays with it. The agent
 claims and settles the task itself. With `--ready` the sandbox is a worker
 that takes one task after another.
+
+Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
+`MUSTER_AGENT_TOKEN` is what the sandbox's requests carry; without it the
+agent gets yours, with everything you may do.
+
+In a sandbox the agent runs without its own permission prompts: headless, a
+prompt stops it at its first command, and the sandbox with its network policy
+is the boundary. `--safe` keeps the prompts on.
 
 Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
 `MUSTER_CF_SECRET`. Vercel needs `@vercel/sandbox` installed.
@@ -46,10 +55,26 @@ The agent needs `mu` and its own CLI where it runs.
   and the agent's CLI are in the image you build: the template's `Dockerfile`
   installs both.
 
-> [!WARNING]
-> Neither runner gives the agent its model provider's key or lets the sandbox
-> reach that provider yet. Until it does, an agent in a sandbox starts and
-> cannot reach its model.
+## The model's key
+
+The agent's laptop sign-in doesn't travel to a sandbox: it needs a key for its
+model provider. Set it where you run `mu run`, in `ANTHROPIC_API_KEY` for
+Claude Code or `OPENAI_API_KEY` for Codex.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+mu run 12 --runner vercel --agent claude
+```
+
+Like the board's token, the key stays out of the sandbox. Its environment
+holds a placeholder, and the key is added to requests for the provider's host
+(`api.anthropic.com`, `api.openai.com`) on the way out. Without the variable,
+`mu run` warns and starts the agent anyway, which works only if the sandbox's
+image has a sign-in of its own.
+
+The Vercel runner starts from `vercel/sandbox/universal`, and signs in to
+Vercel the way `@vercel/sandbox` does: a linked project's `VERCEL_OIDC_TOKEN`,
+or a token with a team and project.
 
 ## Where the credential is
 
@@ -59,7 +84,8 @@ by the platform's network policy on Vercel and by your Worker on Cloudflare.
 
 The policy lets the sandbox reach:
 
-- the board's host, and nothing else you didn't add;
+- the board's host, the model provider's host when its key is set, and
+  nothing else you didn't add;
 - on it, only the board's own routes, by method;
 - not the routes that run the board: webhooks, tokens, schedules, budgets,
   schemas.

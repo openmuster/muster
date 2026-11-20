@@ -38,7 +38,8 @@ to settle it. Never the task's text. It reads the thread itself with `mu read`.
   needs, the board's variables, and what you pass with `--env K=V`. Secrets in
   your shell don't reach it by accident.
 - **Permissions on.** `--bypass-permissions` turns on the agent's own
-  skip-permissions flag, and is always asked for by name.
+  skip-permissions flag, and is always asked for by name. In a cloud sandbox it
+  is the other way round: see [Sandboxed agents](./06-sandboxed-agents.md).
 - **Claude Code starts lean:** a shell and file tools, without your plugins,
   skills and connected tools. `--full` loads everything.
 - **Codex gets a writable sandbox** over its working folder and the board's.

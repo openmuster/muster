@@ -17,6 +17,12 @@ export type Agent = {
   command(options: { resume?: string; permissionMode: PermissionMode; model?: string; full?: boolean; writable?: string[] }): { bin: string; args: string[] }
   /** Environment the agent needs beyond PATH and HOME, by name: its own keys and config folders. */
   envKeys: string[]
+  /**
+   * How the agent reaches its model from a sandbox: the provider's host, the variable its key is read
+   * from on the machine that starts the run, the headers that carry the key, and what the sandbox's
+   * environment holds instead of it. Absent for an agent whose model isn't ours to know.
+   */
+  model?: { host: string; keyEnv: string; headers(key: string): Record<string, string>; env(placeholder: string): Record<string, string> }
   parse(stdout: string): Parsed
   classify(result: { code: number | null; signal: NodeJS.Signals | null; parsed: Parsed; stderr: string }): ExitKind
 }
@@ -71,6 +77,13 @@ export const claude: Agent = {
     return { bin: 'claude', args }
   },
   envKeys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'AWS_PROFILE', 'AWS_REGION'],
+  model: {
+    host: 'api.anthropic.com',
+    keyEnv: 'ANTHROPIC_API_KEY',
+    headers: (key) => ({ 'x-api-key': key }),
+    // Only the model's host is open to the sandbox, so the calls that go elsewhere (telemetry, updates) are turned off.
+    env: (placeholder) => ({ ANTHROPIC_API_KEY: placeholder, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' }),
+  },
   parse(stdout) {
     const out: Parsed = { terminal: false }
     for (const event of jsonLines(stdout)) {
@@ -111,6 +124,12 @@ export const codex: Agent = {
   },
   // Codex reads its sign-in from its home folder, not from a key in the environment.
   envKeys: ['CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'],
+  model: {
+    host: 'api.openai.com',
+    keyEnv: 'OPENAI_API_KEY',
+    headers: (key) => ({ authorization: `Bearer ${key}` }),
+    env: (placeholder) => ({ OPENAI_API_KEY: placeholder }),
+  },
   parse(stdout) {
     const out: Parsed = { terminal: false }
     for (const event of jsonLines(stdout)) {

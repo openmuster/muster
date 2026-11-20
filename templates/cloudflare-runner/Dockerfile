@@ -6,7 +6,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && apt-get clean
 
-# Pin a release in production: .../releases/download/v0.1.0/muster-0.1.0.tgz
+# Pin a release in production: .../releases/download/v0.1.1/muster-0.1.1.tgz
 RUN npm install --global https://github.com/openmuster/muster/releases/latest/download/muster.tgz
 
 # The agent you run. Add or swap for yours (for Codex: @openai/codex).

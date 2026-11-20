@@ -497,7 +497,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'loop', 'fresh', 'full'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -1099,13 +1099,19 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
         ].join('\n')
   const repo = str(parsed.flags, 'repo')
   const timeout = str(parsed.flags, 'timeout')
+  // The model's key is read here and added to the sandbox's requests on the way out: it never enters the sandbox.
+  const modelKey = agent.model ? env[agent.model.keyEnv] : undefined
+  if (agent.model && !modelKey) run.io.err(`warning: ${agent.model.keyEnv} is not set here, so the agent can't reach its model unless the sandbox has a sign-in of its own`)
   const started = await runner.start({
     task,
     agent,
     prompt,
     board: { url, token },
+    ...(modelKey ? { model: { key: modelKey } } : {}),
     ...(repo ? { repo } : {}),
-    permissionMode: on(parsed.flags, 'bypass-permissions') ? 'bypass' : 'safe',
+    // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
+    // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
+    permissionMode: on(parsed.flags, 'safe') ? 'safe' : 'bypass',
     // A Vercel sandbox gets the same release as this CLI, from its tarball: never a package looked up by name.
     // A Cloudflare container has no internet: mu is in the image you built.
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
