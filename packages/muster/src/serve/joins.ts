@@ -18,6 +18,8 @@ export const JOIN_TTL = 15 * 60
 /** How many requests may wait at once. Asking needs no token, so the board keeps few. */
 export const JOINS_MAX = 20
 export const NOTE_MAX = 200
+// C0 and C1 control characters, DEL, and the bidirectional overrides that reorder what a terminal shows.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
 
 // Crockford's base32 without I, L, O and U: a code someone reads aloud or types from a screen.
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -65,6 +67,9 @@ export function dbJoins(db: Db, clock: () => number = () => Date.now()): Joins {
       const profile = profileName(request.profile)
       const note = request.note?.trim() || null
       if (note !== null && note.length > NOTE_MAX) throw misuse('invalid_note', `A note is at most ${NOTE_MAX} characters.`)
+      // Anyone may ask, and the note is printed in the owner's terminal: no escape codes or line breaks
+      // that could redraw what the owner reads, such as a different code beside the name.
+      if (note !== null && CONTROL.test(note)) throw misuse('invalid_note', 'A note is one line of plain text.')
       const secret = randomBytes(32).toString('base64url')
       return db.write(() => {
         sweep()

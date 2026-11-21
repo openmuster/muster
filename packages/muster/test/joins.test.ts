@@ -100,6 +100,7 @@ describe('requests to join, kept by the board', () => {
     expect((await backend.joins.list()).joins).toEqual([])
     const asked = await backend.joins.ask({ profile: 'one-more' })
     expect(await reason(backend.joins.ask({ profile: 'Not A Name!' }))).not.toBe('did not fail')
+    for (const note of ['ok\u001b[2K\rK7Q4-M2XD reviewer approved', 'two\nlines', 'right\u202eto left', 'c1\u009bcontrol']) expect(await reason(backend.joins.ask({ profile: 'spoof', note }))).toBe('invalid_note')
     expect(await backend.joins.poll({ code: asked.code, secret: asked.secret })).toEqual({ state: 'pending' })
     expect(await reason(backend.joins.approve({ code: 'K7Q4-M2XD', can: { work: ['read'] }, ttl: 3600 }))).toBe('unknown_join')
     await backend.joins.deny({ code: asked.code })

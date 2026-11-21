@@ -158,7 +158,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `join_answered` | That request was already approved or refused |
 | `join_denied` | The board's owner refused the request |
 | `invalid_code` | Not a join code, which looks like `K7Q4-M2XD` |
-| `invalid_note` | A note to the owner is at most 200 characters |
+| `invalid_note` | A note to the owner is one line of plain text, at most 200 characters |
 | `invalid_join` | `mu join` needs a board's URL, or `list`, `approve` or `deny` |
 | `missing_profile` | Say the name to join under: `--as <name>` |
 
