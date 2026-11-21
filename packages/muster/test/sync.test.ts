@@ -69,6 +69,9 @@ describe('sync: GitHub', () => {
     // Someone who kept the signed "closed" sends it again, with a delivery ID the board hasn't seen.
     expect(await gh('pull_request', closed, { id: 'made-up' })).toEqual({ status: 200, body: 'ok' })
     expect(await state()).toBe('open')
+    // Nor under another kind: that header isn't signed either, and "issues" reads a closed pull request the same way.
+    await gh('issues', closed, { id: 'made-up-2' })
+    expect(await state()).toBe('open')
   })
 
   it("text from a platform is never checked on the way in, so a block in it reaches a program only if it follows its schema", async () => {
