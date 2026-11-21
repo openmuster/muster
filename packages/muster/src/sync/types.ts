@@ -20,6 +20,11 @@ export type Inbound = {
   labels?: Record<string, string>
   /** Whether the app itself wrote it: its own echoes are never imported. */
   self?: boolean
+  /**
+   * The platform thread itself, when the event is about one the board may never have seen (a comment on
+   * an issue opened before sync, or while the board was down). The board starts the thread from it first.
+   */
+  parent?: { author: string; text: string; labels: Record<string, string> }
 }
 
 /**

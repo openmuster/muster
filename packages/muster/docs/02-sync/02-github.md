@@ -66,5 +66,11 @@ Nothing, unless the repository sets `"mirror": true`. With it:
 ## Catching up
 
 When the ticker starts, and a token is set, it asks each mapped repository for
-issue comments since the last event it received. Issues opened while the board
-was down arrive when their first comment does, or by GitHub's own redelivery.
+the issues and pull requests updated since the last event it received, then
+their comments. An issue opened while the board was down arrives whole, with
+its title, body and labels, and its comments as replies. A close or merge
+missed meanwhile sets `state`. Up to 100 of each are read per repository.
+
+A comment or review on an issue the board never saw, such as one opened
+before sync was set up, starts its thread from the issue itself. Catch-up
+does the same for an older issue updated while the board was down.

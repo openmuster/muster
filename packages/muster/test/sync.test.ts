@@ -363,11 +363,78 @@ describe('sync: edits, deletes, filters and catching up', () => {
     const second = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
     await second.syncTick()
     await second.syncTick()
-    expect(asked.filter((url) => url.includes('since=2026-01-01T00%3A00%3A00.000Z'))).toHaveLength(1)
+    expect(asked.filter((url) => url.includes('/issues/comments?since=2026-01-01T00%3A00%3A00.000Z'))).toHaveLength(1)
     const team = board({ backend: second })
     const root = (await team.readChannel({ channel: 'web' })).threads[0]!.message
     expect((await team.readThread({ id: root.id })).replies.map((reply) => [reply.text, reply.by.principal])).toEqual([['said while you were down', 'gh:user:maya']])
     second.close()
+  })
+})
+
+describe('sync: GitHub threads the board never saw opened', () => {
+  const at = (path: string) => (url: string) => url.includes(path)
+
+  it('after downtime, an issue opened meanwhile arrives with its title, body and labels, and its comment once, as a reply', async () => {
+    const time = clock()
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (at('/repos/acme/web/issues?state=all')(url)) {
+        return Response.json([
+          // Seen before the downtime, closed during it.
+          { number: 7, title: 'Login redirects to evil.example', body: 'Steps: ...', state: 'closed', user: { login: 'nico' }, updated_at: '2026-01-01T00:30:00Z' },
+          // Opened during it, with a comment.
+          { number: 8, title: 'Opened while the board was down', body: 'Should arrive whole.', state: 'open', user: { login: 'maya' }, updated_at: '2026-01-01T00:40:00Z' },
+          // A pull request merged during it, never seen: a thread, already merged.
+          { number: 9, title: 'Fix the redirect', body: '', state: 'closed', user: { login: 'nico' }, pull_request: { merged_at: '2026-01-01T00:50:00Z' }, updated_at: '2026-01-01T00:50:00Z' },
+        ])
+      }
+      if (at('/issues/comments?since=')(url)) {
+        return Response.json([{ id: 801, body: 'first comment on #8', user: { login: 'maya' }, issue_url: 'https://api.github.com/repos/acme/web/issues/8', html_url: 'https://github.com/acme/web/issues/8#issuecomment-801' }])
+      }
+      return Response.json([])
+    }) as typeof fetch
+    const dir = tempDir()
+    const sync = { gh: github({ secret: SECRET, token: 't', repos: { 'acme/web': { issues: 'web/issues', pulls: 'web/prs' } } }) }
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    const payload = JSON.stringify({ action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    await first.syncReceive('gh', { headers: { 'x-github-event': 'issues', 'x-github-delivery': 'c-1', 'x-hub-signature-256': `sha256=${sign(SECRET, payload)}` }, body: payload })
+    first.close()
+    time.advance(3_600_000)
+    const second = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    await second.syncTick()
+    await second.syncTick()
+    const team = board({ backend: second })
+    const issues = (await team.readChannel({ channel: 'web/issues' })).threads
+    expect(issues.map((thread) => [thread.message.text, thread.message.by.principal, thread.message.labels])).toEqual([
+      ['Login redirects to evil.example\n\nSteps: ...', 'gh:user:nico', { kind: 'issue', state: 'closed', ref: 'acme/web#7', source: 'gh' }],
+      ['Opened while the board was down\n\nShould arrive whole.', 'gh:user:maya', { kind: 'issue', state: 'open', ref: 'acme/web#8', source: 'gh' }],
+    ])
+    expect((await team.readThread({ id: issues[1]!.message.id })).replies.map((reply) => reply.text)).toEqual(['first comment on #8'])
+    const pulls = (await team.readChannel({ channel: 'web/prs' })).threads
+    expect(pulls.map((thread) => thread.message.labels)).toEqual([{ kind: 'pr', state: 'merged', ref: 'acme/web#9', source: 'gh' }])
+    second.close()
+  })
+
+  it('a comment on an issue the board never saw starts its thread from the issue, and later comments only reply', async () => {
+    const { team, gh } = setup()
+    const old = { number: 3, title: 'Opened before sync was set up', body: 'Old body.', state: 'open', user: { login: 'nico' } }
+    await gh('issue_comment', { action: 'created', issue: old, comment: { id: 901, body: 'first comment the board hears' }, repository: repo, sender: { login: 'maya' } })
+    await gh('issue_comment', { action: 'created', issue: old, comment: { id: 902, body: 'second comment' }, repository: repo, sender: { login: 'nico' } })
+    const threads = (await team.readChannel({ channel: 'web/issues' })).threads
+    expect(threads.map((thread) => [thread.message.text, thread.message.by.principal, thread.message.labels])).toEqual([['Opened before sync was set up\n\nOld body.', 'gh:user:nico', { kind: 'issue', state: 'open', ref: 'acme/web#3', source: 'gh' }]])
+    expect((await team.readThread({ id: threads[0]!.message.id })).replies.map((reply) => [reply.text, reply.by.principal])).toEqual([
+      ['first comment the board hears', 'gh:user:maya'],
+      ['second comment', 'gh:user:nico'],
+    ])
+  })
+
+  it('a review on a pull request the board never saw starts its thread too', async () => {
+    const { team, gh } = setup()
+    const pull = { number: 11, title: 'Tidy the router', body: '', state: 'open', user: { login: 'nico' } }
+    await gh('pull_request_review', { action: 'submitted', pull_request: pull, review: { id: 5, state: 'APPROVED', body: 'ship it' }, repository: repo, sender: { login: 'maya' } })
+    const [thread] = (await team.readChannel({ channel: 'web/prs' })).threads
+    expect(thread!.message).toMatchObject({ text: 'Tidy the router', labels: { kind: 'pr', state: 'open', ref: 'acme/web#11', review: 'approved' } })
+    expect((await team.readThread({ id: thread!.message.id })).replies.map((reply) => reply.text)).toEqual(['ship it'])
   })
 })
 
