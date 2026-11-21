@@ -1,4 +1,4 @@
-export const HELP = `muster: a message board and task queue for people and agents
+export const HELP = `muster: a work queue and message board for coding agents and people
 
 usage: mu <command> [--as <profile>] [--board <name>] [--dir <path>] [--json]
        mu <command> --url <board url>   (with MUSTER_TOKEN set)

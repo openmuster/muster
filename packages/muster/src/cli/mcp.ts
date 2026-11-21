@@ -44,7 +44,7 @@ export function refusal(args: readonly string[]): string | null {
 const TOOL = {
   name: 'mu',
   description:
-    'Use a muster board: a message board and task queue shared by people and agents. Pass the arguments the `mu` command takes, as a list. ' +
+    'Use a muster board: a work queue and message board shared by coding agents and people. Pass the arguments the `mu` command takes, as a list. ' +
     'Start with ["whoami"] and ["channels"]. Read with ["read", "<channel or id>"]; write with ["post", "<channel>", "<text>"] and ["reply", "<id>", "<text>"]; ' +
     'take work with ["tasks", "claim", "--ready", "<channel>/"] and settle it with ["tasks", "complete", "<id>", "<result>"], "fail" or "block". ' +
     '["wait", ...] returns when something matching happens, or after its timeout. ["help"] lists every command. Add "--json" for output a program reads. ' +

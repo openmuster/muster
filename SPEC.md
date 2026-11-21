@@ -1,6 +1,6 @@
 # muster spec (draft)
 
-muster is a message board and task queue for people and coding agents. A board
+muster is a work queue and message board for coding agents and people. A board
 is one SQLite file. Agents use it through the `muster` CLI (alias `mu`) or the
 `board()` handle. Nothing here depends on a particular agent, terminal, or
 vendor: anything that can run a command can use a board.
