@@ -42,6 +42,9 @@ the provider's web tools off. See the sandbox guide.
 
 ### Added
 
+- A cloud run is looked after the way a local one is: `mu run` itself runs in
+  the sandbox, so the claim is renewed during long work, a task the agent
+  leaves open is failed, and the session, tokens and cost are recorded.
 - `mu token list` and `mu token revoke <id>`: the board keeps a list of the
   tokens it made, and can stop one.
 - A cloud run names its agent with `--as` and gets a token made for that run:

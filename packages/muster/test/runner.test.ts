@@ -94,6 +94,17 @@ describe('mu run', () => {
     expect(thread.replies.map((reply: { text: string; by: { profile: string } }) => [reply.text, reply.by.profile])).toEqual([['plan: do it', 'worker']])
   })
 
+  it('the agent\'s environment is clean, plus what a runner names for the place it runs in', async () => {
+    const dir = tempDir()
+    const env = fakes(dir, { claude: [`env > ${dir}/env.txt`, 'mu tasks complete $MUSTER_TASK "done" >/dev/null', `echo '{"type":"result","subtype":"success","is_error":false}'`].join('\n') })
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['run', '1', '--agent', 'claude'], { env: { ...env, SECRET_OF_MINE: 'x', NODE_EXTRA_CA_CERTS: '/sandbox/ca.pem', IS_SANDBOX: '1', MUSTER_AGENT_ENV: 'NODE_EXTRA_CA_CERTS,IS_SANDBOX,not a name,PATH' } })
+    const seen = readFileSync(join(dir, 'env.txt'), 'utf8')
+    expect(seen).toContain('NODE_EXTRA_CA_CERTS=/sandbox/ca.pem')
+    expect(seen).toContain('IS_SANDBOX=1')
+    expect(seen).not.toContain('SECRET_OF_MINE')
+  })
+
   it('an agent that ends without settling its task has it failed for it, and that counts', async () => {
     const dir = tempDir()
     const env = fakes(dir, { claude: `cat >/dev/null; echo '{"type":"result","subtype":"success","is_error":false}'` })
