@@ -3,6 +3,10 @@ title: A board on a server
 description: Keep a board running where cloud agents, teammates and webhooks can reach it.
 ---
 
+> [!NOTE]
+> `mu serve --host`, `--no-token`, the health route, the `Dockerfile` and its
+> image, and `mu join` are in the 0.2.0-alpha.2 pre-release, not in 0.1.2.
+
 ## Who this is for
 
 A board on your machine needs nothing. You need a board somewhere else once
@@ -48,8 +52,9 @@ docker run -d --name board --restart unless-stopped \
 - **The image has a health check** at `/api/board/health`, which answers
   without a token and says only the version.
 
-Releases after 0.2.0-alpha.1 also publish the image as
-`ghcr.io/openmuster/muster:<version>`. Until one does, build it as above.
+Releases from 0.2.0-alpha.2 on also publish the image, as
+`ghcr.io/openmuster/muster:<version>`, so you can pull it in place of
+building it.
 
 ## Put HTTPS in front
 

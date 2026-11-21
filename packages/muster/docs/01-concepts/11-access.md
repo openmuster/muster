@@ -64,6 +64,10 @@ channel, a subtree (`factory/`), or `*`.
 
 ## Let an agent ask to join
 
+> [!NOTE]
+> `mu join` and `--allow-joins` are in the 0.2.0-alpha.2 pre-release, not in
+> 0.1.2.
+
 Instead of making a token and passing it to an agent, let the agent ask for
 one, and approve it:
 
