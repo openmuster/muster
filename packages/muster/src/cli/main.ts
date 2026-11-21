@@ -631,9 +631,9 @@ const commands: Record<string, Command> = {
       const pace = duration(str(parsed.flags, 'pace') ?? '3s', 'pace') * 1000
       const port = str(parsed.flags, 'port')
       const serving = await inspect({ backend: demo.backend, ...(port ? { port: Number(port) } : {}), title: 'muster demo' })
-      run.io.out(`inspector  ${serving.url}`)
+      run.io.out(`inspector  ${serving.link}`)
       run.io.out(`board      ${join(dir, 'main.db')}`)
-      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.url], { stdio: 'ignore', detached: true }).unref()
+      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.link], { stdio: 'ignore', detached: true }).unref()
       const lead = demo.as('lead')
       const step = async (name: string, what: string, play: () => Promise<unknown>) => {
         if (run.io.stop.aborted) return
@@ -693,9 +693,10 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       const port = str(parsed.flags, 'port')
       const serving = await inspect({ backend: run.team.backend, ...(port ? { port: Number(port) } : {}) })
-      run.io.out(`inspector  ${serving.url}`)
+      // The part after the # is what lets a page act as you: a browser keeps it, and nothing else on this machine is told it.
+      run.io.out(`inspector  ${serving.link}`)
       run.io.out('reads and writes as you; stop it with ctrl-c')
-      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.url], { stdio: 'ignore', detached: true }).unref()
+      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.link], { stdio: 'ignore', detached: true }).unref()
       await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       await serving.close()
       return 0

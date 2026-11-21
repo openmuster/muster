@@ -37,7 +37,11 @@ place.
 The page acts as you, so its server trusts nothing but its own page:
 
 - It listens on 127.0.0.1 only and answers only for its own host name.
-- Every board request needs the token the server gave the page when it loaded.
+- Every board request needs a token made for that run. It is in the link
+  `mu inspect` prints, after the `#`, and nowhere in what the server sends:
+  anything on your machine can ask 127.0.0.1 for the page, and gets a page
+  that can do nothing. Open the printed link once and your browser keeps the
+  token for that address, so links to a view work after that.
 - Writes must come from the page's own origin.
 
 Try writes against a scratch board first (`--dir`): on a board with sync, a

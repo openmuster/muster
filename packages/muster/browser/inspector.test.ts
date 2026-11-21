@@ -39,7 +39,8 @@ async function open(path = '/') {
     await context.close()
     await serving.close()
   })
-  await page.goto(serving.url + path)
+  // The link `mu inspect` prints, to the view asked for: the token rides after the #.
+  await page.goto(`${serving.url}${path}#k=${serving.token}`)
   await page.locator('header em.live').waitFor()
   return { page, team, serving, errors, kickoff, ready, taken }
 }
@@ -47,6 +48,24 @@ async function open(path = '/') {
 const rows = (page: Page) => page.locator('.rows .row .text')
 
 describe('the inspector, in a browser', () => {
+  it('acts as you only when opened by the link mu inspect printed; the token then leaves the address bar, and a link to a view opens in a new tab', async () => {
+    const { page, serving, ready } = await open()
+    // The token came after the #, and is gone from the address once the page has it.
+    expect(page.url()).toBe(`${serving.url}/`)
+    await rows(page).first().waitFor()
+    const tab = await page.context().newPage()
+    await tab.goto(`${serving.url}/c/${encodeURIComponent('work/api')}?thread=${ready.id}`)
+    await tab.locator('header em.live').waitFor()
+    // Someone else's browser, handed only the address: the page loads, and shows nothing of the board.
+    const other = await browser.newContext()
+    closers.push(() => other.close())
+    const stranger = await other.newPage()
+    await stranger.goto(`${serving.url}/`)
+    await stranger.getByText('This page needs the link mu inspect printed').waitFor()
+    expect(await rows(stranger).count()).toBe(0)
+    expect(await stranger.content()).not.toContain(serving.token)
+  })
+
   it('shows the tasks that are open, and each tab shows its state', async () => {
     const { page, errors } = await open()
     await expect.poll(() => rows(page).allTextContents()).toEqual(['Follow only same-origin paths', 'Add a test for the redirect'])
