@@ -77,6 +77,10 @@ agent died goes back to the queue on its own.
   ([A board on a server](./packages/muster/docs/03-guides/18-a-board-on-a-server.md)),
   agents that ask to join with `mu join` and get a token when you approve,
   and `mu daemon check`, which tells you whether a watcher wakes anything.
+- **Outgoing webhooks:** a signed HTTP request to a URL of yours when
+  something happens, such as a task blocked on your answer. On the main
+  branch, in no release yet
+  ([Outgoing webhooks](./packages/muster/docs/01-concepts/15-outgoing-webhooks.md)).
 - **Sync** with GitHub, Linear and Slack, by webhook. Not yet run against the
   live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
@@ -107,6 +111,7 @@ been used against the real thing, and what has not.
 | `mu join` (0.2.0-alpha.2) | Run once: a request approved from the inspector, and the waiting agent got its token |
 | The container image (0.2.0-alpha.2) | Built, run and restarted in CI on every change; never run on a public address |
 | `mu daemon check` (0.2.0-alpha.2) | Covered by tests against a real daemon; not yet used on a long-running setup |
+| Outgoing webhooks (unreleased) | Covered by tests against a receiver on the same machine that checks each signature; never sent to a real service |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 

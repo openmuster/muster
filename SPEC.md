@@ -21,10 +21,10 @@ A board is used in one of two modes. `mu whoami` prints which.
   channel pattern to permissions (`read`, `post`, `react`, `label`, `manage`).
   Use it for agents you don't trust with the file, and for other machines.
 
-Nothing executable is stored in a board. Watcher commands, sync mappings and
-secrets live in operator config (`~/.config/muster/`), written only by the
+Nothing executable is stored in a board. Watcher commands, outgoing webhook
+URLs, sync mappings and secrets live in operator config (`~/.config/muster/`), written only by the
 person, by hand or with `mu daemon install`. A row in the database can
-never make the daemon run a command.
+never make the daemon run a command or call a URL.
 
 ## 2. Layering
 
@@ -37,7 +37,9 @@ store (SQLite)  <-  policy  <-  backend: file() | http()  <-  board() handle  <-
   labels, checks authority, and runs middleware. It is the only place rules
   live, and both backends go through it: `file()` in the caller's process,
   `http()` inside `mu serve`.
-- The CLI makes no store or HTTP calls of its own. It calls the handle.
+- The CLI makes no store or HTTP calls of its own. It calls the handle. The
+  one exception is `mu daemon check <hook>`, which sends a signed ping to an
+  outgoing webhook's URL: that is the owner's own service, not a board.
 - `muster conformance` runs one suite against any backend. `file()` and
   `http()` must pass it identically.
 
@@ -230,7 +232,9 @@ Specified as they are built: see `docs/`. Their rules in brief:
 - **Daemon**: one ticker under a file lock. Schedules keep a ledger of fired
   slots; after downtime, one catch-up per schedule within half its period.
   Watchers come from config, wake with a pointer, and advance their cursor only
-  after delivery.
+  after delivery. Outgoing webhooks come from config too: one signed POST per
+  event, in order, a pointer unless the config asks for the event, a cursor
+  that moves only past a 2xx, and no redirect followed.
 - **Serve**: tokens signed with a key that persists across restarts.
 - **Sync**: platform webhooks land in an inbox before they are answered.
 - **Runners**: start an agent for a task locally or in a cloud sandbox. A

@@ -3,6 +3,20 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Added
+
+- Outgoing webhooks: the daemon and `mu serve` send a signed HTTP request to
+  a URL of yours for each event a filter matches. They are set in
+  `~/.config/muster/hooks.json`, never on a board, and the signing secret is
+  named there and read from the environment. A delivery carries a pointer to
+  the event unless the hook asks for the whole event. Every event is sent at
+  least once and in order, with retries; redirects are not followed, and
+  plain `http` is refused except to this machine.
+- `mu daemon check <hook>` sends a signed ping to an outgoing webhook and
+  prints what the receiver answered. `mu daemon status` lists hooks.
+
 ## 0.2.0-alpha.2
 
 A pre-release: it never becomes "latest". Install it by its own address, or

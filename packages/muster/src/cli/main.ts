@@ -9,7 +9,8 @@ import { processStart } from '../process.ts'
 import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
-import { loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
 import { answer as answerMcp } from './mcp.ts'
@@ -65,9 +66,26 @@ const sleep = (ms: number, signal: AbortSignal) =>
  */
 async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string): Promise<number> {
   const wanted = parsed.positionals[1]
-  if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher: mu daemon check <name>.')
-  const watcher = loadWatchers().find((each) => each.name === wanted)
-  if (!watcher) throw new Failure('unknown_watcher', `No watcher is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${watchersPath()}.` })
+  if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher or outgoing webhook: mu daemon check <name>.')
+  const config = loadDaemonConfig(run.io.env)
+  const hook = config.hooks.find((each) => each.name === wanted)
+  if (hook) {
+    // A hook answers nothing on the board, so its check is the delivery itself: signed like a real one, sent from here.
+    const [armed] = armHooks([hook], run.io.env)
+    const started = Date.now()
+    const sent = await ping(armed!, { now: () => Date.now(), fetch })
+    if (!sent.ok) {
+      throw new Failure('hook_failed', `Outgoing webhook "${hook.name}" wasn't delivered: ${why(sent)}.`, {
+        hint: sent.status === null ? `Nothing answered at ${new URL(hook.url).host}.` : 'The receiver answered, and refused it: check that it verifies with the same secret.',
+        data: { hook: hook.name, status: sent.status },
+      })
+    }
+    const delivered = { hook: hook.name, status: sent.status, ms: Date.now() - started }
+    print(run, delivered, () => `delivered  ${hook.name}  HTTP ${sent.status}  in ${delivered.ms}ms`)
+    return 0
+  }
+  const watcher = config.watchers.find((each) => each.name === wanted)
+  if (!watcher) throw new Failure('unknown_watcher', `No watcher or outgoing webhook is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${watchersPath()}, outgoing webhooks in ${hooksPath()}.` })
   const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}) })
   const timeout = duration(str(parsed.flags, 'timeout') ?? '5m', 'timeout') * 1000
   // Nothing runs watchers unless a ticker holds the board's lock: say so now, not after the timeout.
@@ -97,6 +115,8 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
       if (GAVE_UP.test(event.message?.text ?? '')) {
         throw new Failure('wake_failed', `Watcher "${watcher.name}" ran its command, and the command kept failing.`, { hint: `Its log says why: ${join(configDir(), 'logs')}.`, data: { thread } })
       }
+      // A hook's note that it gave up on the check's own message is the daemon talking, not what the watcher woke.
+      if (DROPPED.test(event.message?.text ?? '')) continue
       const answered = { watcher: watcher.name, thread, by: event.by, seconds: Math.round((run.now() - started) / 1000) }
       print(run, answered, () => `answered  #${thread}  by ${who(event.by)}  in ${span(run.now() - started)}`)
       return 0
@@ -798,15 +818,31 @@ const commands: Record<string, Command> = {
         run.io.out(`    export MUSTER_URL=${serving.url}`)
         run.io.out(`    export MUSTER_TOKEN=${token}`)
       }
-      let watchers: ReturnType<typeof loadWatchers> = []
+      let watchers: ReturnType<typeof loadDaemonConfig>['watchers'] = []
+      let hooks: ReturnType<typeof armHooks> = []
       try {
         watchers = loadWatchers()
       } catch (error) {
         run.io.err(`error: ${(error as Error).message}`)
       }
+      // On their own, so a hooks file that is wrong costs the hooks and never the watchers. The board is served either way.
+      try {
+        hooks = armHooks(loadHooks(), run.io.env).filter((hook) => {
+          const taken = watchers.some((watcher) => watcher.name === hook.name)
+          if (taken) run.io.err(`error: A watcher and a hook are both named "${hook.name}": the hook is not sent.`)
+          return !taken
+        })
+      } catch (error) {
+        run.io.err(`error: ${(error as Error).message}`)
+        run.io.err('  No outgoing webhooks are sent until that is fixed and the server restarted.')
+      }
+      // A server's output is its address and its token. What a hook couldn't deliver is the one thing worth adding.
+      const log = (line: string) => {
+        if (/^(failed|dropped) {2,}hook /.test(line)) run.io.err(line)
+      }
       try {
         // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, stop: run.io.stop, log: () => {} })
+        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.
@@ -826,18 +862,22 @@ const commands: Record<string, Command> = {
       if (verb === 'check') return checkWatcher(run, parsed, me.mode, lock)
       if (verb === 'run') {
         let watchers
+        let hooks
         try {
-          watchers = loadWatchers()
+          const config = loadDaemonConfig(run.io.env)
+          watchers = config.watchers
+          hooks = config.arm()
         } catch (error) {
           // A config a restart can't fix: say so and exit cleanly, so the service manager leaves it stopped.
           run.io.err(`error: ${(error as Error).message}`)
           run.io.err('')
-          run.io.err(`  Fix ${watchersPath()} and start the daemon again.`)
+          run.io.err('  Fix it and start the daemon again.')
           return 0
         }
         run.io.out(`board     ${me.where}`)
         run.io.out(`watchers  ${watchers.length}`)
-        const ended = await runDaemon({ team: run.team, lock, watchers, stop: run.io.stop, log: run.io.out })
+        if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
+        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, stop: run.io.stop, log: run.io.out })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
       }
@@ -854,17 +894,21 @@ const commands: Record<string, Command> = {
           env[key] = run.io.env[key]!
         }
         const path = launchd.install({ board: name, program, ...(run.io.env.MUSTER_DIR ? { dir: run.io.env.MUSTER_DIR } : {}), env, log, home: run.io.env.HOME ?? homedir() })
-        return print(run, { installed: path, log }, () => [`installed  ${path}`, `log        ${log}`, 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync or watchers need'].join('\n'))
+        return print(run, { installed: path, log }, () => [`installed  ${path}`, `log        ${log}`, 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
       }
       if (verb === 'uninstall') {
         const removed = launchd.uninstall({ board: name, home: run.io.env.HOME ?? homedir() })
         return print(run, removed, () => (removed.wasLoaded ? `removed  ${removed.path}` : 'not installed'))
       }
       if (verb === 'status') {
-        const watchers = loadWatchers()
+        const { watchers, hooks } = loadDaemonConfig(run.io.env)
         const running = launchd.loaded(name)
-        return print(run, { installed: running, watchers: watchers.map((watcher) => watcher.name) }, () =>
-          [`service   ${running ? 'loaded' : 'not installed'}`, `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`].join('\n'),
+        return print(run, { installed: running, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
+          [
+            `service   ${running ? 'loaded' : 'not installed'}`,
+            `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
+            `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
+          ].join('\n'),
         )
       }
       throw misuse('unknown_command', `Unknown daemon command "${verb}".`, 'One of: run, check, install, uninstall, status.')

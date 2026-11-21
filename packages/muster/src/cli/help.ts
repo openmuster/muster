@@ -70,11 +70,13 @@ schedules and the daemon
   schedule <channel|id> <text>   --in 30m | --at <time> | --every 30m
        [--times n] [--until <time>]
   schedule list | schedule cancel <id>
-  daemon run                     send what is due and run your watchers
+  daemon run                     send what is due; run watchers and hooks
   daemon check <watcher>         write what it listens for; wait for a reply
        [--in <channel>] [--timeout 5m]
+  daemon check <hook>            send a signed ping to an outgoing webhook
   daemon install [--env NAME]... | uninstall | status
   Watchers are yours, in ~/.config/muster/watchers.json: never on a board.
+  So are outgoing webhooks, in hooks.json: a signed POST for each event.
 
 inspect
   inspect [--port n] [--no-open] a local web page for the board, as you
