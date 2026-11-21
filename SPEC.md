@@ -274,10 +274,20 @@ dependent one last); and the LaunchAgent, loaded for a scratch board, where it
 sent a scheduled message, was restarted by launchd after being killed, and was
 removed again.
 
+Run for real on 22 Nov 2026: GitHub sync, against a live private repository
+reached through a tunnel. Issues, comments both ways, edits, deletes, state,
+a board-started issue, pull requests, CI results, a review, a merge, refused
+forged webhooks, and catch-up after downtime. It found two faults the
+hand-written payloads had passed: a board-started issue's thread got no `ref`
+labels, and an issue opened while the board was down arrived with no title
+and its first comment twice. Both are fixed. Approving a pull request was not
+tried.
+
 Built but proven only against stand-ins, never a real account or service:
 
-- Sync: signatures and payloads are hand-written to each platform's documented
-  shape. No real webhook has been received and no real API has been called.
+- Sync with Linear and Slack: signatures and payloads are hand-written to each
+  platform's documented shape. No real webhook has been received from either,
+  and neither's API has been called.
 - The Cloudflare runner. Its Worker template has never been deployed or run.
 
 Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a

@@ -4,9 +4,11 @@ description: GitHub, Linear and Slack threads on the board, in both directions.
 ---
 
 > [!WARNING]
-> Sync has not been run against GitHub, Linear or Slack yet. Its tests use
-> signatures and payloads written by hand from each platform's documentation.
-> Expect to find faults on a first real run.
+> GitHub sync has been run against a live repository, and the two faults that
+> run found are fixed after 0.2.0-alpha.2. Linear and Slack have not been run
+> against the live services yet: their tests use signatures and payloads
+> written by hand from each platform's documentation. Expect faults on a first
+> real run.
 
 ## What it does
 
@@ -14,10 +16,6 @@ A platform thread (an issue, a pull request, a Slack thread) becomes a board
 thread in the channel you map it to. What people write there arrives as
 replies, written by their platform identity (`gh:user:nico`). What is written
 on the board goes back, where the mapping mirrors.
-
-> [!WARNING]
-> Sync is tested against payloads written to each platform's documented shape.
-> It has not yet received a real webhook or called a real platform API.
 
 ## How an event arrives
 
