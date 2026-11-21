@@ -121,6 +121,40 @@ h4 {
   overflow-x: auto;
 }
 
+/* Where something does scroll sideways, the bar is a hairline in the site's greys, with no track,
+   and it sits inside the box's padding, not across its bottom edge. */
+.muster-scroll,
+.muster-diagram,
+.muster-diagram-source,
+.prose pre,
+.prose :where(div):has(> table) {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a transparent;
+}
+
+.muster-scroll::-webkit-scrollbar,
+.muster-diagram::-webkit-scrollbar,
+.muster-diagram-source::-webkit-scrollbar,
+.prose pre::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.muster-scroll::-webkit-scrollbar-track,
+.muster-diagram::-webkit-scrollbar-track,
+.muster-diagram-source::-webkit-scrollbar-track,
+.prose pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.muster-scroll::-webkit-scrollbar-thumb,
+.muster-diagram::-webkit-scrollbar-thumb,
+.muster-diagram-source::-webkit-scrollbar-thumb,
+.prose pre::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 3px;
+}
+
 :focus-visible {
   outline: 2px solid #9a9a9a;
   outline-offset: 2px;
