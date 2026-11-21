@@ -18,7 +18,13 @@ function setup(options: { mirror?: boolean; fail?: () => boolean } = {}) {
     sent.push({ url: String(url), body, auth: new Headers(init?.headers).get('authorization') })
     made += 1
     if (String(url).includes('slack')) return Response.json({ ok: true, ts: `1700000000.${made}` })
-    if (String(url).includes('linear')) return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${made}` } } } })
+    if (String(url).includes('linear')) {
+      if (String(body.query).includes('teams(')) return Response.json({ data: { teams: { nodes: [{ id: 'team-eng' }] } } })
+      if (String(body.query).includes('issueCreate')) return Response.json({ data: { issueCreate: { success: true, issue: { id: `li-${made}`, identifier: `ENG-${made}`, state: { name: 'In Progress' } } } } })
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${made}` } } } })
+    }
+    // GitHub answers a new issue with its number, and a comment with its ID.
+    if (String(url).endsWith('/issues')) return Response.json({ id: made, number: made }, { status: 201 })
     return Response.json({ id: made }, { status: 201 })
   }) as typeof fetch
   const sync = {
@@ -166,9 +172,34 @@ describe('sync: threads started on the board', () => {
     await gh('issues', { action: 'opened', issue: { number: undefined, title: 'x', body: '' }, repository: repo, sender: { login: 'muster[bot]' } })
     await team.reply({ to: root.id, text: 'fixed' })
     await backend.syncTick()
-    expect(sent[1]!.url).toMatch(/\/repos\/acme\/web\/issues\/undefined\/comments$|\/issues\/\d+\/comments$/)
+    expect(sent[1]!.url).toBe('https://api.github.com/repos/acme/web/issues/9001/comments')
     expect(sent[1]!.body).toEqual({ body: 'fixed' })
     expect((await team.readChannel({ channel: 'web/issues' })).threads).toHaveLength(2)
+  })
+
+  it('a thread that opened an issue gets the labels an imported one has, so it is found and followed like one', async () => {
+    const { team, gh, backend } = setup({ mirror: true })
+    await backend.syncTick()
+    const root = await team.as('lead').post({ channel: 'web/issues', text: 'Add a test for the redirect host', labels: { owner: 'lead' } })
+    await backend.syncTick()
+    expect((await team.readThread({ id: root.id })).message.labels).toEqual({ owner: 'lead', kind: 'issue', state: 'open', ref: 'acme/web#9001', source: 'gh' })
+    expect((await team.readChannel({ channel: 'web/issues', labels: ['kind=issue'] })).threads.map((thread) => thread.message.id)).toEqual([root.id])
+    // Closed on GitHub: the state follows it, as it does for an issue that came in.
+    await gh('issues', { action: 'closed', issue: { number: 9001, title: 'Add a test for the redirect host', body: '' }, repository: repo, sender: { login: 'nico' } })
+    expect((await team.readThread({ id: root.id })).message.labels.state).toBe('closed')
+    // A reply is never relabelled.
+    const reply = await team.reply({ to: root.id, text: 'on it' })
+    await backend.syncTick()
+    expect((await team.readThread({ id: root.id })).replies.find((each) => each.id === reply.id)!.labels).toEqual({})
+  })
+
+  it('a thread that opened a Linear issue gets its identifier and state', async () => {
+    const { team, backend, sent } = setup()
+    await backend.syncTick()
+    const root = await team.post({ channel: 'eng', text: 'Bump the parser\n\nCVE-2026-1' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1 })
+    expect(sent.map((each) => String(each.body.query).match(/^(query|mutation)[^{]*\{ (\w+)/)?.[2])).toEqual(['teams', 'issueCreate'])
+    expect((await team.readThread({ id: root.id })).message.labels).toEqual({ kind: 'issue', ref: 'ENG-9002', state: 'in-progress', source: 'lin' })
   })
 
   it('a Slack-mapped channel posts a new thread to Slack and later replies into it; a Linear team gets an issue', async () => {

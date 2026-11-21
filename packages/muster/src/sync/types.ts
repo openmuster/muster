@@ -22,7 +22,12 @@ export type Inbound = {
   self?: boolean
 }
 
-export type Delivery = { external: string; thread?: string }
+/**
+ * What a platform made of a board message. A new thread also says what an imported one would carry as
+ * labels (which issue it became, its kind, its state), so a thread started on the board reads like one
+ * that came in.
+ */
+export type Delivery = { external: string; thread?: string; labels?: Record<string, string> }
 
 /** A platform: how to check that a webhook is its own, read it, and send a message back. */
 export type Provider = ProviderExtras & {
