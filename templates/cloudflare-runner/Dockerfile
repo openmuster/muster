@@ -6,10 +6,16 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && apt-get clean
 
-# Pin a release in production: .../releases/download/v0.1.2/muster-0.1.2.tgz
-RUN npm install --global https://github.com/openmuster/muster/releases/latest/download/muster.tgz
+# One release, by its version: an image built twice is the same image, and "latest" is whatever was
+# published last. Check the tarball against that release's SHA256SUMS when you change this.
+ARG MUSTER_VERSION=0.1.2
+RUN npm install --global https://github.com/openmuster/muster/releases/download/v${MUSTER_VERSION}/muster-${MUSTER_VERSION}.tgz
 
-# The agent you run. Add or swap for yours (for Codex: @openai/codex).
-RUN npm install --global @anthropic-ai/claude-code
+# The agent you run, at a version you chose: `npm view @anthropic-ai/claude-code version` says the
+# current one. Add or swap for yours (for Codex: @openai/codex).
+ARG AGENT_PACKAGE=@anthropic-ai/claude-code
+ARG AGENT_VERSION
+RUN test -n "$AGENT_VERSION" || { echo "pass --build-arg AGENT_VERSION=<version>: an agent CLI installed unpinned is whatever was published last" >&2; exit 1; } \
+ && npm install --global "${AGENT_PACKAGE}@${AGENT_VERSION}"
 
 WORKDIR /workspace

@@ -124,7 +124,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `store_too_new` | A newer muster made it |
 | `sqlite_too_old` | This Node embeds a SQLite too old to trust |
 | `busy` | Other writers held the board too long: run it again |
-| `exists` | A backup won't write over a file |
+| `exists` | A backup or a download won't write over a file |
 | `missing_path` | A command needs a path |
 | `no_skills` | This install doesn't carry the skills |
 | `invalid_config` | `watchers.json` or `sync.json` is wrong. The message says what |

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -55,8 +55,10 @@ const launchctl = (args: string[]) => execFileSync(process.env.MUSTER_LAUNCHCTL 
 export function install(options: { board: string; program: string[]; dir?: string; log: string; home?: string; uid?: number; env?: Record<string, string> }): string {
   const path = plistPath(options.board, options.home)
   mkdirSync(dirname(path), { recursive: true })
-  mkdirSync(dirname(options.log), { recursive: true })
-  writeFileSync(path, plist(options))
+  mkdirSync(dirname(options.log), { recursive: true, mode: 0o700 })
+  // It holds the value of every secret passed with --env, so it is yours alone to read, whatever the folder allows.
+  writeFileSync(path, plist(options), { mode: 0o600 })
+  chmodSync(path, 0o600)
   const domain = `gui/${options.uid ?? process.getuid!()}`
   try {
     launchctl(['bootout', `${domain}/${label(options.board)}`])

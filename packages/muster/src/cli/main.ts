@@ -398,9 +398,15 @@ const commands: Record<string, Command> = {
       const saved: { name: string; path: string; size: number }[] = []
       for (const file of message.attachments) {
         const got = await run.team.fileGet({ message: wanted, id: file.id })
-        // Only a file's own name is used, so nothing a message says can write outside the folder.
+        // Only a file's own name is used, so nothing a message says can write outside the folder. And the
+        // name is the sender's choice, so it never replaces a file that is already there.
         const path = join(to, basename(file.name))
-        writeFileSync(path, Buffer.from(got.data, 'base64'))
+        try {
+          writeFileSync(path, Buffer.from(got.data, 'base64'), { flag: 'wx' })
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          throw new Failure('exists', `There is already a file at ${path}.`, { hint: 'Download into another folder with --to: a download never writes over a file.', data: { saved } })
+        }
         saved.push({ name: file.name, path, size: file.size })
       }
       print(run, { files: saved }, () => saved.map((file) => `saved  ${file.path}`).join('\n'))

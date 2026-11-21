@@ -56,6 +56,21 @@ const issue = (number: number, title = 'Login redirects to evil.example', body =
 const texts = async (team: ReturnType<typeof setup>['team'], channel: string) => (await team.readChannel({ channel })).threads.map((thread) => thread.message.text)
 
 describe('sync: GitHub', () => {
+  it("a delivery is known by what GitHub signed, not by a header it didn't: an old one sent again under a new ID changes nothing", async () => {
+    const { team, gh } = setup()
+    const pull = { number: 9, title: 'Fix the redirect', body: '' }
+    const state = async () => (await team.readChannel({ channel: 'web/prs' })).threads[0]!.message.labels.state
+    await gh('pull_request', { action: 'opened', pull_request: pull, repository: repo, sender: { login: 'nico' } })
+    const closed = { action: 'closed', pull_request: { ...pull, merged: true, updated_at: '2026-01-01T00:01:00Z' }, repository: repo, sender: { login: 'nico' } }
+    await gh('pull_request', closed, { id: 'first' })
+    expect(await state()).toBe('merged')
+    await gh('pull_request', { action: 'reopened', pull_request: { ...pull, updated_at: '2026-01-01T00:02:00Z' }, repository: repo, sender: { login: 'nico' } })
+    expect(await state()).toBe('open')
+    // Someone who kept the signed "closed" sends it again, with a delivery ID the board hasn't seen.
+    expect(await gh('pull_request', closed, { id: 'made-up' })).toEqual({ status: 200, body: 'ok' })
+    expect(await state()).toBe('open')
+  })
+
   it("text from a platform is never checked on the way in, so a block in it reaches a program only if it follows its schema", async () => {
     const { team, gh } = setup()
     await team.schemaAdd({ name: 'verdict@1', schema: { type: 'object', required: ['approved'], additionalProperties: false, properties: { approved: { type: 'boolean' } } } })
