@@ -5,6 +5,12 @@ versions are affected.
 
 ## Unreleased
 
+### Fixed
+
+- `mu help` lists flags that worked but were left out: `--type` on `wait` and
+  `tail`, `--allow-host` on `serve`, and `--label`, `--from`, `--wait`,
+  `--lease` and `--resume` on `run`.
+
 ## 0.2.0-alpha.1
 
 A pre-release: it never becomes "latest". Install it by its own address.

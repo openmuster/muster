@@ -13,7 +13,7 @@ read
   search <words> [--in <channel>]
   download <id> [--to <dir>]     the files a message carries
   wait [<channel>] [--re <id>] [--label k=v]... [--by <who>] [--mentions <who>]
-       [--text <words>] [--after <cursor>] [--timeout 30m]
+       [--text <words>] [--type <event>]... [--after <cursor>] [--timeout 30m]
   tail [<channel>] [same filters] [--last n]
 
 write
@@ -53,10 +53,12 @@ tasks
 
 agents
   run <id> | --ready <channel>   start an agent on a task and stay with it
+       [--label k=v]... [--from <owner>]... [--wait 10m] [--lease 15m]
        --agent claude|codex  (or a command after --)  [--cwd <dir>]
        [--worktree <repo> --branch <name>] [--model <m>] [--timeout 30m]
        [--env K=V]... [--bypass-permissions] [--loop] [--budget <usd>]
   An agent that worked the task before resumes its session; --fresh won't.
+  To pick one up by its ID: --resume <session>.
   Claude Code starts lean (a shell and files); --full loads your whole setup.
   run <id> --runner vercel|cloudflare --agent <a> [--repo <clone url>]
                                  the same, in a cloud sandbox
@@ -87,6 +89,7 @@ agents without a shell
 serve
   serve [--port 4100]            the board over HTTP, for agents you don't
                                  trust with the file and for other machines
+       [--allow-host <name>]...  a name a proxy or tunnel reaches it by
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
        [--no-sync]
   token list | token revoke <id>
