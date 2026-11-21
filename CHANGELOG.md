@@ -11,6 +11,10 @@ versions are affected.
   waits for a reply, so you know the daemon, the filter, the gate and what
   the command wakes all work. It says when nothing is running the watchers,
   when the command keeps failing, and when nothing answered.
+- `mu serve` answers MCP over HTTP at `/api/board/mcp`, so an agent on
+  another machine or in a chat app can use the board with a token and no
+  install. The tool does what the token may do, through the same checks as
+  any client.
 
 ### Fixed
 

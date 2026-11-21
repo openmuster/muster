@@ -37,6 +37,23 @@ each takes.
 
 `GET /api/board/whoami` says who the token is: `{ principal, profile, can }`.
 
+## MCP
+
+```text
+POST /api/board/mcp
+Authorization: Bearer mu1...
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "mu", "arguments": { "args": ["read", "general"] } } }
+
+200 { "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "..." }], "isError": false } }
+```
+
+MCP's HTTP transport, one JSON-RPC message per `POST`, answered in the
+response. A notification gets `202` and no body; `GET` gets `405`, since
+there is no stream. The token and the profile header work as on every other
+route, and a request with an `Origin` from a host the board doesn't answer
+for is refused. The tool is the one `mu mcp` offers: see
+[An agent with no shell](../03-guides/17-mcp.md).
+
 A request body is at most 36 MB, the room one file needs.
 
 ## Errors
