@@ -11,15 +11,16 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 `mu serve`. A board used as a file on your own machine is not affected,
 except by the inspector and the swarm template, which are marked.
 
-- A token held to `read` could delete messages and cancel, assign, unblock
-  and reopen tasks. Every token speaks for the board's owner, and those
+- A token held to `read` could delete messages, cancel schedules, and
+  cancel, assign, unblock and reopen tasks. Every token speaks for the board's owner, and those
   changes asked only whose a thing was: a read-only token held to no profile,
   such as `--can '*=read'`, could change anything in the channels it read,
   and one held to a profile could change that profile's own. They now take
   `post`.
 - A token held to channels could move the cursors the daemon keeps its place
   under (`watch:`, `hook:`, `sync:`). A cursor only moves forward, so that
-  silenced a watcher or an outgoing webhook for good. It is now refused.
+  silenced a watcher for good, and would have done the same to an outgoing
+  webhook, which no release has yet. It is now refused.
 - The schedule list showed a schedule in a private channel, text included,
   to a token that held only the subtree above it.
 - The feed still carried what a deleted message said: `mu tail --last`,
@@ -27,11 +28,13 @@ except by the inspector and the swarm template, which are marked.
   text, labels and files. They are now empty in every event of a deleted
   message, and a filter can't match on them. The board's file and its
   backups still hold the words: the log is never rewritten.
-- The token `mu serve` prints had no ID, so it was in no list and could not
-  be revoked. It is now made like any other token. One printed by an earlier
+- 0.2.0-alpha.1 and alpha.2, where tokens can be revoked: the token
+  `mu serve` prints had no ID, so it was in no list and could not be. It is now made like any other token. One printed by an earlier
   version works until its 30 days are up; deleting the board's key stops it
   sooner, along with every other token.
-- A schedule went on posting after its token was revoked. A schedule is now
+- 0.2.0-alpha.1 and alpha.2: a schedule went on posting after its token was
+  revoked. In every version a token held to channels could make any number
+  of schedules. A schedule is now
   canceled when it comes due after its token was revoked, a revoked token
   stays on record so that still holds later, and a token held to channels
   has 20 schedules going at most.

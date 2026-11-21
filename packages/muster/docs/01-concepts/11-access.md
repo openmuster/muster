@@ -67,12 +67,14 @@ channel, a subtree (`factory/`), or `*`.
 - Changing something takes `post`, even when it is your own. Every token a
   board makes speaks for the board's owner, so "yours" says who wrote a
   message or made a task, not what a token may do: one held to `read` deletes
-  nothing, and cancels, assigns, unblocks and reopens no task.
+  nothing, cancels no schedule, and cancels, assigns, unblocks and reopens no
+  task.
 - The daemon keeps its place under cursors named `watch:`, `hook:` and
   `sync:`. A token held to channels can't move one.
 - A schedule belongs to the token that made it. Revoke the token and its
   schedules are canceled as they come due. A token that only ran out leaves
-  them going: cancel those with `mu schedule cancel`. A token held to
+  them going: cancel those with `mu schedule cancel`. So does a schedule made
+  before 0.2.0-alpha.3, which has no record of its token. A token held to
   channels has 20 schedules going at most.
 
 ## Let an agent ask to join

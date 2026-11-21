@@ -106,7 +106,10 @@ export function cancel(ctx: Context, caller: Caller, request: { id: number }): S
     if (!schedule) throw new Failure('not_found', `No schedule ${request.id}.`)
     // One a caller can't see doesn't exist for it; one it can see is its own to cancel, or its channel's manager's.
     if (!allowed(caller, schedule.channel, 'read')) throw new Failure('not_found', `No schedule ${request.id}.`)
-    if (!mine(caller, schedule) && !(caller.can !== undefined && allowed(caller, schedule.channel, 'manage'))) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
+    const manages = caller.can !== undefined && allowed(caller, schedule.channel, 'manage')
+    if (!mine(caller, schedule) && !manages) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
+    // Its own to cancel, and canceling is a write: it takes what making the schedule took.
+    if (!manages) authorize(caller, schedule.channel, 'post')
     if (!schedule.canceled) append(ctx.db, { type: 'schedule.canceled', by: byOf(caller), channel: schedule.channel, thread: schedule.thread, data: { id: schedule.id } }, ctx.now().toISOString())
     return find(ctx, request.id)!
   })

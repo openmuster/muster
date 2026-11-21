@@ -142,6 +142,9 @@ describe('serve', () => {
     expect(await reason(reader.taskBlock({ id: task.id, reason: 'mine now' }))).toBe('forbidden')
     expect(await reason(reader.taskUnblock({ id: held.id }))).toBe('forbidden')
     expect(await reason(reader.taskReopen({ id: failed.task.id }))).toBe('forbidden')
+    const standup = await owner.scheduleCreate({ channel: 'work', text: 'standup', every: 600 })
+    expect(await reason(reader.scheduleCancel({ id: standup.id }))).toBe('forbidden')
+    expect((await owner.scheduleList()).schedules.map((schedule) => schedule.id)).toEqual([standup.id])
     expect((await owner.readThread({ id: mine.id })).message.deleted).toBe(false)
     expect((await owner.task(task.id))?.state).toBe('ready')
     // One held to a profile is no better off for its own profile's words and tasks.
@@ -150,11 +153,14 @@ describe('serve', () => {
     const bot = as({ profile: 'bot', can: { work: ['read'] } })
     expect(await reason(bot.remove({ id: own.id }))).toBe('forbidden')
     expect(await reason(bot.taskCancel({ id: ownTask.id }))).toBe('forbidden')
+    const ownSchedule = await owner.as('bot').scheduleCreate({ channel: 'work', text: 'bot scheduled this', every: 600 })
+    expect(await reason(bot.scheduleCancel({ id: ownSchedule.id }))).toBe('forbidden')
     // With `post` the same profile deletes and cancels what is its own, and still nothing of anyone else's.
     const writer = as({ profile: 'bot', can: { work: ['read', 'post'] } })
     expect(await reason(writer.remove({ id: hers.id }))).toBe('not_yours')
     expect((await writer.remove({ id: own.id })).deleted).toBe(true)
     expect((await writer.taskCancel({ id: ownTask.id })).task.state).toBe('canceled')
+    expect((await writer.scheduleCancel({ id: ownSchedule.id })).canceled).toBe(true)
     // The daemon's own cursors: a watcher that runs as `bot`, the owner's webhook.
     await owner.cursorSet('hook:alerts', 3)
     await owner.as('bot').cursorSet('watch:factory', 3)
