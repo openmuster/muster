@@ -17,9 +17,13 @@ each against the rules muster sent (the board's own routes, by method), adds
 the token, and forwards it. The container's environment holds a placeholder.
 
 ```bash
-npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends
+npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends: 16 characters or more
 npx wrangler deploy
 ```
+
+Whoever holds `RUNNER_SECRET` can start a container that runs a command of
+their choosing, so make it long and random (`openssl rand -base64 32`). Until
+one is set the Worker answers every request with an error and starts nothing.
 
 The `Dockerfile` is the image a run starts from: Node, git, `mu` from its
 release tarball, and Claude Code. They are installed once, when the image is

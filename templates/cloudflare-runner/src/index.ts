@@ -1,5 +1,6 @@
 // NOT RUN. Written against Cloudflare's Containers docs; check each call against the current API.
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
+import { authorized, usable } from './auth.ts'
 
 type Rule = { match: { path: string; method: string[] }; transform: { headers: Record<string, string> }[] }
 type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: { host: string; rules: Rule[]; token: string }; model?: { host: string; paths: string[]; headers: Record<string, string> }; repo?: string; setup: string[][] }
@@ -60,7 +61,9 @@ export class Run extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.headers.get('authorization') !== `Bearer ${env.RUNNER_SECRET}`) return new Response('Unauthorized', { status: 401 })
+    // Whoever holds the secret starts containers that run a command of their choosing: a runner with none set starts nothing.
+    if (!usable(env.RUNNER_SECRET)) return new Response('This runner has no RUNNER_SECRET of 16 characters or more: set one with wrangler secret put.', { status: 500 })
+    if (!(await authorized(request.headers.get('authorization'), env.RUNNER_SECRET))) return new Response('Unauthorized', { status: 401 })
     const url = new URL(request.url)
     if (request.method === 'POST' && url.pathname === '/runs') {
       const id = crypto.randomUUID()
