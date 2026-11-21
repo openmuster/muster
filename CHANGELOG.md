@@ -5,6 +5,23 @@ versions are affected.
 
 ## Unreleased
 
+### Security
+
+Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
+`mu serve`. A board used as a file on your own machine is not affected.
+
+- `mu serve` read up to 36 MB of a webhook's body before checking who sent
+  it, with no token asked. A webhook body is now at most 1 MB.
+- A file's name and type on a message, and the labels one change unsets,
+  had no size limit, so a token that may post could store far more than a
+  message's 10,000 characters. They are now held to 255 characters and 64
+  labels.
+- A `limit` below 1, or not a whole number, on the feed or a task list
+  removed the 1,000 ceiling on what one read returns. It is now refused as
+  `invalid_limit`.
+- A live feed checked its token only when it opened. It now ends when the
+  token is revoked or runs out.
+
 ### Added
 
 - Outgoing webhooks: the daemon and `mu serve` send a signed HTTP request to
@@ -16,6 +33,11 @@ versions are affected.
   plain `http` is refused except to this machine.
 - `mu daemon check <hook>` sends a signed ping to an outgoing webhook and
   prints what the receiver answered. `mu daemon status` lists hooks.
+
+### Changed
+
+- The guides say what a usage limit leaves behind: the task is `failed`, and
+  `mu tasks reopen` readies it again.
 
 ## 0.2.0-alpha.2
 

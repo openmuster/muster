@@ -342,4 +342,14 @@ describe('tasks', () => {
     await team.edit({ id: task.id, text: 'the principal itself may' })
     expect((await team.task(task.id))?.state).toBe('ready')
   })
+
+  it('a task list refuses a limit that is not a whole number of at least 1', async () => {
+    const { team } = memoryBoard()
+    for (let i = 0; i < 3; i++) await team.taskCreate({ channel: 'work', text: `t${i}` })
+    expect(await reason(team.taskList({ limit: -1 }))).toBe('invalid_limit')
+    expect(await reason(team.taskList({ limit: 0 }))).toBe('invalid_limit')
+    expect(await reason(team.taskList({ limit: 1.5 }))).toBe('invalid_limit')
+    expect((await team.taskList({ limit: 2 })).tasks).toHaveLength(2)
+    expect((await team.taskList({ limit: 5000 })).tasks).toHaveLength(3)
+  })
 })

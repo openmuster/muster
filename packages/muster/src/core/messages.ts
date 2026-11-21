@@ -57,7 +57,12 @@ function cleanAttachments(attachments: Attachment[] | undefined): Attachment[] {
   if (list.length > LIMITS.attachments) {
     throw new Failure('too_many_attachments', `A message carries at most ${LIMITS.attachments} files.`, { hint: 'Attach the rest in another reply.' })
   }
-  return list.map(({ id, name, type, size }) => ({ id: String(id), name: String(name), type: String(type), size: Number(size) }))
+  return list.map(({ id, name, type, size }) => {
+    const file = { id: String(id), name: String(name), type: String(type), size: Number(size) }
+    // The same room `filePut` gives a name: a record is stored with the message, so it is held to a size too.
+    if (file.name.length > 255 || file.type.length > 255) throw misuse('invalid_file', "A file's name and type are at most 255 characters each.")
+    return file
+  })
 }
 
 export function post(ctx: Context, caller: Caller, request: PostRequest): Message {
@@ -225,6 +230,7 @@ export type LabelRequest = {
 
 export function label(ctx: Context, caller: Caller, request: LabelRequest): Message {
   const set = cleanLabels(request.set)
+  if ((request.unset ?? []).length > LIMITS.labels) throw misuse('too_many_labels', `One change unsets at most ${LIMITS.labels} labels.`)
   const unset = (request.unset ?? []).map((key) => labelKey(key))
   if (Object.keys(set).length === 0 && unset.length === 0) throw misuse('nothing_to_label', 'Name a label to set or unset.')
   return once(

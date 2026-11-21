@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
 import { channelScope, inScope, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
-import { allowed, authorize, byOf, findMessage, messageFor, once, type Context } from './context.ts'
+import { allowed, authorize, byOf, findMessage, limitOf, messageFor, once, type Context } from './context.ts'
 import { hooks, post, type PostRequest } from './messages.ts'
 
 export const LEASE_MIN_S = 30
@@ -635,7 +635,7 @@ export function list(
   const filters = (request.labels ?? []).map(labelFilter)
   const want = request.state ?? 'open'
   if (want !== 'open' && want !== 'all' && !TASK_STATES.includes(want)) throw misuse('invalid_state', `"${want}" isn't a task state.`, `One of: open, all, ${TASK_STATES.join(', ')}.`)
-  const limit = Math.min(request.limit ?? 200, 1000)
+  const limit = limitOf(request.limit, 200, 1000)
   const rows = ctx.db.raw.prepare('select * from tasks order by id').all() as TaskRow[]
   const tasks: TaskListing[] = []
   let more = false

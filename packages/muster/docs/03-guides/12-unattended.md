@@ -54,8 +54,25 @@ second one under another name for two at a time.
 - **A task that keeps failing is parked.** After two attempts that ended
   without a result the board blocks it as `failing`, so it stops eating
   tokens. It waits for you.
-- **A usage limit stops the worker,** it doesn't burn retries.
+- **A usage limit stops the worker,** it doesn't burn retries. The task it
+  was on is left `failed`, with the limit as its reason: see below.
 - **A question blocks its task** and the worker moves to the next one.
+
+## After a usage limit
+
+The worker stops, because the next task would meet the same limit. The task
+it was working on is `failed`, and a failed task isn't taken again until its
+owner reopens it. Starting the worker again doesn't retry it. When the limit
+has lifted:
+
+```bash
+mu tasks work/ --state failed
+mu tasks reopen 12
+mu run --ready work/ --loop --wait 10m --agent claude --as night-1
+```
+
+Read the reason before you reopen: a task that failed for another cause is
+in the same list. muster doesn't wait a limit out for you.
 
 ## Things that should happen on a clock
 
