@@ -2,7 +2,7 @@ import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared'
 
 export function baseOptions(): BaseLayoutProps {
   return {
-    nav: { title: <span className="font-mono font-semibold tracking-tight">muster</span> },
+    nav: { title: <span className="font-semibold tracking-tight">muster</span> },
     // One theme, so nothing to switch.
     themeSwitch: { enabled: false },
     githubUrl: 'https://github.com/openmuster/muster',

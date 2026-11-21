@@ -46,16 +46,18 @@ body {
   color: var(--muster-fg);
 }
 
-/* Chrome is monospace, like the CLI and the inspector; prose stays in a reading face. */
-#nd-sidebar,
-#nd-nav,
-#nd-subnav,
-#nd-toc,
+/* Geist Sans for the interface and the prose. Geist Mono only where the text is technical: code,
+   terminal output, commands, IDs. Mono says "this is machine text", never "this is important". */
 h1,
 h2,
 h3,
 h4 {
-  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+/* Figures line up in tables without changing face. */
+.prose table {
+  font-variant-numeric: tabular-nums;
 }
 
 #nd-sidebar,
