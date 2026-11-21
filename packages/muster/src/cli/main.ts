@@ -253,13 +253,16 @@ const commands: Record<string, Command> = {
   },
 
   read: {
-    spec: { value: ['after', 'before', 'limit', 'text', 'cursor'], many: ['label'] },
+    spec: { value: ['after', 'before', 'limit', 'text', 'cursor', 'mentions'], many: ['label'] },
     async run(run, parsed) {
       const target = parsed.positionals[0]
       if (target === undefined) throw misuse('nothing_to_read', 'Name a channel or a message.', 'mu channels lists the channels.')
       const labels = list(parsed.flags, 'label')
       const after = str(parsed.flags, 'after')
+      const mentions = str(parsed.flags, 'mentions')
       if (/^#?[1-9][0-9]*$/.test(target)) {
+        const whole = (['mentions', 'text', 'before', 'limit', 'cursor'] as const).find((name) => str(parsed.flags, name) !== undefined)
+        if (whole) throw misuse('unknown_flag', `--${whole} is for a channel's threads, and ${target} is one thread.`, 'One thread is read whole, or with --after <id> and --label.')
         const thread = await run.team.readThread({ id: id(target), ...(after ? { after: id(after) } : {}), ...(labels.length ? { labels } : {}) })
         return print(run, thread, () => {
           const now = run.now()
@@ -281,6 +284,7 @@ const commands: Record<string, Command> = {
         ...(limit !== undefined ? { limit: Number(limit) } : {}),
         ...(labels.length ? { labels } : {}),
         ...(text !== undefined ? { text } : {}),
+        ...(mentions !== undefined ? { mentions } : {}),
       })
       if (name !== undefined) await run.team.cursorSet(name, page.cursor)
       const { more: _more, ...document } = page
@@ -1486,13 +1490,6 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   const command = commands[name]!
   let team: Board | null = null
   try {
-    // `read` lists threads, and a mention is an event: the feed commands find those.
-    const mentions = name === 'read' ? own.indexOf('--mentions') : -1
-    if (mentions !== -1) {
-      const channel = own.slice(1).find((arg, at, all) => !arg.startsWith('--') && !(all[at - 1] ?? '').startsWith('--'))
-      const who = own[mentions + 1]
-      throw new Failure('unknown_flag', 'Unknown flag --mentions.', { exit: 2, hint: 'read lists threads; tail and wait take --mentions.', next: [`mu tail${channel ? ` ${channel}` : ''} --mentions ${who ?? '<who>'} --last 20`] })
-    }
     const parsed = parse(argv.slice(1), command.spec)
     const as = str(parsed.flags, 'as') ?? (io.env.MUSTER_PROFILE || undefined)
     const dir = str(parsed.flags, 'dir') ?? io.env.MUSTER_DIR

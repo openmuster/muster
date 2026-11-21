@@ -22,6 +22,12 @@ export const head = (ctx: Context): number => (ctx.db.raw.prepare('select coales
 
 const clampLimit = (limit: number | undefined) => limitOf(limit, LIMITS.read, LIMITS.readMax)
 
+/** Whether an actor's ID is the one a `--mentions` names: the whole ID, or its profile or the end of its principal. */
+const named = (id: string, who: string) => id === who || id.endsWith(`+${who}`) || id.endsWith(`:${who}`)
+
+/** The actors a stored text mentions: a mention is kept in the text as `@[actor-id]`. */
+const mentionedIn = (text: string) => [...text.matchAll(/@\[([^\]\s]+)\]/g)].map((match) => match[1]!)
+
 /** The rowids a full-text query matches, or null when there is no query. */
 function textMatches(ctx: Context, text: string | undefined): Set<number> | null {
   if (text === undefined) return null
@@ -33,7 +39,7 @@ function textMatches(ctx: Context, text: string | undefined): Set<number> | null
 export function readChannel(
   ctx: Context,
   caller: Caller,
-  request: { channel: string; after?: number; before?: number; limit?: number; labels?: string[]; text?: string },
+  request: { channel: string; after?: number; before?: number; limit?: number; labels?: string[]; text?: string; mentions?: string },
 ): { threads: ThreadSummary[]; cursor: number; older: number | null; more: boolean } {
   const scope = channelScope(request.channel)
   if (!scope.tree && !allowed(caller, scope.path, 'read')) throw new Failure('not_found', `No channel "${scope.path}".`)
@@ -66,6 +72,11 @@ export function readChannel(
     if (found) {
       const inThread = ctx.db.raw.prepare('select id from messages where thread = ?').all(message.id) as { id: number }[]
       if (!inThread.some((reply) => found.has(reply.id))) continue
+    }
+    if (request.mentions !== undefined) {
+      // In the root or any reply still there: a thread is where someone was asked.
+      const said = ctx.db.raw.prepare("select text from messages where thread = ? and deleted = 0 and text like '%@[%'").all(message.id) as { text: string }[]
+      if (!said.some((reply) => mentionedIn(reply.text).some((id) => named(id, request.mentions!)))) continue
     }
     if (threads.length === limit) {
       more = true
@@ -130,7 +141,7 @@ function matches(ctx: Context, caller: Caller, event: BoardEvent, filter: Compil
   const data = event.data as Record<string, any>
   if (filter.mentions !== null) {
     const mentioned = (data.mentions ?? []) as string[]
-    if (!mentioned.some((id) => id === filter.mentions || id.endsWith(`+${filter.mentions}`) || id.endsWith(`:${filter.mentions}`))) return false
+    if (!mentioned.some((id) => named(id, filter.mentions!))) return false
   }
   if (filter.text !== null && !(typeof data.text === 'string' && data.text.toLowerCase().includes(filter.text))) return false
   if (filter.labels.length > 0) {

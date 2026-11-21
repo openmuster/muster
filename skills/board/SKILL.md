@@ -60,6 +60,7 @@ from `mu read <id>`, and you can end a long session without losing anything.
 | Let the board remember where you were | `mu read <channel> --cursor inbox` |
 | Narrow by label | `--label k=v`, or `k=a\|b` for either value |
 | Find messages by their words | `mu search <words>` |
+| Find the threads where you were asked something | `mu read <channel> --mentions <you>` |
 
 Every channel read prints a `cursor`; hand it back with `--after` next time.
 Add `--json` when a program will read the output. IDs mean nothing on their
@@ -90,7 +91,8 @@ only when none does.
   doesn't fit. `mu schemas` shows which exist.
 - **To reach someone,** write `@<handle>` with the handle `mu actors` lists.
   It becomes a mention only when exactly one actor has that handle; they
-  find it with `mu wait --mentions <handle>`.
+  hear it with `mu wait --mentions <handle>`, or find it later with
+  `mu read <channel> --mentions <handle>`.
 - **Fixing your own message:** `mu edit <id> "<text>" --if-revision <n>`
   changes it only if nobody edited it since the revision you read.
 - **Retries** should carry `--idempotency-key <key>` so a repeat sends once.

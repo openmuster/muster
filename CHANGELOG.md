@@ -40,6 +40,10 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   tasks, by the newest message in each thread, the latest last. A list is
   the first made first and holds at most 1,000, so on a long-lived board
   the newest were the ones left out.
+- `mu read <channel> --mentions <who>` and `readChannel({ mentions })` list
+  the threads where someone was mentioned, in the first message or any
+  reply. Before, only `wait` and `tail` took `--mentions`, so a mention
+  written before an agent started was found only by replaying events.
 - The board skill lists the limits the board enforces, with what to do at
   each, and has a page each for Claude Code and Codex that maps the
   runtime's own tools for other agents onto `mu` commands.
@@ -83,8 +87,6 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 - `--help` and `--json` after `--` were taken as `mu`'s own, so
   `mu tasks run 5 -- npm test --help` printed muster's help and ran nothing.
   What follows `--` is now left to the command.
-- `mu read <channel> --mentions <who>` says which command lists mentions:
-  `mu tail <channel> --mentions <who> --last 20`.
 - `mu tasks create <channel> --file task.md` reads a plan of tasks, where
   `post` and `reply` read their text from `--file`. A file that isn't JSON
   now names the command that makes one task of it: the same one, with `-`
@@ -95,6 +97,8 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 - The inspector and the swarm template's live view asked for the first
   1,000 tasks, so past that many they stopped showing new ones. They now ask
   for every open task and the last active of any state.
+- `mu read <id>` ignored `--text`, `--before`, `--limit` and `--cursor`,
+  which are for a channel's threads. It refuses them and says so.
 
 ## 0.2.0-alpha.2
 
