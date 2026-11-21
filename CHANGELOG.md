@@ -5,6 +5,38 @@ versions are affected.
 
 ## Unreleased
 
+## 0.2.0-alpha.1
+
+A pre-release: it never becomes "latest". Install it by its own address.
+What it adds for cloud sandbox runs has passed its tests against stand-ins for
+the platforms and has not yet been run in a real sandbox.
+
+### Added
+
+- A cloud run is looked after the way a local one is: `mu run` itself runs in
+  the sandbox, so the claim is renewed during long work, a task the agent
+  leaves open is failed, and the session, tokens and cost are recorded.
+- `mu token list` and `mu token revoke <id>`: the board keeps a list of the
+  tokens it made, and can stop one.
+- A cloud run names its agent with `--as` and gets a token made for that run:
+  one profile, the task's channel, short-lived, and marked so what the agent
+  writes is never mirrored to a synced platform. `--no-sync` on
+  `mu token create` does the same for a token you make.
+- `mu mcp`: the board as one tool for an agent that can't run shell commands,
+  over MCP. It takes the arguments `mu` takes and gives no shell and no way
+  to the machine's files.
+- The docs have a Concepts section with diagrams, a quickstart that ends with
+  an agent doing a task, and guides whose steps a test runs.
+
+### Changed
+
+- The board's file is at store version 5 (it keeps the list of tokens). A
+  board made by an older muster is upgraded when opened, and can't then be
+  opened by an older muster. Back it up first with `mu backup`.
+- `mu token create --sub` is gone.
+
+## 0.1.2
+
 ### Security
 
 Affects 0.1.0 and 0.1.1, for anyone who started an agent in a cloud sandbox
@@ -27,6 +59,10 @@ Affects 0.1.0 and 0.1.1, for anyone who started an agent in a cloud sandbox
   allowance. A process ID sent over HTTP is ignored.
 - `--repo` refuses an address with a credential in it.
 
+These changes to the Vercel runner pass their tests against a stand-in for the
+platform, and have not yet been run in a real sandbox since they were made.
+If a cloud run that worked on 0.1.1 fails on 0.1.2, please open an issue.
+
 Still open: an agent can't read the model's key, but can use it to make the
 provider fetch a URL. Use a key made for sandboxes, with a spend limit and
 the provider's web tools off. See the sandbox guide.
@@ -41,19 +77,6 @@ the provider's web tools off. See the sandbox guide.
   broke `--json` for a program reading it.
 
 ### Added
-
-- A cloud run is looked after the way a local one is: `mu run` itself runs in
-  the sandbox, so the claim is renewed during long work, a task the agent
-  leaves open is failed, and the session, tokens and cost are recorded.
-- `mu token list` and `mu token revoke <id>`: the board keeps a list of the
-  tokens it made, and can stop one.
-- A cloud run names its agent with `--as` and gets a token made for that run:
-  one profile, the task's channel, short-lived, and marked so what the agent
-  writes is never mirrored to a synced platform. `--no-sync` on
-  `mu token create` does the same for a token you make.
-- `mu mcp`: the board as one tool for an agent that can't run shell commands,
-  over MCP. It takes the arguments `mu` takes and gives no shell and no way
-  to the machine's files.
 
 - `SECURITY.md`: how to report a vulnerability, and what muster talks to.
 - Releases carry a `SHA256SUMS` file, and their notes come from this file.
