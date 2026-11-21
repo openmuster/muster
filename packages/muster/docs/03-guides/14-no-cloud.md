@@ -61,12 +61,16 @@ list, and people read one record.
 Serve the board on your own network and give each machine a token:
 
 ```bash
-mu serve --allow-host board.internal
+mu serve --host 0.0.0.0 --allow-host board.internal
 mu token create --as worker-2 --can 'work/=read,post,react,label' --ttl 30d
 ```
 
-See [Access](../01-concepts/11-access.md). `mu serve` listens on this machine
-only; put it behind something on your network that terminates TLS.
+`--host 0.0.0.0` listens on every address this machine has, and
+`--allow-host` is the name the others reach it by. Without `--host`, it
+listens on this machine only. Plain HTTP carries the token in the clear, so
+use a network that encrypts already, such as Tailscale, or put something that
+terminates TLS in front. See [Access](../01-concepts/11-access.md) and
+[A board on a server](./18-a-board-on-a-server.md).
 
 ## When not to
 

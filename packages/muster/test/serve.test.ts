@@ -1,3 +1,4 @@
+import { request as httpRequest } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
@@ -218,6 +219,37 @@ describe('serve', () => {
     expect(JSON.parse(again.stdout).threads.map((thread: { message: { text: string } }) => thread.message.text).sort()).toEqual(['from the file', 'over http'])
     second.serving.child.kill('SIGTERM')
     await second.serving.done
+  }, 30_000)
+
+  it('listening beyond this machine needs the name it is reached by, and then prints no token for a log to keep', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'from the file'])
+    const bare = await cli(dir, ['serve', '--port', '0', '--host', '0.0.0.0', '--json'])
+    expect([bare.code, JSON.parse(bare.stderr).error.reason]).toEqual([2, 'allow_host_required'])
+    const serving = cliStart(dir, ['serve', '--port', '0', '--no-token'], { MUSTER_HOST: '0.0.0.0', MUSTER_ALLOW_HOSTS: 'board.example.com, board.internal' })
+    for (let i = 0; i < 100 && !serving.output().includes('token  '); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    const output = serving.output()
+    expect(output).toContain('listen 0.0.0.0  for board.example.com, board.internal')
+    expect(output).toContain('token  none printed: make one with mu token create')
+    expect(output).not.toMatch(/mu1\./)
+    const url = /url {4}(\S+)/.exec(output)![1]!
+    const health = await fetch(`${url}/health`)
+    expect([health.status, await health.json()]).toEqual([200, { ok: { version: expect.any(String) } }])
+    const token = (await cli(dir, ['token', 'create', '--can', 'general=read'])).stdout.trim()
+    // fetch won't send a Host header of a caller's choosing; a proxy in front of the board does.
+    const as = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        const request = httpRequest(`${url}/whoami`, { headers: { authorization: `Bearer ${token}`, host } }, (response) => {
+          response.resume()
+          resolve(response.statusCode ?? 0)
+        })
+        request.on('error', reject)
+        request.end()
+      })
+    expect(await as('board.internal')).toBe(200)
+    expect(await as('elsewhere.example')).toBe(403)
+    serving.child.kill('SIGTERM')
+    await serving.done
   }, 30_000)
 
   it('a board URL with no token is refused before anything is sent', async () => {

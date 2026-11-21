@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Backend } from '../backend/types.ts'
+import { VERSION } from '../version.ts'
 import { Failure, misuse } from '../failure.ts'
 import { profileName, type Caller } from '../model.ts'
 import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
@@ -103,6 +104,8 @@ export function createHandler(options: ServeOptions) {
       // A page on another site can make a browser send requests here under a name it controls.
       if (name !== '127.0.0.1' && name !== 'localhost' && name !== '[::1]' && !extra.has(name) && !extra.has(host)) throw new Failure('forbidden', `This board doesn't answer for "${host}".`)
       const url = new URL(req.url ?? '/', 'http://board')
+      // For a container's health check and a load balancer: no token, and nothing about the board.
+      if (url.pathname === MOUNT + '/health' && req.method === 'GET') return send(res, 200, { ok: { version: VERSION } })
       if (!url.pathname.startsWith(MOUNT + '/')) throw new Failure('not_found', 'No such route.')
       if (url.pathname.startsWith(MOUNT + '/webhooks/') && req.method === 'POST') {
         // A platform can't hold a token of ours: its own signature, checked by the provider, is what proves it.
@@ -205,15 +208,27 @@ export function createHandler(options: ServeOptions) {
   }
 }
 
-export function listen(options: ServeOptions & { port?: number }): Promise<{ server: Server; url: string; close(): Promise<void> }> {
-  const server = createServer(createHandler(options))
+/** Whether an address to listen on is this machine only. */
+export const isLoopback = (host: string) => host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
+
+export function listen(options: ServeOptions & { port?: number; host?: string }): Promise<{ server: Server; url: string; close(): Promise<void> }> {
+  const host = options.host ?? '127.0.0.1'
+  // Listening beyond this machine without naming the hosts it answers for would refuse every request but
+  // its own; worse, it would mean whoever set it up hasn't thought about which name the board is reached by.
+  if (!isLoopback(host) && (options.hosts ?? []).length === 0) {
+    throw misuse('allow_host_required', `Listening on ${host} needs the name the board is reached by: pass --allow-host.`)
+  }
+  // How this process reaches itself: loopback when it listens everywhere, or the one address it listens on.
+  const self = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  const hosts = isLoopback(self) ? options.hosts : [...(options.hosts ?? []), self]
+  const server = createServer(createHandler({ ...options, ...(hosts ? { hosts } : {}) }))
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(options.port ?? 0, '127.0.0.1', () => {
+    server.listen(options.port ?? 0, host, () => {
       const address = server.address() as { port: number }
       resolve({
         server,
-        url: `http://127.0.0.1:${address.port}${MOUNT}`,
+        url: `http://${self}:${address.port}${MOUNT}`,
         close: () => new Promise((done) => { server.closeAllConnections?.(); server.close(() => done()) }),
       })
     })

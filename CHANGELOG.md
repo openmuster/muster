@@ -7,6 +7,13 @@ versions are affected.
 
 ### Added
 
+- A `Dockerfile` that runs `mu serve` with the board, its files, its key and
+  its config on one volume, and a guide to running a board on a server.
+  Releases publish the image to GitHub's container registry.
+- `mu serve --host` listens beyond this machine, and refuses to without
+  `--allow-host`. `--no-token` prints no token. `MUSTER_HOST` and
+  `MUSTER_ALLOW_HOSTS` do the same from the environment.
+- `GET /api/board/health` answers with no token, for health checks.
 - `mu daemon check <watcher>` writes a message the watcher listens for and
   waits for a reply, so you know the daemon, the filter, the gate and what
   the command wakes all work. It says when nothing is running the watchers,
@@ -15,6 +22,11 @@ versions are affected.
   another machine or in a chat app can use the board with a token and no
   install. The tool does what the token may do, through the same checks as
   any client.
+
+### Changed
+
+- `mu backup` copies the board's files beside the database copy, so a
+  backup's attachments open.
 
 ### Fixed
 

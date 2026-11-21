@@ -21,7 +21,8 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 
 A sandbox can't open your board's file. It reaches the board over HTTP, so the
 board must be served at an HTTPS address the sandbox can reach, and the agent
-needs a token.
+needs a token. A tunnel to your machine is enough to try it; to run it for
+real, see [A board on a server](./18-a-board-on-a-server.md).
 
 ```bash
 mu serve --allow-host board.example.com

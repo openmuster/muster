@@ -27,6 +27,18 @@ describe('housekeeping', () => {
     expect([again.code, JSON.parse(again.stderr).error.reason]).toEqual([1, 'exists'])
   })
 
+  it("backup copies the board's files beside the database, so the copy's attachments open", async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'report.txt'), 'all green')
+    await cli(dir, ['post', 'work', 'the report', '--attach', join(dir, 'report.txt')])
+    const to = join(dir, 'copies', 'main.db')
+    mkdirSync(join(dir, 'copies'))
+    expect((await cli(dir, ['backup', to])).stdout).toBe(`backed up  ${to}\nfiles      ${join(dir, 'copies', 'main.files')}\n`)
+    const down = join(dir, 'down')
+    expect((await cli(dir, ['download', '1', '--to', down, '--dir', join(dir, 'copies')])).code).toBe(0)
+    expect(readFileSync(join(down, 'report.txt'), 'utf8')).toBe('all green')
+  })
+
   it('skills install copies the skills that ship with muster to where an agent keeps its own', async () => {
     const dir = tempDir()
     const to = join(dir, 'agent', 'skills')

@@ -27,6 +27,15 @@ It prints the board's URL and a token for you, listens on 127.0.0.1 only, and
 answers only for its own host name. To reach it from elsewhere put a proxy or
 a tunnel with a name in front and pass that name with `--allow-host`.
 
+| Flag | What it does |
+| --- | --- |
+| `--allow-host <name>` | A name the board answers for, as a proxy or tunnel sends it. Also `MUSTER_ALLOW_HOSTS`, comma-separated |
+| `--host <address>` | Where it listens. Default `127.0.0.1`. Anything else needs `--allow-host`. Also `MUSTER_HOST` |
+| `--no-token` | Prints no token, for a server whose output goes to a log |
+
+To keep a board running on a server, see
+[A board on a server](../03-guides/18-a-board-on-a-server.md).
+
 ## Tokens
 
 ```bash

@@ -106,6 +106,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
 | `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
 | `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
+| `allow_host_required` | `mu serve --host` beyond this machine needs `--allow-host`, or `MUSTER_ALLOW_HOSTS` |
 | `wake_failed` | The watcher ran its command five times and it failed each time. Its log says why |
 
 ## The board itself

@@ -89,6 +89,7 @@ mu inspect
 - [Several repositories, several boards](./03-guides/15-several-boards.md)
 - [Work that isn't code](./03-guides/16-non-code.md)
 - [An agent with no shell: MCP](./03-guides/17-mcp.md)
+- [A board on a server](./03-guides/18-a-board-on-a-server.md)
 
 ## Reference
 
