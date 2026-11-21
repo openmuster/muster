@@ -31,7 +31,11 @@ the same markdown, read from `packages/muster/docs`; nothing is copied.
 test checks every relative link in the real docs lands on a page. Keep docs
 prose plain markdown with no JSX. The site is dark only, on the inspector's
 colours, in Geist Sans; Geist Mono is for code, terminal output and
-technical values only, never to make something stand out. `.github/workflows/deploy-docs.yml` deploys it to Cloudflare Workers
+technical values only, never to make something stand out. The home page's demo is data
+(`apps/docs/components/story/cues.ts`): what it shows is a function of time, so
+it is tested, pauses, and shows each scene finished to anyone who asked for
+less motion. Its commands print what the CLI really prints, and its code is
+run against the library before it is changed. `.github/workflows/deploy-docs.yml` deploys it to Cloudflare Workers
 through OpenNext once the repository has the Cloudflare variable and secret.
 
 A guide says who it is for, what it needs, the steps, what you see, when not

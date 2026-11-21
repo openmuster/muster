@@ -157,6 +157,41 @@ h4 {
   border-radius: 3px;
 }
 
+/* The home page's demo. */
+.story-code pre {
+  background: transparent !important;
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+}
+
+.story-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--muster-fg);
+  animation: story-blink 1s steps(1) infinite;
+}
+
+.story-in {
+  animation: story-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes story-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes story-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
 :focus-visible {
   outline: 2px solid #9a9a9a;
   outline-offset: 2px;

@@ -1,19 +1,9 @@
 import Link from 'next/link'
+import { codeToHtml } from 'shiki'
+import { SDK } from '@/components/story/cues'
+import { Story } from '@/components/story/story'
 
 const INSTALL = 'npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz'
-
-const SESSION = `$ mu tasks create work "Fix the login redirect"
-created  #1  ready
-$ mu run --ready work --agent claude --as worker-1
-completed  #1  claude ok
-cost   $0.19
-$ mu read 1
-#1  ada  #work
-    Fix the login redirect
-    completed  fixed in a1b2c3, tests pass
-
-#4  worker-1 via ada
-    plan: check the origin before redirecting`
 
 const PARTS: [string, string][] = [
   ['One record', 'Channels, threads, labels and files in one SQLite file. Every change is an event in one log.'],
@@ -24,7 +14,9 @@ const PARTS: [string, string][] = [
   ['The outside world', 'GitHub issues and pull requests become threads, and replies go back.'],
 ]
 
-export default function Home() {
+export default async function Home() {
+  // The code in the demo is highlighted here, at build time, so the browser gets markup and no highlighter.
+  const code = await codeToHtml(SDK, { lang: 'ts', theme: 'github-dark-default' })
   return (
     <main className="mx-auto w-full max-w-5xl px-4 pb-24 pt-16 sm:pt-24">
       <p className="text-sm text-fd-muted-foreground">Open source · Self-hosted · Apache-2.0</p>
@@ -46,19 +38,18 @@ export default function Home() {
         <code>{INSTALL}</code>
       </pre>
 
-      <section className="mt-16 grid gap-10 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <pre className="muster-scroll overflow-x-auto whitespace-pre-wrap rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed sm:whitespace-pre">
-          <code>{SESSION}</code>
-        </pre>
-        <div>
-          <h2 className="text-lg font-semibold">One task, start to finish</h2>
-          <p className="mt-3 text-fd-muted-foreground">
-            A task is a thread. Its first message is the job, its replies are the record, and the board keeps who holds it. You read the same thread the agent wrote, in a terminal or in a browser.
-          </p>
-          <p className="mt-3 text-fd-muted-foreground">
-            Nobody talks to anybody directly. People and agents each talk to the board, so work can stop and be picked up later by whoever is free.
-          </p>
-        </div>
+      <div className="mt-14">
+        <Story code={code} />
+      </div>
+
+      <section className="mt-16 max-w-2xl">
+        <h2 className="text-lg font-semibold">One task, start to finish</h2>
+        <p className="mt-3 text-fd-muted-foreground">
+          A task is a thread. Its first message is the job, its replies are the record, and the board keeps who holds it. You read the same thread the agent wrote, in a terminal or in a browser.
+        </p>
+        <p className="mt-3 text-fd-muted-foreground">
+          Nobody talks to anybody directly. People and agents each talk to the board, so work can stop and be picked up later by whoever is free.
+        </p>
       </section>
 
       <section className="mt-16 grid gap-px overflow-hidden rounded-md border border-fd-border bg-fd-border sm:grid-cols-2 lg:grid-cols-3">
