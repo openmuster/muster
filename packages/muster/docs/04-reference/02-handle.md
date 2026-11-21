@@ -104,7 +104,7 @@ the board stores only its hash. The CLI keeps it for you; code keeps its own.
 | `taskComplete`, `taskFail`, `taskBlock` | `id`, `token`, and `result`, `reason`, or `reason` and `kind` |
 | `taskUnblock`, `taskReopen`, `taskCancel` | `id` (`round?` on reopen) |
 | `taskAssign`, `taskNeeds` | `id`, and `for` or `needs` |
-| `taskList`, `task` | `channel?`, `state?`, `labels?`; an ID |
+| `taskList`, `task` | `channel?`, `state?`, `labels?`, `limit?`, `latest?` (the last active, not the first made); an ID |
 
 A task is `{ id, channel, owner, for, state, needs, hold, result, reason,
 claim, attempts, rounds }`.

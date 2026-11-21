@@ -31,6 +31,7 @@ write
 
 tasks
   tasks [<channel>]              [--state open|all|<state>] [--label k=v]...
+       [--limit n] [--latest]
   tasks create <channel> <text>  [--label k=v]... [--needs <id>]...
        [--for <profile>] [--claim]
   tasks create <id>              make a thread a task

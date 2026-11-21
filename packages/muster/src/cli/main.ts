@@ -922,7 +922,7 @@ const commands: Record<string, Command> = {
     spec: {
       value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key'],
       many: ['label', 'needs', 'from'],
-      bool: ['claim', 'no-sync', 'round', 'pool', 'none', 'no-count'],
+      bool: ['claim', 'no-sync', 'round', 'pool', 'none', 'no-count', 'latest'],
     },
     run: tasks,
   },
@@ -978,9 +978,10 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       ...(state !== undefined ? { state } : {}),
       ...(labels.length ? { labels } : {}),
       ...(limit !== undefined ? { limit: Number(limit) } : {}),
+      ...(on(parsed.flags, 'latest') ? { latest: true } : {}),
     })
     return print(run, { tasks: found.tasks }, () =>
-      found.tasks.length === 0 ? `no ${state && state !== 'all' ? state + ' ' : state === 'all' ? '' : 'open '}tasks` : found.tasks.map((task) => taskRow(task, now())).join('\n') + (found.more ? '\n(more not shown: narrow with --state or --label)' : ''),
+      found.tasks.length === 0 ? `no ${state && state !== 'all' ? state + ' ' : state === 'all' ? '' : 'open '}tasks` : found.tasks.map((task) => taskRow(task, now())).join('\n') + (found.more ? (on(parsed.flags, 'latest') ? '\n(the last active: others not shown)' : '\n(more not shown: narrow with --state or --label, or see --latest)') : ''),
     )
   }
 

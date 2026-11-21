@@ -97,4 +97,23 @@ describe('snapshot', () => {
     const results = await Promise.allSettled([team.as('agent-1').taskClaim({ ready: 'swarm/' }), team.as('agent-2').taskClaim({ ready: 'swarm/' })])
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
   })
+
+  it('past what one list holds, still shows every open task and the ones that just finished', async () => {
+    const team = fresh()
+    const make = async (text: string) => (await team.taskCreate({ channel: 'swarm/long', text })).task.id
+    const stuck = await make('held for an answer since the start')
+    await team.taskBlock({ id: stuck, reason: 'which region?' })
+    const done: number[] = []
+    for (const text of ['one', 'two', 'three', 'four']) {
+      const id = await make(text)
+      await team.taskComplete({ id, token: (await team.taskClaim({ id })).token, result: 'done' })
+      done.push(id)
+    }
+    const fresh2 = await make('just queued')
+    const shown = await snapshot(team, 'swarm', 3)
+    expect(shown.tasks.blocked.map((task) => task.id)).toEqual([stuck])
+    expect(shown.tasks.ready.map((task) => task.id)).toEqual([fresh2])
+    // The newest finished, newest first: the two the last-active list had room for beside the one just queued.
+    expect(shown.tasks.completed.map((task) => task.id)).toEqual([done[3], done[2]])
+  })
 })

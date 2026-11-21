@@ -99,6 +99,13 @@ export async function conformance(team: Board): Promise<Check[]> {
     const held = await a.taskBlock({ id: task.id, reason: '?', kind: 'awaiting_approval' })
     return held.task.hold?.kind === 'awaiting_approval' && (await a.taskUnblock({ id: task.id })).task.state === 'ready'
   })
+  await check('the last active tasks are listed on request, the latest last', async () => {
+    const first = (await a.taskCreate({ channel, text: 'made first' })).task.id
+    const second = (await a.taskCreate({ channel, text: 'made second' })).task.id
+    await b.reply({ to: first, text: 'said last' })
+    const latest = (await team.taskList({ channel, state: 'all', latest: true, limit: 2 })).tasks.map((task) => task.id)
+    return latest.join() === `${second},${first}` || `listed ${latest.join()}`
+  })
   await check('what does not exist is not found', async () => (await reasonOf(team.readThread({ id: 2_000_000_000 }))) === 'not_found')
   return out
 }
