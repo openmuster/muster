@@ -281,6 +281,10 @@ describe('serve', () => {
     expect(await reason(writer.filePut({ name: 'f5', data }))).toBe('file_allowance')
     // The allowance is each token holder's own, and the owner has none to run out of.
     expect((await as({ profile: 'x', can: { 'work/': ['post'] } }).filePut({ name: 'f', data: 'eA==' })).size).toBe(1)
+    // A token held to no profile names one per request, and gets no new allowance for each name it thinks of.
+    const loose = as({ can: { 'work/': ['read', 'post'] } })
+    for (let i = 0; i < 4; i++) await loose.as(`name-${i}`).filePut({ name: `g${i}`, data: Buffer.alloc(24 * 1024 * 1024, 2 + i).toString('base64') })
+    expect(await reason(loose.as('another').filePut({ name: 'g5', data }))).toBe('file_allowance')
     await server.close()
   })
 

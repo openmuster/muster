@@ -21,6 +21,9 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   `invalid_limit`.
 - A live feed checked its token only when it opened. It now ends when the
   token is revoked or runs out.
+- A narrowed token held to no profile got a new 100 MB file allowance for
+  each profile name it asked to write as. The allowance is now counted
+  against the token.
 
 ### Added
 

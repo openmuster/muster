@@ -8,6 +8,8 @@ export type Caller = {
   profile: string | null
   /** What it may do, by channel pattern. Absent means everything (file mode, or a full token). */
   can?: Record<string, readonly Permission[]>
+  /** What a narrowed token's allowance is counted against: something the token carries, never a name the request chose. */
+  meter?: string
   /** The private channels, as the board knows them: a narrowed caller reaches one only by its exact name. */
   privates?: readonly string[]
   /** What this caller writes never leaves the board for a synced platform. Set by its token, not by a request. */

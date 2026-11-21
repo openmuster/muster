@@ -26,7 +26,7 @@ const spent = new WeakMap<object, Map<string, { day: number; bytes: number }>>()
 function spend(ctx: Context, caller: Caller, bytes: number) {
   let map = spent.get(ctx.db.raw)
   if (!map) spent.set(ctx.db.raw, (map = new Map()))
-  const key = `${caller.principal}+${caller.profile ?? ''}`
+  const key = `${caller.principal}+${caller.meter ?? caller.profile ?? ''}`
   const day = Math.floor(ctx.now().getTime() / 86_400_000)
   const used = map.get(key)?.day === day ? map.get(key)!.bytes : 0
   if (used + bytes > FILE_ALLOWANCE) throw new Failure('file_allowance', "This token has stored its day's allowance of files (100 MB).", { hint: 'Attach less, or ask whoever runs the board to store it.' })
