@@ -44,6 +44,9 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   the threads where someone was mentioned, in the first message or any
   reply. Before, only `wait` and `tail` took `--mentions`, so a mention
   written before an agent started was found only by replaying events.
+- `mu <command> --help` and `mu help <command>` print that command's own
+  lines and what every command takes, where they printed the whole help.
+  `mu tasks claim --help` prints one form of a command.
 - The board skill lists the limits the board enforces, with what to do at
   each, and has a page each for Claude Code and Codex that maps the
   runtime's own tools for other agents onto `mu` commands.

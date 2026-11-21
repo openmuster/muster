@@ -108,3 +108,42 @@ serve
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
 exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated`
+
+const GLOBAL_LINE = 'global: [--as <profile>] [--board <name>] [--dir <path>] [--url <board url>] [--json]'
+
+/**
+ * One command's part of the help: its lines as the whole help has them, under the section they are in,
+ * with that section's notes. It is cut from `HELP`, so the two can't disagree. With a second word
+ * (`tasks claim`) it is that form alone, when the help has one. Undefined for a name the help doesn't list.
+ */
+export function helpFor(name: string, sub?: string): string | undefined {
+  const pick = (first: string, second?: string) => {
+    const out: string[] = []
+    for (const section of HELP.split('\n\n').slice(1)) {
+      const [title, ...lines] = section.split('\n')
+      if (!title || title.startsWith(' ') || title.includes(':')) continue
+      const entries: string[] = []
+      const notes: string[] = []
+      let taking = false
+      for (const line of lines) {
+        if (/^ {2}[a-z]/.test(line)) {
+          const words = line.trim().split(/\s+/)
+          // `schedule list | schedule cancel <id>` names two forms on one line.
+          const forms = line.trim().split(' | ').map((form) => form.trim().split(/\s+/))
+          taking = words[0] === first && (second === undefined || forms.some((form) => form[0] === first && form[1] === second))
+          if (taking) entries.push(line)
+        } else if (/^ {2}[A-Z]/.test(line)) {
+          taking = false
+          notes.push(line)
+        } else if (taking) entries.push(line)
+      }
+      // A section's notes are about the command; with one form picked out they may be about another.
+      if (entries.length) out.push([title, ...entries, ...(second === undefined ? notes : [])].join('\n'))
+    }
+    return out
+  }
+  const narrowed = sub !== undefined && !sub.startsWith('-') ? pick(name, sub) : []
+  const found = narrowed.length ? narrowed : pick(name)
+  if (found.length === 0) return undefined
+  return [`mu ${name}${narrowed.length ? ` ${sub}` : ''}`, ...found, `${GLOBAL_LINE}\nmu help lists every command.`].join('\n\n')
+}
