@@ -49,6 +49,8 @@ code { border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; font: 
 input, textarea { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; cursor: text; }
 textarea { resize: none; border: none; background: none; padding: 4px 0; outline: none; }
 .bar { display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; }
+button.quiet { margin-left: 0; background: none; color: var(--dim); border: 1px solid var(--line); }
+select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 6px; font: inherit; }
 button { margin-left: auto; background: var(--fg); color: var(--bg); border: none; border-radius: 3px; padding: 6px 12px; font: inherit; cursor: default; }
 .pane { width: 420px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 .messages { flex: 1; overflow: auto; }

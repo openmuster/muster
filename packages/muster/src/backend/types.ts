@@ -1,5 +1,6 @@
 import type * as blocks from '../core/blocks.ts'
 import type { MintRequest, Registry, TokenRecord } from '../serve/tokens.ts'
+import type { JoinRecord, Joins } from '../serve/joins.ts'
 import type * as files from '../core/files.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
@@ -27,6 +28,16 @@ export type Backend = {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
     list(): Promise<{ tokens: TokenRecord[] }>
     revoke(request: { id: string }): Promise<{ revoked: string }>
+  }
+  /** The board's own requests to join, where it keeps them: what `mu serve` answers them from. */
+  joinStore?: () => Joins
+  /** Asking to join (no token needed), and answering: listing, approving with what the token may do, refusing. */
+  joins: {
+    ask(request: { profile: string; note?: string }): Promise<{ code: string; secret: string; expires: number }>
+    poll(request: { code: string; secret: string }): Promise<{ state: 'pending' } | { state: 'approved'; token: string } | { state: 'denied' }>
+    list(): Promise<{ joins: JoinRecord[] }>
+    approve(request: { code: string; can: Record<string, string[]>; ttl: number; noSync?: boolean }): Promise<{ join: JoinRecord; record: TokenRecord }>
+    deny(request: { code: string }): Promise<{ join: JoinRecord }>
   }
 
   post: Op<typeof messages.post>

@@ -2,6 +2,7 @@ import { Failure } from '../failure.ts'
 import type { Caller } from '../model.ts'
 import { ROUTES } from '../serve/server.ts'
 import type { MintRequest, TokenRecord } from '../serve/tokens.ts'
+import type { JoinRecord } from '../serve/joins.ts'
 import type { Backend } from './types.ts'
 
 export type HttpOptions = {
@@ -23,7 +24,8 @@ export function http(options: HttpOptions): Backend {
       response = await doFetch(`${await base()}/${route}`, {
         method: init.method,
         headers: {
-          authorization: `Bearer ${options.token}`,
+          // Asking to join is the one thing done with no token yet.
+          ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
           ...(caller.profile ? { 'x-muster-profile': caller.profile } : {}),
           ...(init.method === 'POST' ? { 'content-type': 'application/json' } : {}),
         },
@@ -63,6 +65,13 @@ export function http(options: HttpOptions): Backend {
       create: (request: MintRequest) => post('tokenCreate', request) as Promise<{ token: string; record: TokenRecord }>,
       list: () => post('tokenList', {}) as Promise<{ tokens: TokenRecord[] }>,
       revoke: (request: { id: string }) => post('tokenRevoke', request) as Promise<{ revoked: string }>,
+    },
+    joins: {
+      ask: (request: { profile: string; note?: string }) => post('joinAsk', request) as Promise<{ code: string; secret: string; expires: number }>,
+      poll: (request: { code: string; secret: string }) => post('joinPoll', request) as Promise<{ state: 'pending' } | { state: 'approved'; token: string } | { state: 'denied' }>,
+      list: () => post('joinList', {}) as Promise<{ joins: JoinRecord[] }>,
+      approve: (request: { code: string; can: Record<string, string[]>; ttl: number; noSync?: boolean }) => post('joinApprove', request) as Promise<{ join: JoinRecord; record: TokenRecord }>,
+      deny: (request: { code: string }) => post('joinDeny', request) as Promise<{ join: JoinRecord }>,
     },
     scheduleTick: async () => {
       throw new Failure('forbidden', 'The board itself sends what is due.')

@@ -93,9 +93,14 @@ serve
                                  trust with the file and for other machines
        [--allow-host <name>]...  a name a proxy or tunnel reaches it by
        [--host 0.0.0.0] [--no-token]  listen beyond this machine; print no token
+       [--allow-joins]           let an agent with no token ask to join
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
        [--no-sync]
   token list | token revoke <id>
+  join <board url> --as <name>   ask a served board for a token, and wait
+       [--note <text>] [--timeout 10m]
+  join list | join deny <code>
+  join approve <code> --can <channel>=read,post... [--ttl 7d] [--no-sync]
   Set MUSTER_URL and MUSTER_TOKEN, and every command uses that board.
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled

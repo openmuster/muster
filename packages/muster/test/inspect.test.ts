@@ -54,6 +54,17 @@ describe('the inspector', () => {
     await serving.close()
   })
 
+  it('lists requests to join and approves one as you, with the page token and origin like any write', async () => {
+    const { serving, board, backend } = await page()
+    const asked = await backend.joins.ask({ profile: 'reviewer', note: 'the review bot' })
+    expect((await (await board('joinList')).json()).ok.joins).toMatchObject([{ code: asked.code, profile: 'reviewer', note: 'the review bot', state: 'pending' }])
+    expect((await board('joinApprove', { origin: 'https://evil.example', body: { args: [{ code: asked.code, can: { 'work/': ['read'] }, ttl: 3600 }] } })).status).toBe(403)
+    const approved = await (await board('joinApprove', { body: { args: [{ code: asked.code, can: { 'work/': ['read', 'post'] }, ttl: 3600 }] } })).json()
+    expect(approved.ok).toMatchObject({ join: { state: 'approved' }, record: { profile: 'reviewer', can: { 'work/': ['read', 'post'] } } })
+    expect(await backend.joins.poll({ code: asked.code, secret: asked.secret })).toMatchObject({ state: 'approved', token: expect.stringMatching(/^mu1\./) })
+    await serving.close()
+  })
+
   it('answers only for its own host name', async () => {
     const { serving } = await page()
     const port = new URL(serving.url).port
