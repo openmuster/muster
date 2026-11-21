@@ -9,8 +9,8 @@ import { processStart } from '../process.ts'
 import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
-import { loadDaemonConfig, runDaemon, watchersPath } from '../daemon/daemon.ts'
-import { armHooks, hooksPath, ping, why } from '../daemon/hooks.ts'
+import { loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
 import { answer as answerMcp } from './mcp.ts'
@@ -115,6 +115,8 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
       if (GAVE_UP.test(event.message?.text ?? '')) {
         throw new Failure('wake_failed', `Watcher "${watcher.name}" ran its command, and the command kept failing.`, { hint: `Its log says why: ${join(configDir(), 'logs')}.`, data: { thread } })
       }
+      // A hook's note that it gave up on the check's own message is the daemon talking, not what the watcher woke.
+      if (DROPPED.test(event.message?.text ?? '')) continue
       const answered = { watcher: watcher.name, thread, by: event.by, seconds: Math.round((run.now() - started) / 1000) }
       print(run, answered, () => `answered  #${thread}  by ${who(event.by)}  in ${span(run.now() - started)}`)
       return 0
@@ -819,15 +821,28 @@ const commands: Record<string, Command> = {
       let watchers: ReturnType<typeof loadDaemonConfig>['watchers'] = []
       let hooks: ReturnType<typeof armHooks> = []
       try {
-        const config = loadDaemonConfig(run.io.env)
-        watchers = config.watchers
-        hooks = config.arm()
+        watchers = loadWatchers()
       } catch (error) {
         run.io.err(`error: ${(error as Error).message}`)
       }
+      // On their own, so a hooks file that is wrong costs the hooks and never the watchers. The board is served either way.
+      try {
+        hooks = armHooks(loadHooks(), run.io.env).filter((hook) => {
+          const taken = watchers.some((watcher) => watcher.name === hook.name)
+          if (taken) run.io.err(`error: A watcher and a hook are both named "${hook.name}": the hook is not sent.`)
+          return !taken
+        })
+      } catch (error) {
+        run.io.err(`error: ${(error as Error).message}`)
+        run.io.err('  No outgoing webhooks are sent until that is fixed and the server restarted.')
+      }
+      // A server's output is its address and its token. What a hook couldn't deliver is the one thing worth adding.
+      const log = (line: string) => {
+        if (/^(failed|dropped) {2,}hook /.test(line)) run.io.err(line)
+      }
       try {
         // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, stop: run.io.stop, log: () => {} })
+        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.

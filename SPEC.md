@@ -37,7 +37,9 @@ store (SQLite)  <-  policy  <-  backend: file() | http()  <-  board() handle  <-
   labels, checks authority, and runs middleware. It is the only place rules
   live, and both backends go through it: `file()` in the caller's process,
   `http()` inside `mu serve`.
-- The CLI makes no store or HTTP calls of its own. It calls the handle.
+- The CLI makes no store or HTTP calls of its own. It calls the handle. The
+  one exception is `mu daemon check <hook>`, which sends a signed ping to an
+  outgoing webhook's URL: that is the owner's own service, not a board.
 - `muster conformance` runs one suite against any backend. `file()` and
   `http()` must pass it identically.
 

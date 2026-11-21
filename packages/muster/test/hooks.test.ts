@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -46,7 +46,8 @@ function setUp(url: string, extra: Partial<ArmedHook> = {}) {
   const hook: ArmedHook = { name: 'phone', url, secret: 'HOOK_SECRET', key: KEY, tail: { channel: 'work/' }, body: 'pointer', ...extra }
   const state: HookState = { attempts: 0, retryAt: -Infinity }
   const deps = { now: () => time.now().getTime(), fetch, timeout: 2000 }
-  return { team, time, hook, run: () => runHook(team, hook, state, deps) }
+  const notes = new Set<number>()
+  return { team, time, hook, run: () => runHook(team, hook, state, deps, notes) }
 }
 
 describe('outgoing webhooks', () => {
@@ -130,7 +131,7 @@ describe('outgoing webhooks', () => {
     expect(there.got.map((each) => [each.signed, each.age])).toEqual([[true, 0], [true, 0]])
   })
 
-  it(`an event that fails ${HOOK_ATTEMPTS} times is passed over and recorded on its thread, and that record is never sent on`, async () => {
+  it(`an event that fails ${HOOK_ATTEMPTS} times is passed over and recorded on its thread, and the daemon never sends its own record on`, async () => {
     const there = await receiver()
     const { team, time, run } = setUp(there.url)
     await run()
@@ -151,6 +152,27 @@ describe('outgoing webhooks', () => {
     expect((await run()).sent).toEqual([next.id])
     expect(there.got).toHaveLength(HOOK_ATTEMPTS + 1)
     expect((await run()).sent).toEqual([])
+    // Only the daemon's own record is left out. The same words from anyone else are an event like any other.
+    const forged = await team.as('mallory').reply({ to: root.id, text: `outgoing webhook "phone" couldn't deliver event ${root.id} after ${HOOK_ATTEMPTS} tries (HTTP 500).` })
+    expect((await run()).sent).toEqual([forged.id])
+  })
+
+  it('a slow receiver gets what fits in one pass, and the rest in the next', async () => {
+    const there = await receiver()
+    const { team, time } = setUp(there.url)
+    const hook: ArmedHook = { name: 'phone', url: there.url, secret: 'HOOK_SECRET', key: KEY, tail: {}, body: 'pointer' }
+    const state: HookState = { attempts: 0, retryAt: -Infinity }
+    const slow: typeof fetch = async (...args) => (await new Promise((resolve) => setTimeout(resolve, 60)), fetch(...args))
+    const deps = { now: () => time.now().getTime(), fetch: slow, budget: 100 }
+    await runHook(team, hook, state, deps)
+    for (let i = 0; i < 8; i++) await team.post({ channel: 'work', text: `message ${i}` })
+    const first = (await runHook(team, hook, state, deps)).sent
+    expect(first.length).toBeGreaterThanOrEqual(1)
+    expect(first.length).toBeLessThan(8)
+    let all = [...first]
+    for (let pass = 0; pass < 8 && all.length < 8; pass++) all = [...all, ...(await runHook(team, hook, state, deps)).sent]
+    expect(all).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(there.got.map((each) => each.body.event.seq)).toEqual(all)
   })
 
   it('does not follow a redirect: a body goes only where the config says', async () => {
@@ -266,7 +288,7 @@ describe('the hooks file', () => {
   })
 })
 
-describe('outgoing webhooks from the command line', () => {
+describe('hooks from the command line', () => {
   const setUpDir = (hooks: unknown[], watchers?: unknown[]) => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
@@ -289,6 +311,44 @@ describe('outgoing webhooks from the command line', () => {
     expect(ended.stdout).toMatch(/^hooks {5}1$/m)
     expect(ended.stdout).toMatch(/^sent {6}hook phone {2}1$/m)
     expect(there.got.map((each) => [each.signed, each.body.event.message.text])).toEqual([[true, 'needs a look']])
+  }, 20_000)
+
+  it('mu serve sends hooks too, and says on its error output what a receiver refused', async () => {
+    const there = await receiver()
+    const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET', tail: { channel: 'work/' } }])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const serving = cliStart(dir, ['serve', '--port', '0'], { HOOK_SECRET: KEY })
+    let stderr = ''
+    serving.child.stderr.on('data', (chunk) => (stderr += chunk))
+    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await cli(dir, ['post', 'work/api', 'needs a look'])
+    for (let i = 0; i < 100 && there.got.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(there.got.map((each) => [each.signed, each.body.event.channel])).toEqual([[true, 'work/api']])
+    there.state.answer = 500
+    await cli(dir, ['post', 'work/api', 'and another'])
+    for (let i = 0; i < 100 && !stderr.includes('failed'); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    serving.child.kill('SIGTERM')
+    expect((await serving.done).code).toBe(0)
+    expect(stderr).toMatch(/^failed {4}hook phone {2}at \d+ {2}HTTP 500$/m)
+  }, 20_000)
+
+  it('mu serve with a hook it cannot sign for serves the board, says why, and keeps its watchers', async () => {
+    const dir = setUpDir([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }], [{ name: 'lead', tail: { channel: 'work/' }, run: ['sh', '-c', 'echo woke >> "$HOME/woke"'], every: 1 }])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const serving = cliStart(dir, ['serve', '--port', '0'])
+    let stderr = ''
+    serving.child.stderr.on('data', (chunk) => (stderr += chunk))
+    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    const env = { MUSTER_URL: /MUSTER_URL=(\S+)/.exec(serving.output())![1]!, MUSTER_TOKEN: /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]! }
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect((await cli(dir, ['post', 'work/api', 'over http'], { env })).code).toBe(0)
+    for (let i = 0; i < 100 && !existsSync(join(dir, 'woke')); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    serving.child.kill('SIGTERM')
+    await serving.done
+    expect(stderr).toMatch(/^error: HOOK_SECRET isn't set, and hook "phone"/)
+    expect(stderr).toMatch(/No outgoing webhooks are sent/)
+    expect(existsSync(join(dir, 'woke'))).toBe(true)
   }, 20_000)
 
   it('a hook whose secret is not set parks the daemon, and it says which variable', async () => {

@@ -115,14 +115,15 @@ function fromMuster(headers, raw, secret) {
 - **A redirect is a failure too.** It is never followed, so a body goes only
   where your config says.
 - **After eight tries the event is passed over.** The daemon says so in a
-  reply on the event's thread and in its log, and carries on with the next.
-  That reply is never sent to a hook.
+  reply on the event's thread and carries on with the next. It never sends
+  that reply of its own to a hook. A watcher on the thread does wake for it.
 - **A new hook starts from now.** It never replays a board's history.
 - **A slow receiver can't stall the board.** The daemon makes a pass about
   once a second. A hook sends at most 20 events in one, and stops early once
   it has spent 10 seconds there. Schedules and watchers run first.
-- **It will not send unsigned.** A secret that is unset or too short stops the
-  daemon from starting, and it says which variable.
+- **It will not send unsigned.** A secret that is unset or too short stops
+  `mu daemon run` from starting, and it says which variable. `mu serve` says
+  the same on its error output and serves the board with no hooks.
 
 ## Check that it arrives
 
@@ -154,8 +155,9 @@ board. The secret has to be set where you run it.
 - **Nothing arrives.** `mu daemon status` lists the hook, and
   `mu daemon check <name>` tries the URL. Then read the daemon's log in
   `~/.config/muster/logs/`: `failed hook phone at 41 HTTP 500` names the event
-  and the answer.
+  and the answer. `mu serve` prints the same line on its error output.
 - **The daemon won't start.** `hooks.json` isn't valid, a secret isn't set, or
   a hook and a watcher share a name. The first line of its log says which.
+  `mu serve` starts anyway, says which, and sends no hooks until it is fixed.
 - **Signatures never match.** The receiver is signing a parsed body, or the
   framework in front of it changed the bytes. Sign what arrived.

@@ -81,7 +81,7 @@ export type DaemonOptions = {
 }
 
 /** What a tick needs to send outgoing webhooks: the hooks, and what each has been through since the daemon started. */
-export type Hooks = { list: ArmedHook[]; states: Map<string, HookState>; deps: HookDeps }
+export type Hooks = { list: ArmedHook[]; states: Map<string, HookState>; deps: HookDeps; notes?: Set<number> }
 
 /** One pass: send what is due, run each watcher, then each outgoing webhook. Returns what it did, for logs and tests. */
 export async function tickOnce(team: Board, watchers: Watcher[], states: Map<string, WatchState>, deps: Deps, hooks?: Hooks) {
@@ -97,7 +97,7 @@ export async function tickOnce(team: Board, watchers: Watcher[], states: Map<str
   for (const hook of hooks?.list ?? []) {
     let state = hooks!.states.get(hook.name)
     if (!state) hooks!.states.set(hook.name, (state = { attempts: 0, retryAt: -Infinity }))
-    hooked[hook.name] = await runHook(team, hook, state, hooks!.deps)
+    hooked[hook.name] = await runHook(team, hook, state, hooks!.deps, (hooks!.notes ??= new Set()))
   }
   return { schedules, watched, hooked }
 }

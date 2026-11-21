@@ -28,6 +28,8 @@ export type HookDeps = {
   fetch: typeof fetch
   /** Milliseconds one request may take. */
   timeout?: number
+  /** Milliseconds one hook may spend sending in one pass. */
+  budget?: number
 }
 
 export type HookState = { attempts: number; retryAt: number }
@@ -39,7 +41,7 @@ export const HOOK_BATCH = 20
 const BUDGET = 10_000
 const MIN_SECRET = 16
 
-/** How the daemon marks an event it gave up sending. No hook sends these on, or one dead receiver would feed itself. */
+/** What the daemon writes on a thread when it gives up on an event. `mu daemon check` reads past it, as it does a watcher's. */
 export const DROPPED = /^outgoing webhook ".*" couldn't deliver event \d+/
 
 export const hooksPath = () => join(configDir(), 'hooks.json')
@@ -136,8 +138,12 @@ const backoff = (attempts: number) => Math.min(5 * 2 ** (attempts - 1), 300) * 1
  * the cursor only past what was delivered. A failure waits and tries the same event again, so a
  * receiver sees every event at least once and never out of order. An event that still fails after
  * eight tries is recorded on its thread and passed over, so one bad event never holds the rest for ever.
+ *
+ * `notes` holds the IDs of those records, as the board gave them back. No hook sends one on, or a dead
+ * receiver would feed itself. They are known by ID and never by their words, so nobody can write a
+ * message that a hook leaves out.
  */
-export async function runHook(team: Board, hook: ArmedHook, state: HookState, deps: HookDeps): Promise<{ sent: number[]; failed: number[]; dropped: number[]; why?: string }> {
+export async function runHook(team: Board, hook: ArmedHook, state: HookState, deps: HookDeps, notes: Set<number> = new Set()): Promise<{ sent: number[]; failed: number[]; dropped: number[]; why?: string }> {
   const out: { sent: number[]; failed: number[]; dropped: number[]; why?: string } = { sent: [], failed: [], dropped: [] }
   if (deps.now() < state.retryAt) return out
   const name = `hook:${hook.name}`
@@ -151,8 +157,8 @@ export async function runHook(team: Board, hook: ArmedHook, state: HookState, de
   let reached = page.cursor
   const started = Date.now()
   for (const event of page.events) {
-    if (DROPPED.test(event.message?.text ?? '')) continue
-    if (Date.now() - started > BUDGET) {
+    if (event.type === 'message.posted' && notes.has(event.seq)) continue
+    if (Date.now() - started > (deps.budget ?? BUDGET)) {
       reached = event.seq - 1
       break
     }
@@ -174,7 +180,8 @@ export async function runHook(team: Board, hook: ArmedHook, state: HookState, de
     state.attempts = 0
     out.dropped.push(event.seq)
     if (event.thread !== null) {
-      await team.reply({ to: event.thread, text: `outgoing webhook "${hook.name}" couldn't deliver event ${event.seq} after ${HOOK_ATTEMPTS} tries (${out.why}).`, noSync: true }).catch(() => {})
+      const note = await team.reply({ to: event.thread, text: `outgoing webhook "${hook.name}" couldn't deliver event ${event.seq} after ${HOOK_ATTEMPTS} tries (${out.why}).`, noSync: true }).catch(() => null)
+      if (note) notes.add(note.id)
     }
   }
   if (reached > cursor) await team.cursorSet(name, reached)
