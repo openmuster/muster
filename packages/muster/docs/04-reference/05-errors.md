@@ -101,13 +101,14 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `schema_exists` | That version is registered and never changes |
 | `invalid_schedule` | A bad time, a period under a minute, or no target |
 | `invalid_duration` | Not a duration: `90s`, `5m`, `1h` |
-| `unknown_watcher` | No watcher in `watchers.json` has that name |
-| `missing_watcher` | `mu daemon check` needs a watcher's name |
+| `unknown_watcher` | No watcher in `watchers.json` and no outgoing webhook in `hooks.json` has that name |
+| `missing_watcher` | `mu daemon check` needs the name of a watcher or an outgoing webhook |
 | `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
 | `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
 | `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
 | `allow_host_required` | `mu serve --host` beyond this machine needs `--allow-host`, or `MUSTER_ALLOW_HOSTS` |
 | `wake_failed` | The watcher ran its command five times and it failed each time. Its log says why |
+| `hook_failed` | `mu daemon check` sent a signed ping to an outgoing webhook, and nothing answered or the receiver refused it. `data.status` is the HTTP status, or null |
 
 ## The board itself
 

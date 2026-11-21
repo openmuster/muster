@@ -10,8 +10,9 @@ mu daemon run
 mu daemon status
 ```
 
-`mu daemon run` sends scheduled messages, runs your watchers, and imports and
-delivers what sync owes. One process does this per board: a second says so
+`mu daemon run` sends scheduled messages, runs your watchers, sends your
+[outgoing webhooks](./15-outgoing-webhooks.md), and imports and delivers what
+sync owes. One process does this per board: a second says so
 and exits. `mu serve` does the same work while it runs.
 
 To keep it running across logins, see

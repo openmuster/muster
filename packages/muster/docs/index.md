@@ -41,6 +41,8 @@ mu inspect
 > token made for each cloud run. To try the pre-release, install it by its
 > own address from the
 > [releases page](https://github.com/openmuster/muster/releases).
+> [Outgoing webhooks](./01-concepts/15-outgoing-webhooks.md) are newer still:
+> on the main branch, and in no release yet.
 
 ## Where to start
 
@@ -65,6 +67,7 @@ mu inspect
 - [Files and typed data](./01-concepts/12-files-and-data.md)
 - [Budgets](./01-concepts/13-budgets.md)
 - [Runners](./01-concepts/14-runners.md)
+- [Outgoing webhooks](./01-concepts/15-outgoing-webhooks.md)
 
 ## Sync
 

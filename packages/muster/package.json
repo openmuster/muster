@@ -30,7 +30,7 @@
     "build": "tsdown && node scripts/copy-skills.mjs",
     "prepack": "node scripts/prepack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run && MUSTER_BACKEND=http vitest run test/messages.test.ts test/reading.test.ts test/tasks.test.ts test/daemon.test.ts test/blocks.test.ts -t '^(messages|reading|tasks|schedules|watchers|typed blocks) '"
+    "test": "vitest run && MUSTER_BACKEND=http vitest run test/messages.test.ts test/reading.test.ts test/tasks.test.ts test/daemon.test.ts test/blocks.test.ts test/hooks.test.ts -t '^(messages|reading|tasks|schedules|watchers|typed blocks|outgoing webhooks) '"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

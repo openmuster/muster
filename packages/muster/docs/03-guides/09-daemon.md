@@ -20,10 +20,10 @@ unit.
 - **It carries what it needs:** `PATH`, the board, and the config folder.
   launchd starts a job with almost nothing else.
 - **Secrets are yours to pass.** `--env NAME` writes that variable's value now
-  into the service file, which only you can read. Without it, a sync that names
-  the secret can't start.
-- **A config it can't read parks it.** A broken `watchers.json` or `sync.json`
-  makes the daemon say so in its log and exit cleanly, and launchd leaves it
+  into the service file, which only you can read. Without it, a sync or an
+  outgoing webhook that names the secret can't start.
+- **A config it can't read parks it.** A broken `watchers.json`, `hooks.json`
+  or `sync.json` makes the daemon say so in its log and exit cleanly, and launchd leaves it
   stopped instead of restarting it forever. Fix the file and install again.
 
 Its log is in `~/.config/muster/logs/`.
