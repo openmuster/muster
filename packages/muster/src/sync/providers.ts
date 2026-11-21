@@ -124,7 +124,7 @@ export function github(options: GitHubOptions): Provider {
         const repo = target.place.split('|')[0]!
         const [title, ...rest] = message.text.split('\n')
         const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: rest.join('\n').trim() }) })
-        return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}` }
+        return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${made.number}` } }
       }
       const [repo, number] = target.threadExternal.split('#')
       const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/${number}/comments`, {
@@ -196,10 +196,12 @@ export function linear(options: LinearOptions): Provider {
         const teamId = found?.data?.teams?.nodes?.[0]?.id
         if (!teamId) throw new Failure('platform_refused', `Linear has no team "${target.place}".`)
         const [title, ...rest] = message.text.split('\n')
-        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id } } }', { input: { teamId, title: title!.slice(0, 250), description: rest.join('\n').trim() } })
-        const issue = made?.data?.issueCreate?.issue?.id
+        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier state { name } } } }', { input: { teamId, title: title!.slice(0, 250), description: rest.join('\n').trim() } })
+        const created = made?.data?.issueCreate?.issue
+        const issue = created?.id
         if (!issue) throw new Failure('platform_refused', 'Linear did not make the issue.')
-        return { external: `issue:${issue}`, thread: `issue:${issue}` }
+        const labels: Record<string, string> = { kind: 'issue', ...(created.identifier ? { ref: String(created.identifier) } : {}), ...(created.state?.name ? { state: slug(String(created.state.name)) } : {}) }
+        return { external: `issue:${issue}`, thread: `issue:${issue}`, labels }
       }
       const made = await send(fetcher, options.api ?? 'https://api.linear.app/graphql', {
         method: 'POST',

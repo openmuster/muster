@@ -199,7 +199,15 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
         const sent = await provider.deliver(message, { place, threadExternal }, fetcher)
         ctx.db.write(() => {
-          append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, ctx.now().toISOString())
+          const at = ctx.now().toISOString()
+          append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, at)
+          if (isRoot && sent.labels) {
+            // The labels an imported thread would have had, so a reader can't tell where a thread started.
+            const current = findMessage(ctx.db, message.id)!
+            const set: Record<string, string> = {}
+            for (const [name, value] of Object.entries({ ...sent.labels, source: key })) if (current.labels[name] !== value) set[name] = value
+            if (Object.keys(set).length) append(ctx.db, { type: 'labels.changed', by: board, channel: current.channel, thread: current.thread, data: { id: current.id, set, unset: [], before: current.labels } }, at)
+          }
           ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(event.seq, name)
         })
         cursor = event.seq

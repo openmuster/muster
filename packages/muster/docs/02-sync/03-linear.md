@@ -33,7 +33,8 @@ A team, by its key, maps to a channel. Sync is two-way unless a team sets
 
 - A reply in a synced thread is posted as a comment on the issue.
 - A thread posted in a team's channel creates an issue in that team. Its first
-  line is the title.
+  line is the title. The thread then carries `kind=issue`, the issue's `ref`
+  and `state`, and `source`.
 
 Comments by the app's own user, named by `bot`, are not imported back.
 

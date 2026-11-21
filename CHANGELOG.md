@@ -42,6 +42,14 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 - The guides say what a usage limit leaves behind: the task is `failed`, and
   `mu tasks reopen` readies it again.
 
+### Fixed
+
+- A thread started on the board that opened a GitHub or Linear issue now
+  gets the labels an issue that came in has: `kind`, `ref`, `state` and
+  `source`. Before, it had none until the issue changed state, so
+  `--label kind=issue` missed it and nothing said which issue it became.
+  Found on the first run against a live GitHub repository.
+
 ## 0.2.0-alpha.2
 
 A pre-release: it never becomes "latest". Install it by its own address, or

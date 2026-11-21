@@ -48,7 +48,8 @@ Nothing, unless the repository sets `"mirror": true`. With it:
 
 - A reply in a synced thread is posted as a comment.
 - A thread posted in the repository's `issues` channel opens an issue. Its
-  first line is the title.
+  first line is the title. The thread then carries the same labels as an
+  issue that came in: `kind=issue`, `state=open`, `ref` and `source`.
 - An edit or a delete of a delivered reply changes or removes the comment.
 
 ## Set it up
