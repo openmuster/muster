@@ -32,6 +32,7 @@ import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
 import { boardKey } from '../serve/token.ts'
+import { loadOidc } from '../serve/oidc.ts'
 import { profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -730,7 +731,15 @@ const commands: Record<string, Command> = {
         print(run, done, () => `revoked  ${done.revoked}`)
         return
       }
-      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] [--can <channel>=<permissions>]... [--ttl 30d], mu token list, or mu token revoke <id>.')
+      if (verb === 'exchange') {
+        // The workload's token comes on stdin or from the environment, never as an argument, which other users of the machine can read.
+        const given = parsed.positionals[1] === '-' ? run.io.stdin().trim() : (run.io.env.MUSTER_OIDC_TOKEN ?? '').trim()
+        if (!given) throw misuse('invalid_token', "Give your platform's token on stdin, as mu token exchange -, or in MUSTER_OIDC_TOKEN.", 'It is the OIDC token a CI job is given, made out to the audience the board\'s owner chose.')
+        const made = await tokens.exchange({ token: given })
+        print(run, { token: made.token, id: made.record.id, trust: made.trust, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
+        return
+      }
+      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] [--can <channel>=<permissions>]... [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
       const me = await run.team.whoami()
       const can: Record<string, string[]> = {}
       for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
@@ -810,8 +819,10 @@ const commands: Record<string, Command> = {
       const allowJoins = on(parsed.flags, 'allow-joins') || run.io.env.MUSTER_ALLOW_JOINS === '1'
       const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
         answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
+      // The workloads the owner trusts to sign in with their platform's token. A file that is wrong stops the board here.
+      const oidc = loadOidc()
       try {
-        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp, allowJoins })
+        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp, allowJoins, oidc, log: (line) => run.io.err(line) })
         self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
@@ -822,6 +833,7 @@ const commands: Record<string, Command> = {
       run.io.out(`mcp    ${serving.url}/mcp`)
       if (!isLoopback(host)) run.io.out(`listen ${host}  for ${allowed.join(', ')}`)
       if (allowJoins) run.io.out(`joins  open: mu join <url> --as <name>, then mu join approve <code>`)
+      if (oidc.length) run.io.out(`oidc   ${oidc.length === 1 ? '1 workload signs' : `${oidc.length} workloads sign`} in with mu token exchange: ${oidc.map((trust) => trust.name).join(', ')}`)
       if (on(parsed.flags, 'no-token')) {
         // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
         run.io.out('token  none printed: make one with mu token create')
@@ -1531,8 +1543,20 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     const url = str(parsed.flags, 'url') ?? io.env.MUSTER_URL
     // Asking to join a board at a URL is done with no token: that is what the asker is after.
     const joining = name === 'join' && /^https?:\/\//.test(parsed.positionals[0] ?? '')
+    // Nor does a workload that signs in with its platform's token: the board token is what it is asking for.
+    const exchanging = name === 'token' && parsed.positionals[0] === 'exchange'
     if (joining) {
       team = board({ backend: http({ url: parsed.positionals[0]!, token: '' }), as: null })
+    } else if (url && exchanging) {
+      // It carries the job's own token, which is for this board and nowhere else: not over plain http, and not wherever a redirect points.
+      let target: URL | null = null
+      try {
+        target = new URL(url)
+      } catch {
+        // Refused below.
+      }
+      if (!target || (target.protocol !== 'https:' && !(target.protocol === 'http:' && isLoopback(target.hostname)))) throw misuse('insecure_url', `A workload's token goes to a board over https: ${url} isn't.`, 'Plain http is only for a board on this machine.')
+      team = board({ backend: http({ url, token: '', redirect: 'error' }), as: null })
     } else if (url) {
       const token = io.env.MUSTER_TOKEN
       if (!token) throw new Failure('unauthorized', `The board at ${url} needs a token.`, { hint: 'Set MUSTER_TOKEN to one from mu token create.' })

@@ -158,6 +158,9 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_session` | Not a session ID |
 | `platform_refused` | A platform didn't do what was asked |
 | `joins_closed` | The board wasn't served with `--allow-joins`: ask its owner for a token |
+| `insecure_url` | `mu token exchange` sends a job's token only over https, or plain http to this machine |
+| `exchange_closed` | The board's owner named no workload in `oidc.json`, or the board is on this machine and needs no token |
+| `issuer_unreachable` | The board couldn't fetch the keys of a workload's issuer. It asks again after a minute |
 | `too_many_joins` | 20 requests to join are waiting already: try again in a few minutes |
 | `unknown_join` | No request is waiting under that code, or the secret doesn't match. A request lasts 15 minutes |
 | `join_answered` | That request was already approved or refused |

@@ -51,6 +51,21 @@ Only when the board was served with `--allow-joins`; otherwise both answer
 `joins_closed`. A body is at most 4 KB. `joinList`, `joinApprove` and
 `joinDeny` take a token as wide as the owner's, like the token routes.
 
+## Signing in as a workload
+
+```text
+POST /api/board/tokenExchange   { "args": [{ "token": "<the platform's OIDC token>" }] }   no token
+200 { "ok": { "token": "mu1...", "record": { "id": "...", "profile": "ci", "can": { "ci/": ["read", "post"] }, "exp": 1795000000 }, "trust": "api-main" } }
+```
+
+Only when the board's owner named workloads in `oidc.json`; otherwise it
+answers `exchange_closed`. The token must be signed by an issuer a trust
+names, with RS256 and a key of at least 2048 bits, be made out to that trust's
+audience, have a `sub` the trust matches, and not have run out. Until the
+signature is verified every refusal is the same `unauthorized`. A body is at
+most 16 KB, and a token is taken once. See
+[CI](../03-guides/08-ci.md#sign-in-with-the-jobs-own-token).
+
 ## MCP
 
 ```text

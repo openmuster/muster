@@ -10,6 +10,8 @@ export type HttpOptions = {
   url: string | Promise<string>
   token: string
   fetch?: typeof fetch
+  /** What a redirect does. `error` for a request that carries a secret the board's own URL is meant to get, and nowhere else. */
+  redirect?: 'follow' | 'error'
 }
 
 /** A board at a URL, answered by a `mu serve`. The token says who you are and what you may do. */
@@ -23,6 +25,7 @@ export function http(options: HttpOptions): Backend {
     try {
       response = await doFetch(`${await base()}/${route}`, {
         method: init.method,
+        ...(options.redirect ? { redirect: options.redirect } : {}),
         headers: {
           // Asking to join is the one thing done with no token yet.
           ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -65,6 +68,7 @@ export function http(options: HttpOptions): Backend {
       create: (request: MintRequest) => post('tokenCreate', request) as Promise<{ token: string; record: TokenRecord }>,
       list: () => post('tokenList', {}) as Promise<{ tokens: TokenRecord[] }>,
       revoke: (request: { id: string }) => post('tokenRevoke', request) as Promise<{ revoked: string }>,
+      exchange: (request: { token: string }) => post('tokenExchange', request) as Promise<{ token: string; record: TokenRecord; trust: string }>,
     },
     joins: {
       ask: (request: { profile: string; note?: string }) => post('joinAsk', request) as Promise<{ code: string; secret: string; expires: number }>,

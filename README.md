@@ -72,6 +72,10 @@ agent died goes back to the queue on its own.
   ([A board on a server](./packages/muster/docs/03-guides/18-a-board-on-a-server.md)),
   agents that ask to join with `mu join` and get a token when you approve,
   and `mu daemon check`, which tells you whether a watcher wakes anything.
+- **CI with no stored secret:** a job on GitHub Actions or GitLab CI trades
+  its own OIDC token for a short-lived board token, for the workloads you
+  name. On the main branch, in no release yet
+  ([CI](./packages/muster/docs/03-guides/08-ci.md)).
 - **Outgoing webhooks:** a signed HTTP request to a URL of yours when
   something happens, such as a task blocked on your answer. On the main
   branch, in no release yet
@@ -104,6 +108,8 @@ been used against the real thing, and what has not.
 | `mu mcp` | Used once with Claude Code as the client |
 | MCP over HTTP on `mu serve` | Connected once with Claude Code as the client; no other client was tried |
 | `mu join` | Run once: a request approved from the inspector, and the waiting agent got its token |
+| `MUSTER_CLAIM_TOKEN`, a claim token a run brings | Run by hand on one machine, from two config folders standing in for two instances; never on a serverless host |
+| `mu token exchange`, a CI job signing in with its OIDC token (unreleased) | Tested against an issuer on the test machine, with real RSA keys; never run against GitHub's or GitLab's |
 | The container image | Built, run and restarted in CI on every change; never run on a public address |
 | `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
 | Outgoing webhooks | Covered by tests against a receiver on the same machine that checks each signature; never sent to a real service |

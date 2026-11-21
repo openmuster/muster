@@ -79,9 +79,11 @@ export type MintRequest = { profile?: string | null; can?: Record<string, string
  * Makes a token. `maker` is who asks: null on the board's own machine, where the owner may make any
  * token, or the claims of the token a remote caller holds. A remote caller gets less: only a token
  * narrower than their own, held to a profile and to named channels, short-lived, and never from a
- * token that was itself made this way, so a token can't be used to make more.
+ * token that was itself made this way, so a token can't be used to make more. A `workload` is a job that
+ * signed in with its platform's token: what it gets is the owner's own configuration, checked when it was
+ * loaded, and is marked as made from another, so it makes no tokens and answers no requests to join.
  */
-export function mintToken(key: Buffer, registry: Registry, maker: { principal: string; claims: Claims | null }, request: MintRequest, now: number): { token: string; record: TokenRecord } {
+export function mintToken(key: Buffer, registry: Registry, maker: { principal: string; claims: Claims | null; workload?: true }, request: MintRequest, now: number): { token: string; record: TokenRecord } {
   const remote = maker.claims !== null
   const can: Record<string, Permission[]> = {}
   for (const [pattern, permissions] of Object.entries(request.can ?? {})) {
@@ -92,6 +94,12 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
   const profile = request.profile ? profileName(request.profile) : null
   if (!Number.isFinite(request.ttl) || request.ttl < 60) throw misuse('invalid_ttl', 'A token lives at least a minute.')
   let exp = Math.floor(now / 1000 + request.ttl)
+  if (maker.workload) {
+    // The owner's file was checked when it was read. This is the last place a token is made, so it checks again.
+    if (profile === null || Object.keys(can).length === 0 || Object.keys(can).includes('*') || Object.values(can).some((permissions) => permissions.includes('manage')) || request.ttl > 3600) {
+      throw new Failure('forbidden', "A workload's token is held to a profile and to named channels, can't manage one, and lives an hour at most.")
+    }
+  }
   if (remote) {
     const held = maker.claims!
     if (held.can || held.minted) throw new Failure('forbidden', "A token that is held to channels, or was made from another, can't make tokens.", { hint: 'Ask whoever runs the board.' })
@@ -105,7 +113,7 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
     exp = Math.min(exp, held.exp)
   }
   const id = randomBytes(9).toString('base64url')
-  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote ? { minted: true } : {}), ...(request.noSync || maker.claims?.noSync ? { noSync: true } : {}) }
+  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote || maker.workload ? { minted: true } : {}), ...(request.noSync || maker.claims?.noSync ? { noSync: true } : {}) }
   const record: TokenRecord = { id, profile, can: Object.keys(can).length ? can : null, exp, at: Math.floor(now / 1000), revoked: false }
   registry.record(record)
   return { token: mint(key, claims), record }

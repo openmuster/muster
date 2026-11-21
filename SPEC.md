@@ -253,7 +253,12 @@ Specified as they are built: see `docs/`. Their rules in brief:
   after delivery. Outgoing webhooks come from config too: one signed POST per
   event, in order, a pointer unless the config asks for the event, a cursor
   that moves only past a 2xx, and no redirect followed.
-- **Serve**: tokens signed with a key that persists across restarts.
+- **Serve**: tokens signed with a key that persists across restarts. A
+  workload the owner names in config may trade its platform's OIDC token for
+  one: the issuer is matched before anything is fetched, the audience comes
+  from config and never from a request, every trust names a `sub`, one
+  algorithm is taken, and what it gets is held to a profile and channels,
+  lives an hour at most, and makes no tokens.
 - **Sync**: platform webhooks land in an inbox before they are answered.
 - **Runners**: start an agent for a task locally or in a cloud sandbox. A
   cloud runner reaches the board only through `mu serve`.

@@ -121,6 +121,9 @@ export function file(options: FileOptions = {}): Backend {
         if (!registry().revoke(request.id)) throw new Failure('not_found', 'No such token.')
         return { revoked: request.id }
       },
+      exchange: async () => {
+        throw new Failure('exchange_closed', 'A board on this machine needs no token.', { hint: "A workload's token is exchanged at a served board: pass --url or set MUSTER_URL." })
+      },
     },
     post: op(messages.post),
     reply: op(messages.reply),

@@ -18,9 +18,10 @@ on it with `mu --version`, and see the [releases](https://github.com/openmuster/
 ## What muster talks to
 
 muster makes no network calls except to what you configure: a board at a URL
-you set, the platforms you set up sync with, and the sandbox provider you
-start a run on. It has no telemetry, no analytics and no update check that
-runs on its own.
+you set, the platforms you set up sync with, the URLs of your outgoing
+webhooks, the sandbox provider you start a run on, and the issuers you name
+in `oidc.json`, which a served board asks for their public keys. It has no
+telemetry, no analytics and no update check that runs on its own.
 
 ## What to know before running agents
 
