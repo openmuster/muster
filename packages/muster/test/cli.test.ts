@@ -253,6 +253,51 @@ describe('cli', () => {
     expect(JSON.parse((await cli(dir, ['read', '1', '--json'])).stdout).message.by.profile).toBe('codex')
   })
 
+  it('asking for help on a command that does not exist is an error, with the command that was meant', async () => {
+    const dir = tempDir()
+    for (const args of [['frob', '--help'], ['help', 'frob'], ['frob']]) {
+      const run = await cli(dir, args)
+      expect([args, run.code, run.stdout]).toEqual([args, 2, ''])
+      expect(lines(run.stderr)).toEqual(['error: Unknown command "frob".', '', '  mu help lists the commands.'])
+    }
+    const json = await cli(dir, ['frob', '--help', '--json'])
+    expect(json.stdout).toBe('')
+    expect(JSON.parse(json.stderr).error.reason).toBe('unknown_command')
+    const way = async (name: string) => lines((await cli(dir, [name, '--help'])).stderr).slice(2)
+    expect(await way('task')).toEqual(['  Did you mean mu tasks?', '  mu help'])
+    expect(await way('serach')).toEqual(['  Did you mean mu search?', '  mu help'])
+    expect(await way('claim')).toEqual(['  Did you mean mu tasks claim?', '  mu help'])
+    expect(await way('assign')).toEqual(['  Did you mean mu tasks assign?', '  mu help'])
+    expect(await way('grep')).toEqual(['  Did you mean mu search?', '  mu help'])
+    expect(await way('mentions')).toEqual(['  Did you mean mu wait --mentions <who>?', '  mu help'])
+    expect((await cli(dir, ['help', 'tasks'])).code).toBe(0)
+    // An option is not a command: the command comes first.
+    for (const args of [['--json', 'whoami'], ['--as', 'claude', 'post', 'general', 'hi'], ['constructor']]) {
+      const run = await cli(dir, args)
+      expect([args, run.code, JSON.parse(run.stderr.startsWith('{') ? run.stderr : '{"error":{}}').error.reason ?? lines(run.stderr)[0]]).toEqual([args, 2, args[0] === '--json' ? 'unknown_command' : `error: Unknown command "${args[0]}".`])
+    }
+    for (const args of [['help', '--json'], ['help', 'help'], ['help', 'mcp'], ['--help', 'frob']]) expect([args, (await cli(dir, args)).code]).toEqual([args, 0])
+    expect((await cli(dir, ['tasks', '--help'])).stdout).toBe((await cli(dir, ['help'])).stdout)
+  })
+
+  it('leaves --help and --json after -- to the command it runs', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 'one'])
+    await cli(dir, ['tasks', 'create', 'work', 'two'])
+    const helped = await cli(dir, ['tasks', 'run', '1', '--', process.execPath, '-e', 'console.log("ran with " + process.argv.slice(1).join(" "))', '--', '--help'])
+    expect(lines(helped.stdout)).toEqual(['ran with --help', 'completed 1'])
+    const plain = await cli(dir, ['tasks', 'run', '3', '--', process.execPath, '-e', 'console.log("ran with " + process.argv.slice(1).join(" "))', '--', '--json'])
+    expect(lines(plain.stdout)).toEqual(['ran with --json', 'completed 3'])
+  })
+
+  it('read --mentions points at the tail that lists them', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'hello'])
+    const run = await cli(dir, ['read', 'general', '--mentions', 'lead'])
+    expect(run.code).toBe(2)
+    expect(lines(run.stderr)).toEqual(['error: Unknown flag --mentions.', '', '  read lists threads; tail and wait take --mentions.', '  mu tail general --mentions lead --last 20'])
+  })
+
   it('every command in the help exists, and help is what a bare mu prints', async () => {
     const dir = tempDir()
     const help = (await cli(dir, [])).stdout

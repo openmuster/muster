@@ -69,6 +69,15 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   first, `task_blocked` with the kind of hold, `task_waiting`
   with what it waits for, or `task_finished`. `claim_lost` still means what
   it did for a claim that was held, and for a task someone else holds.
+- `mu <unknown> --help` and `mu help <unknown>` printed the whole help and
+  exited 0. They now fail as the bare command does, exit 2, and an unknown
+  command names the one that was likely meant: `mu claim` says
+  `mu tasks claim`, `mu serach` says `mu search`.
+- `--help` and `--json` after `--` were taken as `mu`'s own, so
+  `mu tasks run 5 -- npm test --help` printed muster's help and ran nothing.
+  What follows `--` is now left to the command.
+- `mu read <channel> --mentions <who>` says which command lists mentions:
+  `mu tail <channel> --mentions <who> --last 20`.
 
 ## 0.2.0-alpha.2
 

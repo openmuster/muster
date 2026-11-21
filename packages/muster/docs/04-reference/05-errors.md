@@ -169,6 +169,6 @@ claimed answers `task_ready`, with the claim to run first.
 
 | Reason | Means |
 | --- | --- |
-| `unknown_command` | No such command |
+| `unknown_command` | No such command, with `--help` too. The hint names the one that was likely meant |
 | `unknown_flag` | No such flag for that command |
 | `missing_value` | A flag needs a value |

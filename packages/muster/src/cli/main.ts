@@ -1397,11 +1397,44 @@ function fail(io: Io, json: boolean, error: unknown): number {
   return 1
 }
 
+/** What other tools call a command here. Only names: nothing reads what a message says. */
+const ALIASES: Record<string, string> = {
+  claim: 'tasks claim',
+  assign: 'tasks assign',
+  complete: 'tasks complete',
+  task: 'tasks',
+  find: 'search',
+  grep: 'search',
+  mentions: 'wait --mentions <who>',
+  watch: 'tail',
+  ls: 'channels',
+  send: 'post',
+}
+
+const distance = (a: string, b: string): number => {
+  let row = Array.from({ length: b.length + 1 }, (_, at) => at)
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i]
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+    row = next
+  }
+  return row[b.length]!
+}
+
+/** The command a name that isn't one was most likely meant to be: what another tool calls it, or a slip of the keys. */
+export function meantCommand(name: string, names: readonly string[]): string | undefined {
+  if (Object.hasOwn(ALIASES, name)) return ALIASES[name]
+  const near = names.map((known) => [known, distance(name.toLowerCase(), known)] as const).sort((a, b) => a[1] - b[1])[0]
+  return near && near[1] <= Math.min(2, Math.floor(name.length / 2)) ? near[0] : undefined
+}
+
 /** Runs one command and returns its exit code. Everything goes through a handle from `board()`. */
 export async function main(argv: readonly string[], io: Io): Promise<number> {
-  const json = argv.includes('--json') && !argv.slice(0, Math.max(0, argv.indexOf('--'))).includes('--no-json')
+  // What follows `--` is a command to run, and its options are its own.
+  const own = argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv
+  const json = own.includes('--json')
   const name = argv[0]
-  if (name === undefined || name === 'help' || name === '--help' || argv.includes('--help')) {
+  if (name === undefined || name === '--help') {
     io.out(HELP)
     return 0
   }
@@ -1409,11 +1442,31 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     io.out(VERSION)
     return 0
   }
+  // `mu help <command>` and `mu <command> --help` print the one page there is, for a command there is.
+  const asked = name === 'help' ? argv[1] : name
+  if (asked === undefined || (name === 'help' && (asked.startsWith('--') || asked === 'help'))) {
+    io.out(HELP)
+    return 0
+  }
+  if (asked !== 'mcp' && !Object.hasOwn(commands, asked)) {
+    const meant = meantCommand(asked, Object.keys(commands))
+    return fail(io, json, meant ? new Failure('unknown_command', `Unknown command "${asked}".`, { exit: 2, hint: `Did you mean mu ${meant}?`, next: ['mu help'] }) : misuse('unknown_command', `Unknown command "${asked}".`, 'mu help lists the commands.'))
+  }
+  if (name === 'help' || own.includes('--help')) {
+    io.out(HELP)
+    return 0
+  }
   if (name === 'mcp') return fail(io, json, misuse('not_a_terminal_command', 'mu mcp is started by an agent, as an MCP server on its pipes.', 'Add it to your agent: command "mu", argument "mcp".'))
-  const command = commands[name]
-  if (!command) return fail(io, json, misuse('unknown_command', `Unknown command "${name}".`, 'mu help lists the commands.'))
+  const command = commands[name]!
   let team: Board | null = null
   try {
+    // `read` lists threads, and a mention is an event: the feed commands find those.
+    const mentions = name === 'read' ? own.indexOf('--mentions') : -1
+    if (mentions !== -1) {
+      const channel = own.slice(1).find((arg, at, all) => !arg.startsWith('--') && !(all[at - 1] ?? '').startsWith('--'))
+      const who = own[mentions + 1]
+      throw new Failure('unknown_flag', 'Unknown flag --mentions.', { exit: 2, hint: 'read lists threads; tail and wait take --mentions.', next: [`mu tail${channel ? ` ${channel}` : ''} --mentions ${who ?? '<who>'} --last 20`] })
+    }
     const parsed = parse(argv.slice(1), command.spec)
     const as = str(parsed.flags, 'as') ?? (io.env.MUSTER_PROFILE || undefined)
     const dir = str(parsed.flags, 'dir') ?? io.env.MUSTER_DIR
