@@ -71,7 +71,19 @@ describe('cli', () => {
     await cli(dir, ['tasks', 'claim', '1', '--as', 'a'])
     const run = await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'b'])
     expect(run.code).toBe(1)
-    expect(lines(run.stderr)).toEqual(['error: You no longer hold task 1.', '', "  Stop working it and say so in its thread. Don't settle it.", '  mu read 1'])
+    expect(lines(run.stderr)).toEqual(["error: Task 1 is held under a claim, and this isn't it.", '', "  Only its holder settles it. If that was you, stop and say so in its thread.", '  mu read 1'])
+  })
+
+  it('completing a task nobody claimed says to claim it first, and the claim it names works', async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    const run = await cli(dir, ['tasks', 'complete', '1', 'done'])
+    expect(run.code).toBe(1)
+    expect(lines(run.stderr)).toEqual(['error: Nobody holds task 1: it is ready.', '', '  Claim it first: only the claim that holds a task settles it.', '  mu tasks claim 1'])
+    await cli(dir, ['tasks', 'claim', '1'])
+    expect((await cli(dir, ['tasks', 'complete', '1', 'done'])).stdout).toBe('completed  #1\n')
+    const again = await cli(dir, ['tasks', 'complete', '1', 'done', '--json'])
+    expect(JSON.parse(again.stderr).error).toMatchObject({ reason: 'task_finished', message: 'Task 1 is completed.' })
   })
 
   it('prints no colour and no line over 80 columns for ordinary output', async () => {

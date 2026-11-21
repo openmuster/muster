@@ -162,14 +162,41 @@ function mustOwn(caller: Caller, row: TaskRow, root: Message) {
   throw new Failure('task_not_owned', `Task ${row.id} isn't yours to change.`, { hint: 'Its owner can, or the agent that holds it.' })
 }
 
-/** The holder's proof: the task is still claimed under the token the board gave. */
-function fence(row: TaskRow, token: string | undefined) {
-  if (row.state !== 'claimed' || !token || !row.claim_token || !sameHash(token, row.claim_token)) {
+/**
+ * The holder's proof: the task is still claimed under the token the board gave. A caller that sends a
+ * token held a claim once, so whatever became of the task that claim is lost, and it must stop. One that
+ * sends none never held it: it is told where the task stands, and what comes first.
+ */
+function fence(ctx: Context, row: TaskRow, token: string | undefined) {
+  if (row.state === 'claimed' && token && row.claim_token && sameHash(token, row.claim_token)) return
+  const read = [`mu read ${row.id}`]
+  if (token) {
     throw new Failure('claim_lost', `You no longer hold task ${row.id}.`, {
       hint: "Stop working it and say so in its thread. Don't settle it.",
-      next: [`mu read ${row.id}`],
+      next: read,
     })
   }
+  if (row.state === 'claimed') {
+    throw new Failure('claim_lost', `Task ${row.id} is held under a claim, and this isn't it.`, {
+      hint: "Only its holder settles it. If that was you, stop and say so in its thread.",
+      next: read,
+    })
+  }
+  if (row.state === 'ready') {
+    throw new Failure('task_ready', `Nobody holds task ${row.id}: it is ready.`, { hint: 'Claim it first: only the claim that holds a task settles it.', next: [`mu tasks claim ${row.id}`] })
+  }
+  if (row.state === 'blocked') {
+    // The kind is the board's word. The reason is someone's own, and is read in the thread, not here.
+    throw new Failure('task_blocked', `Task ${row.id} is blocked${row.hold_kind ? `: ${row.hold_kind}` : ''}.`, {
+      hint: 'Nobody holds it. Once its owner unblocks it, it can be claimed.',
+      next: read,
+    })
+  }
+  if (row.state === 'waiting') {
+    const needs = (ctx.db.raw.prepare("select n.needs as id from needs n join tasks t on t.id = n.needs where n.task = ? and t.state != 'completed' order by n.needs").all(row.id) as { id: number }[]).map((need) => `task ${need.id}`)
+    throw new Failure('task_waiting', `Task ${row.id} waits for ${needs.length ? needs.join(', ') : 'what it needs'}.`, { hint: 'It can be claimed once what it waits for completes.', next: read })
+  }
+  throw new Failure('task_finished', `Task ${row.id} is ${row.state}.`, { hint: "It is settled: nothing settles it again.", next: read })
 }
 
 function needsOf(ctx: Context, caller: Caller, self: number | null, ids: readonly number[]): number[] {
@@ -544,7 +571,7 @@ function write<T>(ctx: Context, caller: Caller, run: (emit: Emit) => T): T {
 export function renew(ctx: Context, caller: Caller, request: Held & { lease?: number }): { task: Task } {
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(row, request.token)
+    fence(ctx, row, request.token)
     const until = new Date(ctx.now().getTime() + leaseMs(request.lease)).toISOString()
     emit({ type: 'task.renewed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, until } })
     return { task: view(ctx, row.id) }
@@ -554,7 +581,7 @@ export function renew(ctx: Context, caller: Caller, request: Held & { lease?: nu
 export function release(ctx: Context, caller: Caller, request: Held): { task: Task } {
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(row, request.token)
+    fence(ctx, row, request.token)
     emit({ type: 'task.released', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, from: 'claimed' } })
     return { task: view(ctx, row.id) }
   })
@@ -569,7 +596,7 @@ export function complete(ctx: Context, caller: Caller, request: Held & { result?
   const result = outcome(request.result, 'result')
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(row, request.token)
+    fence(ctx, row, request.token)
     emit({ type: 'task.completed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, result, from: 'claimed' } })
     const before = new Set((ctx.db.raw.prepare("select id from tasks where state = 'ready'").all() as { id: number }[]).map((task) => task.id))
     readyDependents(ctx, row.id, emit)
@@ -582,7 +609,7 @@ export function fail(ctx: Context, caller: Caller, request: Held & { reason?: st
   const reason = outcome(request.reason, 'reason')
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(row, request.token)
+    fence(ctx, row, request.token)
     emit({ type: 'task.failed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, reason, counts: request.counts !== false, from: 'claimed' } })
     return { task: view(ctx, row.id) }
   })
@@ -596,7 +623,7 @@ export function block(ctx: Context, caller: Caller, request: Held & { reason?: s
   return write(ctx, caller, (emit) => {
     const found = taskFor(ctx, caller, request.id)
     const row = request.token ? found.row : settleLapse(ctx, found.row, found.root, emit)
-    if (row.state === 'claimed') fence(row, request.token)
+    if (row.state === 'claimed') fence(ctx, row, request.token)
     else if (row.state === 'ready' || row.state === 'waiting') mustOwn(caller, row, found.root)
     else throw new Failure(`task_${row.state}`, `Task ${row.id} is ${row.state}.`)
     emit({ type: 'task.blocked', by: byOf(caller), channel: found.root.channel, thread: found.root.id, data: { id: row.id, kind, reason, from: row.state } })

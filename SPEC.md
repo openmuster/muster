@@ -179,7 +179,10 @@ States: `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`,
   lapsed claim appends `task.expired`.
 - **Fenced writes.** `renew`, `release`, `complete`, `fail` and a holder's
   `block` check that the task is still claimed under the token the board gave
-  for this claim. Otherwise `claim_lost`, and nothing changes. A holder that is
+  for this claim. Otherwise `claim_lost`, and nothing changes. A write that
+  sends no token never held the task: unless someone else holds it, it is told
+  where the task stands instead (`task_ready`, `task_waiting`, `task_blocked`
+  or `task_finished`), so what it does next is claim, not stop. A holder that is
   late but whose task nobody has taken or looked at since still holds it: the
   token proves no one else does.
 - **Reclaim looks at the process when it can.** A local holder may record its

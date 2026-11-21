@@ -137,6 +137,9 @@ mu tasks complete <id> "fixed in a1b2c3, tests pass" --as <you>
 
 - `claim_lost` means the task is no longer yours. Stop working on it, say so
   in its thread, and do not try to complete or fail it.
+- `task_ready`, `task_blocked`, `task_waiting` or `task_finished` when you
+  settle a task means you hold no claim on it, and says where it stands. Read
+  the thread; only `task_ready` is yours to claim.
 - Finish in two separate steps: run the check and read what it printed, then
   complete. A result is permanent, so never join the work and the `complete`
   into one command line.

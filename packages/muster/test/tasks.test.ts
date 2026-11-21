@@ -259,6 +259,55 @@ describe('tasks', () => {
     expect((await team.taskList({ state: 'all' })).tasks).toHaveLength(2)
   })
 
+  it('says where a task stands when it is settled with no claim, and that a claim was lost only to who held one', async () => {
+    const { team } = memoryBoard()
+    const make = async (text: string) => (await team.taskCreate({ channel: 'work', text })).task.id
+    const ready = await make('ready')
+    const waiting = (await team.taskCreate({ channel: 'work', text: 'waiting', needs: [ready] })).task.id
+    const blocked = await make('blocked')
+    await team.taskBlock({ id: blocked, reason: 'which region?' })
+    const claimed = await make('claimed')
+    await team.as('a').taskClaim({ id: claimed })
+    const completed = await make('completed')
+    await team.taskComplete({ id: completed, token: (await team.taskClaim({ id: completed })).token })
+    const failed = await make('failed')
+    await team.taskFail({ id: failed, token: (await team.taskClaim({ id: failed })).token, reason: 'gone' })
+    const canceled = await make('canceled')
+    await team.taskCancel({ id: canceled })
+    const states = { ready, waiting, blocked, claimed, completed, failed, canceled }
+    for (const [state, id] of Object.entries(states)) expect([state, (await team.task(id))!.state]).toEqual([state, state])
+
+    const refusal = async (run: Promise<unknown>) => {
+      try {
+        await run
+      } catch (error) {
+        return error as { reason: string; message: string; hint?: string; next: string[] }
+      }
+      throw new Error('it was taken')
+    }
+    const verbs = (held: { id: number; token?: string }) => [team.taskRenew(held), team.taskRelease(held), team.taskComplete({ ...held, result: 'x' }), team.taskFail({ ...held, reason: 'x' })].map(refusal)
+    const expected: Record<string, string> = { ready: 'task_ready', waiting: 'task_waiting', blocked: 'task_blocked', claimed: 'claim_lost', completed: 'task_finished', failed: 'task_finished', canceled: 'task_finished' }
+    for (const [state, id] of Object.entries(states)) {
+      const none = await Promise.all(verbs({ id }))
+      expect([state, ...none.map((refused) => refused.reason)]).toEqual([state, ...none.map(() => expected[state])])
+      // A token is a claim once held: whatever became of the task, that claim is lost, and its holder stops.
+      const wrong = await Promise.all(verbs({ id, token: 'a-claim-once-held' }))
+      expect([state, ...wrong.map((refused) => refused.reason)]).toEqual([state, ...wrong.map(() => 'claim_lost')])
+      expect((await team.task(id))!.state).toBe(state)
+    }
+    const [unclaimed] = await Promise.all(verbs({ id: ready }))
+    expect(unclaimed!.next).toEqual([`mu tasks claim ${ready}`])
+    const [held] = await Promise.all(verbs({ id: blocked }))
+    expect(held!.message).toBe(`Task ${blocked} is blocked: needs_input.`)
+    expect(held!.message).not.toContain('no longer')
+    const [waits] = await Promise.all(verbs({ id: waiting }))
+    expect(waits!.message).toContain(`task ${ready}`)
+    const [done] = await Promise.all(verbs({ id: completed }))
+    expect(done!.message).toContain('completed')
+    const [taken] = await Promise.all(verbs({ id: claimed }))
+    expect(taken!.message).not.toContain('no longer')
+  })
+
   it('takes a plan\'s need as a key, an ID, or either one bare', async () => {
     const { team } = memoryBoard()
     const before = (await team.taskCreate({ channel: 'work', text: 'before' })).task.id
