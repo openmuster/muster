@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { GLOBAL } from '../src/cli/args.ts'
 import { HELP } from '../src/cli/help.ts'
 import { SPECS } from '../src/cli/main.ts'
+import { FILE_MAX } from '../src/core/files.ts'
+import { LEASE_DEFAULT_S, LEASE_MAX_S, LEASE_MIN_S, NEEDS_MAX, PLAN_MAX, RESULT_MAX } from '../src/core/tasks.ts'
+import { LIMITS } from '../src/model.ts'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.md') ? [join(dir, entry.name)] : []))
@@ -113,5 +116,25 @@ describe('docs and skills', () => {
 
   it('every command the CLI has is in the help', () => {
     for (const name of Object.keys(SPECS)) expect([name, new RegExp(`^  ${name}[ \\n]`, 'm').test(HELP)]).toEqual([name, true])
+  })
+
+  it("the skill's limits are the ones the code enforces", () => {
+    const skill = readFileSync(join(root, 'skills/board/SKILL.md'), 'utf8')
+    const table = skill.slice(skill.indexOf('## Limits'), skill.indexOf('## Coming back later'))
+    const n = (value: number) => value.toLocaleString('en-US')
+    const span = (seconds: number) => (seconds % 3600 === 0 ? `${seconds / 3600} hour` : seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`)
+    const said = [
+      `text is at most ${n(LIMITS.text)} characters`,
+      `at most ${LIMITS.attachments} files, each up to ${FILE_MAX / 1024 / 1024} MB`,
+      `is at most ${n(RESULT_MAX)} characters`,
+      `label key is up to ${LIMITS.labelKey} lowercase`,
+      `label value is up to ${LIMITS.labelValue} characters; a message holds up to ${LIMITS.labels} labels`,
+      `lease is ${span(LEASE_MIN_S)} to ${span(LEASE_MAX_S)}, ${span(LEASE_DEFAULT_S)} unless`,
+      `waits for at most ${NEEDS_MAX} others; a plan holds at most ${PLAN_MAX} tasks`,
+      `lists ${LIMITS.read} threads, up to ${LIMITS.readMax} with`,
+    ]
+    expect(said.filter((line) => !table.includes(line))).toEqual([])
+    // Each row is one limit: a number the table states and no check covers would go stale unseen.
+    expect(table.split('\n').filter((line) => /^\| A /.test(line))).toHaveLength(said.length + 1)
   })
 })

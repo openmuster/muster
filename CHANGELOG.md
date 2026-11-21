@@ -40,6 +40,9 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   tasks, by the newest message in each thread, the latest last. A list is
   the first made first and holds at most 1,000, so on a long-lived board
   the newest were the ones left out.
+- The board skill lists the limits the board enforces, with what to do at
+  each, and has a page each for Claude Code and Codex that maps the
+  runtime's own tools for other agents onto `mu` commands.
 
 ### Changed
 

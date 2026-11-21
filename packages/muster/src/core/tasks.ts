@@ -16,7 +16,8 @@ export const NEEDS_MAX = 20
 export const NEEDS_WALK_MAX = 500
 export const FROM_MAX = 32
 export const PLAN_MAX = 100
-const RESULT_MAX = 1000
+/** How long a result or a reason may be: what `complete`, `fail`, `block` and `cancel` take. */
+export const RESULT_MAX = 1000
 const KIND = /^[a-z0-9][a-z0-9_.-]{0,63}$/
 
 export const TASK_STATES = ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled'] as const
