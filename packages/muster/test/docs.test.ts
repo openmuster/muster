@@ -102,6 +102,15 @@ describe('docs and skills', () => {
     expect(all.filter((page) => !linked.has(page))).toEqual([])
   })
 
+  it('every flag a command takes is in the help, but for the ones kept out on purpose', () => {
+    // --once ends `mu demo` when its script does, for tests; --no-count is how `mu run` fails a task without using up an attempt.
+    const hidden = ['once', 'no-count']
+    const missing = Object.entries(SPECS).flatMap(([name, spec]) =>
+      [...(spec.value ?? []), ...(spec.many ?? []), ...(spec.bool ?? [])].filter((flag) => !hidden.includes(flag) && !HELP.includes(`--${flag}`)).map((flag) => `${name} --${flag}`),
+    )
+    expect(missing).toEqual([])
+  })
+
   it('every command the CLI has is in the help', () => {
     for (const name of Object.keys(SPECS)) expect([name, new RegExp(`^  ${name}[ \\n]`, 'm').test(HELP)]).toEqual([name, true])
   })
