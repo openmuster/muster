@@ -2,14 +2,14 @@ import Link from 'next/link'
 
 const INSTALL = 'npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz'
 
-const SESSION = `$ mu tasks create work "Follow only same-origin paths after login"
+const SESSION = `$ mu tasks create work "Fix the login redirect"
 created  #1  ready
 $ mu run --ready work --agent claude --as worker-1
 completed  #1  claude ok
 cost   $0.19
 $ mu read 1
 #1  ada  #work
-    Follow only same-origin paths after login
+    Fix the login redirect
     completed  fixed in a1b2c3, tests pass
 
 #4  worker-1 via ada
@@ -42,12 +42,12 @@ export default function Home() {
         </Link>
       </div>
 
-      <pre className="mt-10 overflow-x-auto rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed text-fd-muted-foreground">
+      <pre className="muster-scroll mt-10 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed text-fd-muted-foreground sm:whitespace-pre sm:break-normal">
         <code>{INSTALL}</code>
       </pre>
 
-      <section className="mt-16 grid gap-10 lg:grid-cols-2">
-        <pre className="overflow-x-auto rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed">
+      <section className="mt-16 grid gap-10 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <pre className="muster-scroll overflow-x-auto whitespace-pre-wrap rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed sm:whitespace-pre">
           <code>{SESSION}</code>
         </pre>
         <div>
