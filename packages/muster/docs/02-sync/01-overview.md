@@ -3,6 +3,11 @@ title: Sync
 description: GitHub, Linear and Slack threads on the board, in both directions.
 ---
 
+> [!WARNING]
+> Sync has not been run against GitHub, Linear or Slack yet. Its tests use
+> signatures and payloads written by hand from each platform's documentation.
+> Expect to find faults on a first real run.
+
 ## What it does
 
 A platform thread (an issue, a pull request, a Slack thread) becomes a board

@@ -60,19 +60,23 @@ agent died goes back to the queue on its own.
 - **Tasks with seven states:** waiting, ready, claimed, blocked, completed,
   failed, canceled. Tasks can wait for other tasks, and a plan file queues a
   whole set at once.
-- **Waiting without polling.** `mu wait` returns when something matching
-  happens; `mu tail` follows a channel.
+- **Waiting for an answer.** `mu wait` returns when something matching
+  happens; `mu tail` follows a channel. Both check the board's log, at most a
+  second apart.
 - **A daemon** for scheduled messages and watchers that wake an agent when a
-  thread changes.
+  thread changes. `mu daemon install` keeps it running on macOS; elsewhere,
+  run `mu daemon run` under your own service manager.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
-  task, on this machine or in a cloud sandbox.
+  task, on this machine or, experimentally, in a cloud sandbox.
 - **A served board.** `mu serve` puts the board behind HTTP with signed
   tokens held to a profile and its channels.
-- **Sync** with GitHub, Linear and Slack, by webhook.
+- **Sync** with GitHub, Linear and Slack, by webhook. Not yet run against the
+  live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
 - **Skills** that teach an agent the board: `mu skills install`.
-- **For agents with no shell,** the board as one MCP tool: `mu mcp`.
+- **For agents with no shell,** the board as one MCP tool: `mu mcp`. This is
+  in the 0.2.0-alpha.1 pre-release, not in 0.1.2.
 
 ![The swarm template's live view: one column per task state](./docs/images/swarm-live.png)
 
@@ -85,9 +89,12 @@ been used against the real thing, and what has not.
 | --- | --- |
 | The board, CLI, daemon, served mode, inspector | Used by hand and by agents on macOS; the tests also run on Linux |
 | `mu run` with Claude Code and Codex on this machine | Run with both |
-| `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it |
+| Two Claude Code workers on one queue | Run once: four tasks, each taken once, the one that waited for the others last |
+| `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
+| `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it. The tighter policy in 0.1.2 and the changes in 0.2.0-alpha.1 have not been run in a real sandbox |
 | `mu run --runner cloudflare` and its Worker template | Written from documentation; never deployed |
-| Sync with GitHub, Linear and Slack | Tested against recorded payloads only; never against the live services |
+| Sync with GitHub, Linear and Slack | Tested against payloads written by hand from each platform's documentation; never against the live services |
+| `mu mcp` (0.2.0-alpha.1) | Used once with Claude Code as the client |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 
@@ -95,7 +102,8 @@ been used against the real thing, and what has not.
 
 - [Quickstart](./packages/muster/docs/01-quickstart.md)
 - [All pages](./packages/muster/docs/index.md): the board, sync, guides, and
-  the CLI, handle and HTTP references.
+  the CLI, handle and HTTP references. They describe the newest pre-release;
+  a page says so where 0.1.2 differs.
 - For agents: [skills/board/SKILL.md](./skills/board/SKILL.md).
 
 ## Work on it

@@ -47,16 +47,19 @@ and the result. The reviewer's thread says what it tried and what happened.
 
 ## If the review fails
 
-A review that finds a real problem completes with what it found. Send the work
-back for another round:
+A review that finds a real problem fails, with what it found as its reason.
+Send the work back for another round, and reopen the review so it runs again
+afterwards. Task IDs are message IDs, so the review here is task 3:
 
 ```bash
 mu tasks reopen 1 --round --as lead
+mu tasks reopen 3 --as lead
 ```
 
 The work is `ready` again with the review's findings in reach, and the review
-waits for it once more. Three rounds on the same kind of finding means the
-approach is wrong: stop and rethink it.
+waits for it once more. A review left as it ended does not run again. Three
+rounds on the same kind of finding means the approach is wrong: stop and
+rethink it.
 
 ## When not to
 

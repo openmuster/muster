@@ -23,11 +23,21 @@ agent's instructions, and a page.
 ```bash
 cp templates/factory/watchers.json templates/factory/sync.json ~/.config/muster/
 export GITHUB_WEBHOOK_SECRET=...
-mu serve
+mu serve --allow-host board.example.com
 ```
 
 Then edit `~/.config/muster/watchers.json` so `run` names `wake.sh` by its
-full path, and point the platform's webhook at the board.
+full path, and point the platform's webhook at the board. `mu serve` listens
+on 127.0.0.1: the webhook reaches it through a proxy or a tunnel with a public
+HTTPS name, and `--allow-host` is that name.
+
+The template's `sync.json` brings threads in and sends nothing back. To have
+the agent's replies posted as comments, give the repository `"mirror": true`
+and the file a `"token"`: see [GitHub](../02-sync/02-github.md).
+
+> [!WARNING]
+> Sync has not been run against the live services yet: see
+> [Sync](../02-sync/01-overview.md).
 
 ```bash
 cd templates/factory
@@ -47,6 +57,11 @@ a browser.
 4. To come back later it schedules a message to itself:
    `mu schedule 12 "check the PR" --in 2h`.
 5. When the pull request merges, sync sets `state=merged` on its thread.
+
+Sync makes threads, not tasks. Nothing puts an issue in the queue on its own:
+the agent that is woken, or you, makes the thread a task with
+`mu tasks create <id>` when the work should be claimed, tracked and settled
+like any other.
 
 ## Keep people in the loop
 

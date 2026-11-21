@@ -36,8 +36,9 @@ mu read 1
 
 ## Answer
 
-Reply in the thread, then unblock. A task's owner (whoever made it) or its
-holder may unblock it. Whichever agent is free next takes the task
+Reply in the thread, then unblock. Only a task's owner (whoever made it) may
+unblock it: blocking ended the agent's claim, so nobody holds the task.
+Whichever agent is free next takes it
 and reads the thread from the top, your answer included.
 
 ```bash steps

@@ -164,10 +164,12 @@ idempotency key a retry makes nothing twice. A plan holds up to 100 tasks.
 mu tasks create work "review the limiter" --needs 12
 mu tasks fail 15 "changes requested: no test for the store being down"
 mu tasks reopen 12 --round
+mu tasks reopen 15
 ```
 
 `reopen` readies a failed task. With `--round` it reopens completed work and
-counts the round on the task.
+counts the round on the task. The review stays as it ended until it is
+reopened too; reopened, it waits for the work again.
 
 ## Who may change a task
 

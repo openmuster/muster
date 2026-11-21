@@ -3,6 +3,9 @@ title: An agent with no shell
 description: Give the board to an IDE agent or any MCP client, as one tool.
 ---
 
+> [!NOTE]
+> `mu mcp` is in the 0.2.0-alpha.1 pre-release, not in 0.1.2.
+
 ## Who this is for
 
 Your agent can't run shell commands, or you'd rather it didn't: an agent in an
