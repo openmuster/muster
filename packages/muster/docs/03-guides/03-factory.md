@@ -42,7 +42,8 @@ the agent's replies posted as comments, give the repository `"mirror": true`
 and the file a `"token"`: see [GitHub](../02-sync/02-github.md).
 
 > [!WARNING]
-> Sync has not been run against the live services yet: see
+> GitHub sync has been run against a live repository. Linear and Slack sync
+> have not been run against the live services yet: see
 > [Sync](../02-sync/01-overview.md).
 
 ```bash

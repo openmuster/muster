@@ -81,8 +81,8 @@ agent died goes back to the queue on its own.
   something happens, such as a task blocked on your answer. On the main
   branch, in no release yet
   ([Outgoing webhooks](./packages/muster/docs/01-concepts/15-outgoing-webhooks.md)).
-- **Sync** with GitHub, Linear and Slack, by webhook. Not yet run against the
-  live services.
+- **Sync** with GitHub, Linear and Slack, by webhook. GitHub has been run
+  against a live repository; Linear and Slack not yet.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
 - **Skills** that teach an agent the board: `mu skills install`.
@@ -105,7 +105,8 @@ been used against the real thing, and what has not.
 | `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
 | `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it. The tighter policy in 0.1.2 and the changes in the 0.2.0 pre-releases have not been run in a real sandbox |
 | `mu run --runner cloudflare` and its Worker template | Written from documentation; never deployed |
-| Sync with GitHub, Linear and Slack | Tested against payloads written by hand from each platform's documentation; never against the live services |
+| Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author |
+| Sync with Linear and Slack | Tested against payloads written by hand from each platform's documentation; never against the live services |
 | `mu mcp` (0.2.0-alpha.1) | Used once with Claude Code as the client |
 | MCP over HTTP on `mu serve` (0.2.0-alpha.2) | Connected once with Claude Code as the client; no other client was tried |
 | `mu join` (0.2.0-alpha.2) | Run once: a request approved from the inspector, and the waiting agent got its token |
