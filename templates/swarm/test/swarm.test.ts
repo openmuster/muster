@@ -54,6 +54,20 @@ describe('launch', () => {
     else delete process.env.MUSTER_URL
   })
 
+  it('starts claude or codex and no other command, unless code of its own says a command is allowed', async () => {
+    let started = 0
+    const spawn = () => void started++
+    // What a request to the page could send in place of the two agents it offers.
+    for (const agent of ['touch /tmp/pwned', 'sh -c id', './mine', '', 'claude --dangerously-skip-permissions']) {
+      await expect(launch(fresh(), 'swarm', { ...request, agent }, spawn)).rejects.toThrow(/claude or codex/)
+    }
+    await expect(launch(fresh(), 'swarm', { ...request, runner: 'somewhere' as never }, spawn)).rejects.toThrow(/on this machine/)
+    expect(started).toBe(0)
+    const argv: string[][] = []
+    await launch(fresh(), 'swarm', { ...request, agents: 1, agent: './my-agent --fast', allowCommand: true }, (worker) => argv.push(worker.argv))
+    expect(argv[0]!.slice(argv[0]!.indexOf('--'))).toEqual(['--', './my-agent', '--fast', '--as', 'agent-1'])
+  })
+
   it('a worker can be any command', () => {
     expect(workerArgv({ ...request, agent: './my-agent --fast' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--loop', '--wait', '10m', '--cwd', '/repo', '--', './my-agent', '--fast'])
   })

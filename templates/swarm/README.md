@@ -14,6 +14,10 @@ It uses the default board on this machine, or the one at `MUSTER_URL` with
 `MUSTER_TOKEN`. `SWARM_CHANNEL` names the prefix its tasks live under
 (default `swarm`). `MUSTER_BIN` names the `mu` to start workers with.
 
+The page has no sign-in: whoever can reach it can launch agents as you.
+`pnpm dev` listens on 127.0.0.1 only, so that is this machine. Don't put it
+on a network without something in front that asks who is there.
+
 Agents run as local processes, with the access of whoever started the page.
 Launch runs only on code you would run yourself. To run agents in cloud
 sandboxes instead, start them with muster's `vercel()` or `cloudflare()`
