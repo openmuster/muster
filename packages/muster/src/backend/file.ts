@@ -196,7 +196,7 @@ export function file(options: FileOptions = {}): Backend {
           // A busy checkpoint is tried again next time.
         }
       }
-      return schedules.tick(c)
+      return schedules.tick(c, (token) => registry().stopped(token))
     },
     backup: async (path) => {
       const target = resolve(path)

@@ -60,13 +60,13 @@ export function readChannel(
     args.push(request.before)
   }
   sql += ' order by activity desc'
-  const rows = ctx.db.raw.prepare(sql).all(...args) as Parameters<typeof toMessage>[0][]
+  const rows = ctx.db.raw.prepare(sql).all(...args) as Parameters<typeof toMessage>[1][]
 
   const threads: ThreadSummary[] = []
   let more = false
   let oldest: number | null = null
   for (const row of rows) {
-    const message = toMessage(row)
+    const message = toMessage(ctx.db, row)
     if (!allowed(caller, message.channel, 'read')) continue
     if (!matchesLabels(message.labels, filters)) continue
     if (found) {
@@ -96,8 +96,8 @@ export function readThread(ctx: Context, caller: Caller, request: { id: number; 
   const cursor = head(ctx)
   const rows = ctx.db.raw
     .prepare('select * from messages where thread = ? and re is not null and id > ? order by id')
-    .all(root.id, request.after ?? 0) as Parameters<typeof toMessage>[0][]
-  const replies = rows.map(toMessage).filter((reply) => !reply.deleted && matchesLabels(reply.labels, filters))
+    .all(root.id, request.after ?? 0) as Parameters<typeof toMessage>[1][]
+  const replies = rows.map((row) => toMessage(ctx.db, row)).filter((reply) => !reply.deleted && matchesLabels(reply.labels, filters))
   return { message: root, replies, task: findTask(ctx, root.id), cursor }
 }
 
@@ -209,7 +209,7 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
  * and its files, in the event that posted it and in every edit and label change since.
  */
 function shown(ctx: Context, event: BoardEvent, gone: Map<number, boolean>): Record<string, unknown> {
-  const { token: _token, idem: _idem, ...rest } = event.data as Record<string, unknown>
+  const { token: _token, idem: _idem, jti: _jti, ...rest } = event.data as Record<string, unknown>
   const carries = event.type === 'message.posted' || event.type === 'message.edited' || event.type === 'labels.changed'
   const id = event.type === 'message.posted' ? event.seq : rest.id
   if (!carries || typeof id !== 'number') return rest
@@ -288,10 +288,10 @@ export function search(ctx: Context, caller: Caller, request: { text: string; ch
     .join(' ')
   const rows = ctx.db.raw
     .prepare('select m.* from messages_fts f join messages m on m.id = f.rowid where messages_fts match ? order by m.id desc')
-    .all(query) as Parameters<typeof toMessage>[0][]
+    .all(query) as Parameters<typeof toMessage>[1][]
   const messages: Message[] = []
   for (const row of rows) {
-    const message = toMessage(row)
+    const message = toMessage(ctx.db, row)
     if (message.deleted || !allowed(caller, message.channel, 'read')) continue
     if (scope && !inScope(message.channel, scope)) continue
     messages.push(message)

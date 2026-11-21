@@ -13,6 +13,8 @@ export type Registry = {
   revoke(id: string): boolean
   /** Whether a token with this ID is to be refused: it was stopped, or the board has no record of making it. */
   revoked(id: string): boolean
+  /** Whether the board's owner stopped this token. One that only ran out wasn't stopped. */
+  stopped(id: string): boolean
   list(now: number): TokenRecord[]
 }
 
@@ -27,6 +29,7 @@ export function memoryRegistry(): Registry {
       return found !== undefined
     },
     revoked: (id) => tokens.get(id)?.revoked !== false,
+    stopped: (id) => tokens.get(id)?.revoked === true,
     list: (now) => [...tokens.values()].filter((token) => token.exp * 1000 > now),
   }
 }
@@ -56,6 +59,7 @@ export function dbRegistry(db: Db, clock: () => number = () => Date.now()): Regi
     // Every token with an ID was written here when it was made. One the board has no record of (a board
     // restored from before it, or a row removed) can't be vouched for, so it is treated as stopped.
     revoked: (id) => (db.raw.prepare('select revoked from tokens where id = ?').get(id) as { revoked: number } | undefined)?.revoked !== 0,
+    stopped: (id) => (db.raw.prepare('select revoked from tokens where id = ?').get(id) as { revoked: number } | undefined)?.revoked === 1,
     list: (now) => (db.raw.prepare('select * from tokens where exp > ? order by at, id').all(Math.floor(now / 1000)) as Row[]).map(view),
   }
 }

@@ -56,6 +56,21 @@ const issue = (number: number, title = 'Login redirects to evil.example', body =
 const texts = async (team: ReturnType<typeof setup>['team'], channel: string) => (await team.readChannel({ channel })).threads.map((thread) => thread.message.text)
 
 describe('sync: GitHub', () => {
+  it("text from a platform is never checked on the way in, so a block in it reaches a program only if it follows its schema", async () => {
+    const { team, gh } = setup()
+    await team.schemaAdd({ name: 'verdict@1', schema: { type: 'object', required: ['approved'], additionalProperties: false, properties: { approved: { type: 'boolean' } } } })
+    const fenced = (name: string, data: string) => 'look\n\n```json#' + name + '\n' + data + '\n```'
+    await gh('issues', { action: 'opened', issue: issue(1, 'wrong shape', fenced('verdict@1', '{"approved":"yes","run":"anything"}')), repository: repo, sender: { login: 'stranger' } })
+    await gh('issues', { action: 'opened', issue: issue(2, 'no such schema', fenced('deploy@1', '{"to":"production"}')), repository: repo, sender: { login: 'stranger' } })
+    await gh('issues', { action: 'opened', issue: issue(3, 'not json', fenced('verdict@1', '{ approved')), repository: repo, sender: { login: 'stranger' } })
+    await gh('issues', { action: 'opened', issue: issue(4, 'well formed', fenced('verdict@1', '{"approved":false}')), repository: repo, sender: { login: 'stranger' } })
+    const threads = (await team.readChannel({ channel: 'web/issues' })).threads.sort((a, b) => a.message.id - b.message.id)
+    // The text is all there for a person to read; only what a program is handed is held to the schema.
+    expect(threads.map((thread) => thread.message.text.includes('```json#'))).toEqual([true, true, true, true])
+    expect(threads.map((thread) => thread.message.blocks)).toEqual([[], [], [], [{ schema: 'verdict@1', data: { approved: false } }]])
+    expect((await team.events({ after: 0, filter: { types: ['message.posted'] } })).events.map((event) => event.message!.blocks.length)).toEqual([0, 0, 0, 1])
+  })
+
   it('an issue becomes a thread in its mapped channel, written by its GitHub author, and its comments become replies', async () => {
     const { team, gh } = setup()
     expect(await gh('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })).toEqual({ status: 200, body: 'ok' })

@@ -183,6 +183,43 @@ describe('serve', () => {
     await server.close()
   })
 
+  it('a schedule stops with the token that made it: once the owner revokes the token, nothing more is sent in its name', async () => {
+    const { server, as, owner, time } = await served()
+    const made = await as().backend.tokens.create({ profile: 'worker', can: { work: ['read', 'post'] }, ttl: 3000 })
+    const worker = board({ backend: http({ url: server.url, token: made.token }) })
+    const schedule = await worker.scheduleCreate({ channel: 'work', text: 'still here', every: 60 })
+    const kept = await owner.as('lead').scheduleCreate({ channel: 'work', text: 'standup', every: 60 })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [schedule.id, kept.id], canceled: [] })
+    await as().backend.tokens.revoke({ id: made.record.id })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [kept.id], canceled: [schedule.id] })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [kept.id], canceled: [] })
+    const texts = (await owner.readChannel({ channel: 'work' })).threads.map((thread) => `${thread.message.by.profile}: ${thread.message.text}`)
+    expect(texts.filter((text) => text === 'worker: still here')).toHaveLength(1)
+    expect((await owner.scheduleList()).schedules.map((each) => each.id)).toEqual([kept.id])
+    // A token that only ran out was never stopped: what it scheduled goes on, as the access page says.
+    const brief = await as().backend.tokens.create({ profile: 'brief', can: { work: ['read', 'post'] }, ttl: 60 })
+    const late = await board({ backend: http({ url: server.url, token: brief.token }) }).scheduleCreate({ channel: 'work', text: 'after my time', every: 120 })
+    time.advance(121_000)
+    expect((await owner.scheduleTick()).sent).toContain(late.id)
+    await server.close()
+  })
+
+  it('a token held to channels has 20 schedules going at most; the owner has no such limit', async () => {
+    const { server, as, owner } = await served()
+    const made = await as().backend.tokens.create({ profile: 'worker', can: { work: ['read', 'post'] }, ttl: 600 })
+    const worker = board({ backend: http({ url: server.url, token: made.token }) })
+    const ids: number[] = []
+    for (let i = 0; i < 20; i++) ids.push((await worker.scheduleCreate({ channel: 'work', text: `n${i}`, every: 60 })).id)
+    expect(await reason(worker.scheduleCreate({ channel: 'work', text: 'one more', every: 60 }))).toBe('too_many_schedules')
+    await worker.scheduleCancel({ id: ids[0]! })
+    expect((await worker.scheduleCreate({ channel: 'work', text: 'room again', every: 60 })).text).toBe('room again')
+    for (let i = 0; i < 25; i++) await owner.as('worker').scheduleCreate({ channel: 'work', text: `o${i}`, every: 60 })
+    await server.close()
+  })
+
   it('only a token that may manage registers a schema', async () => {
     const { as, server } = await served()
     expect(await reason(as({ can: { '*': ['read', 'post', 'label'] } }).schemaAdd({ name: 'a@1', schema: {} }))).toBe('forbidden')

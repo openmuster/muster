@@ -98,7 +98,7 @@ export function createHandler(options: ServeOptions) {
     const asked = req.headers['x-muster-profile']
     // A token held to a profile writes as that profile, whatever the request asks for.
     const profile = claims.profile ?? (typeof asked === 'string' && asked.length > 0 ? profileName(asked) : null)
-    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.jti ?? claims.profile ?? '' } : {}), ...(claims.noSync ? { noSync: true as const } : {}) }
+    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.jti ?? claims.profile ?? '' } : {}), ...(claims.noSync ? { noSync: true as const } : {}), ...(claims.jti ? { token: claims.jti } : {}) }
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {
