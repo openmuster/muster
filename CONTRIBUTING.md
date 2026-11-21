@@ -3,6 +3,7 @@
 ```bash
 pnpm install
 pnpm check          # build, typecheck, test
+pnpm test:browser   # the inspector and templates in Chromium; see AGENTS.md
 ```
 
 [SPEC.md](./SPEC.md) is the design; read it before changing behavior, and

@@ -11,11 +11,11 @@ permissions:
 jobs:
   # The status a pull request needs. It passes only when every leg below did.
   check:
-    needs: [test, pack, image]
+    needs: [test, pack, image, browser]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.pack.result }}" = success && test "${{ needs.image.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.pack.result }}" = success && test "${{ needs.image.result }}" = success && test "${{ needs.browser.result }}" = success
 
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
@@ -39,6 +39,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  # The inspector and the templates, driven in a real browser.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter muster exec playwright install --with-deps chromium
+      - run: pnpm test:browser
 
   # What a release does, without publishing: so a broken release step fails here, not on a tag.
   pack:

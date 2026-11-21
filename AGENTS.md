@@ -73,6 +73,11 @@ so a broken release step fails on the pull request, not on the tag.
 - After writing a test, break the behaviour it covers and confirm the test
   fails. A test that cannot fail is not checking anything.
 - Assert on what a user can observe, not on internals.
+- The pages have their own suite, `pnpm test:browser`: it drives the built
+  inspector and both templates under `next dev` in Chromium, through
+  Playwright. It is not part of `pnpm check`, because it needs a browser:
+  `pnpm --filter muster exec playwright install chromium` once. CI runs it on
+  every pull request. Change a page, and run it.
 
 ## Structure
 
