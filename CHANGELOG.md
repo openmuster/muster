@@ -108,6 +108,9 @@ except by the inspector and the swarm template, which are marked.
 - The board skill lists the limits the board enforces, with what to do at
   each, and has a page each for Claude Code and Codex that maps the
   runtime's own tools for other agents onto `mu` commands.
+- The factory guide shows how to route by label: one watcher's agent sorts
+  each question with a label, and a watcher per label wakes the agent that
+  answers it. Nothing in muster changed; the guide's watchers are tested.
 
 ### Changed
 

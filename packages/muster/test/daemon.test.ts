@@ -129,6 +129,107 @@ function harness(watcher: Partial<Watcher> & { run?: string[] }, exits: (command
   return { ...made, ran, tick }
 }
 
+describe('routing by label, with the watchers the factory guide gives', () => {
+  // The guide's own watchers.json, so what it tells a reader to write is what is run here.
+  const guide = readFileSync(new URL('../docs/03-guides/03-factory.md', import.meta.url), 'utf8')
+  const documented = JSON.parse([...guide.matchAll(/```json\n([\s\S]*?)```/g)].map((block) => block[1]!).find((block) => block.includes('"router"'))!) as { watchers: Watcher[] }
+
+  /** The agents and gates the guide describes, played by the test: the router labels, a product's agent replies. */
+  function routed(pick: (text: string) => string, watchers: Watcher[] = documented.watchers) {
+    const made = memoryBoard()
+    const { team, time } = made
+    const woke: string[] = []
+    const product = async (thread: string) => (await team.readThread({ id: Number(thread) })).message.labels.product
+    const deps: Deps = {
+      now: () => time.now().getTime(),
+      spawn: async (command, env) => {
+        const script = command[0]!.split('/').at(-1)!
+        const thread = env.MUSTER_THREAD!
+        if (script === 'unlabelled.sh') return { code: 0, stdout: (await product(thread)) === undefined ? '' : '{"wake": false}' }
+        if (script === 'has-product.sh') return { code: 0, stdout: (await product(thread)) === command[1] ? '' : '{"wake": false}' }
+        woke.push(`${env.MUSTER_PROFILE}:${thread}`)
+        if (script === 'route.sh') {
+          const root = (await team.readThread({ id: Number(thread) })).message
+          await team.as(env.MUSTER_PROFILE!).label({ id: root.id, set: { product: pick(root.text) } })
+        } else await team.as(env.MUSTER_PROFILE!).reply({ to: Number(thread), text: `answer from ${command[2]}` })
+        return { code: 0, stdout: '' }
+      },
+    }
+    const states = new Map<string, WatchState>()
+    const tick = async () => {
+      time.advance(31_000)
+      await tickOnce(team, watchers, states, deps)
+    }
+    const replies = async (id: number) => (await team.readThread({ id })).replies.map((reply) => reply.text)
+    return { ...made, woke, tick, replies }
+  }
+  const settle = async (tick: () => Promise<void>) => {
+    for (let i = 0; i < 4; i++) await tick()
+  }
+
+  it('the router labels a question, and only that product answers, once', async () => {
+    const { team, woke, tick, replies } = routed((text) => (text.includes('card') ? 'billing' : 'api'))
+    await tick()
+    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
+    await settle(tick)
+    expect(await replies(card.id)).toEqual(['answer from billing'])
+    expect(await replies(key.id)).toEqual(['answer from api'])
+    expect(woke).toEqual([`router:${card.id}`, `router:${key.id}`, `billing-bot:${card.id}`, `api-bot:${key.id}`])
+  })
+
+  it('a follow-up wakes the product again and not the router', async () => {
+    const { team, woke, tick, replies } = routed(() => 'billing')
+    await tick()
+    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await settle(tick)
+    woke.length = 0
+    await team.as('ada').reply({ to: card.id, text: 'and the invoice address?' })
+    await settle(tick)
+    expect(woke).toEqual([`billing-bot:${card.id}`])
+    expect(await replies(card.id)).toEqual(['answer from billing', 'and the invoice address?', 'answer from billing'])
+  })
+
+  it('product=none wakes nobody and the router is not asked again', async () => {
+    const { team, woke, tick, replies } = routed(() => 'none')
+    await tick()
+    const lunch = await team.as('ada').post({ channel: 'help', text: 'lunch?' })
+    await settle(tick)
+    await team.as('ada').reply({ to: lunch.id, text: 'anyone?' })
+    await settle(tick)
+    expect(woke).toEqual([`router:${lunch.id}`])
+    expect(await replies(lunch.id)).toEqual(['anyone?'])
+  })
+
+  it('a label corrected by hand wakes the new product and leaves the old one asleep', async () => {
+    const { team, woke, tick } = routed(() => 'billing')
+    await tick()
+    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
+    await settle(tick)
+    woke.length = 0
+    await team.as('ada').label({ id: key.id, set: { product: 'api' } })
+    await settle(tick)
+    expect(woke).toEqual([`api-bot:${key.id}`])
+  })
+
+  it("a product's agent that writes as the router can miss the router's label, where its own profile never does", async () => {
+    // Router last: the label lands after the product's watcher has read past the question, so the label is all it can hear.
+    const routerLast = [...documented.watchers].reverse()
+    const shared = routed(() => 'billing', routerLast.map((watcher) => ({ ...watcher, as: 'router' })))
+    await shared.tick()
+    const missed = await shared.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await settle(shared.tick)
+    expect(shared.woke).toEqual([`router:${missed.id}`])
+    expect(await shared.replies(missed.id)).toEqual([])
+
+    const own = routed(() => 'billing', routerLast)
+    await own.tick()
+    const heard = await own.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await settle(own.tick)
+    expect(await own.replies(heard.id)).toEqual(['answer from billing'])
+  })
+})
+
 describe('watchers', () => {
   it('wakes once per thread with a pointer, never the content, for what happened since it last looked', async () => {
     const { team, ran, tick } = harness({})
