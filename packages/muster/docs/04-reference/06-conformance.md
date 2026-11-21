@@ -18,7 +18,7 @@ point it at a scratch board. It exits 1 if any check fails.
 pass  a post is a thread root written by its caller
 pass  a reply to a reply lands on the root
 ...
-18 of 18 passed
+19 of 19 passed
 ```
 
 ## What it checks
@@ -36,6 +36,7 @@ pass  a reply to a reply lands on the root
   without the claim's token changes nothing; completing readies what waited.
 - A claim's secret is not in the feed.
 - A block holds a task with a kind; unblock readies it.
+- The last active tasks are listed on request, the latest last.
 - What does not exist is not found.
 
 ## From code

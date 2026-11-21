@@ -15,7 +15,10 @@ mu tasks work/
 ```
 
 `tasks create <id>` makes an existing thread a task. `mu tasks` lists open
-tasks, oldest first; `--state all` or a state's name lists others.
+tasks, oldest first; `--state all` or a state's name lists others. A list
+holds 200 tasks, up to 1,000 with `--limit`, and says when more matched.
+`--latest` lists the last active instead, by the newest message in each
+thread, the latest last: on a long-lived board, that is where the work is.
 
 ## States
 

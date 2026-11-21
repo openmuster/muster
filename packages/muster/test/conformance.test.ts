@@ -10,7 +10,7 @@ describe('conformance', () => {
     const { team } = memoryBoard()
     const checks = await conformance(team)
     expect(checks.filter((check) => !check.ok)).toEqual([])
-    expect(checks.length).toBeGreaterThanOrEqual(18)
+    expect(checks.length).toBeGreaterThanOrEqual(19)
   })
 
   it('a backend that breaks a rule fails the check for that rule, and only that one', async () => {

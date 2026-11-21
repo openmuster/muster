@@ -72,7 +72,7 @@ function App() {
   }, [])
 
   const refresh = async () => {
-    const [channels, tasks, head] = await Promise.all([call<{ channels: { path: string; threads: number }[] }>('channels'), call<{ tasks: TaskListing[] }>('taskList', [{ state: 'all', limit: 1000 }]), call<number>('head')])
+    const [channels, tasks, head] = await Promise.all([call<{ channels: { path: string; threads: number }[] }>('channels'), Promise.all([call<{ tasks: TaskListing[] }>('taskList', [{ state: 'open', limit: 1000 }]), call<{ tasks: TaskListing[] }>('taskList', [{ state: 'all', latest: true, limit: 1000 }])]).then(([open, latest]) => ({ tasks: [...new Map([...open.tasks, ...latest.tasks].map((task) => [task.id, task])).values()].sort((a, b) => a.id - b.id) })), call<number>('head')])
     dispatch({ type: 'snapshot', channels: channels.channels, tasks: tasks.tasks, cursor: head })
     if (view.kind === 'channel') dispatch({ type: 'threads', channel: view.path, threads: (await call<{ threads: ThreadSummary[] }>('readChannel', [{ channel: view.path, limit: 100 }])).threads })
     if (thread) {

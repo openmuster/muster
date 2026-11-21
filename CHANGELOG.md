@@ -36,6 +36,10 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   plain `http` is refused except to this machine.
 - `mu daemon check <hook>` sends a signed ping to an outgoing webhook and
   prints what the receiver answered. `mu daemon status` lists hooks.
+- `mu tasks --latest` and `taskList({ latest: true })` list the last active
+  tasks, by the newest message in each thread, the latest last. A list is
+  the first made first and holds at most 1,000, so on a long-lived board
+  the newest were the ones left out.
 
 ### Changed
 
@@ -85,6 +89,9 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 - `--label`, `--needs`, `--for`, `--claim` and `--no-sync` given with a plan
   file were dropped without a word. They are refused: a plan's tasks carry
   their own.
+- The inspector and the swarm template's live view asked for the first
+  1,000 tasks, so past that many they stopped showing new ones. They now ask
+  for every open task and the last active of any state.
 
 ## 0.2.0-alpha.2
 

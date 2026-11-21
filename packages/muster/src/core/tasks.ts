@@ -698,16 +698,22 @@ export function setNeeds(ctx: Context, caller: Caller, request: { id: number; ne
 
 export type TaskListing = Task & { text: string; labels: Record<string, string>; by: By; at: string }
 
+/**
+ * The tasks a caller may read, the first made first. With `latest` it is the `limit` last active instead,
+ * the latest last: a thread is active when something is said in it, so a claim renewed in silence
+ * doesn't count. `more` says some that matched were left out.
+ */
 export function list(
   ctx: Context,
   caller: Caller,
-  request: { channel?: string; state?: TaskState | 'open' | 'all'; labels?: string[]; limit?: number } = {},
+  request: { channel?: string; state?: TaskState | 'open' | 'all'; labels?: string[]; limit?: number; latest?: boolean } = {},
 ): { tasks: TaskListing[]; more: boolean } {
   const scope = request.channel === undefined ? null : channelScope(request.channel)
   const filters = (request.labels ?? []).map(labelFilter)
   const want = request.state ?? 'open'
   if (want !== 'open' && want !== 'all' && !TASK_STATES.includes(want)) throw misuse('invalid_state', `"${want}" isn't a task state.`, `One of: open, all, ${TASK_STATES.join(', ')}.`)
   const limit = limitOf(request.limit, 200, 1000)
+  const latest = request.latest === true
   const rows = ctx.db.raw.prepare('select * from tasks order by id').all() as TaskRow[]
   const tasks: TaskListing[] = []
   let more = false
@@ -719,13 +725,19 @@ export function list(
     if (!matchesLabels(root.labels, filters)) continue
     const task = toTask(ctx, row, root)
     if (want === 'open' ? !OPEN_STATES.includes(task.state) : want !== 'all' && task.state !== want) continue
-    if (tasks.length === limit) {
+    if (!latest && tasks.length === limit) {
       more = true
       break
     }
     tasks.push({ ...task, text: root.text, labels, by: root.by, at: root.at })
   }
-  return { tasks, more }
+  if (!latest) return { tasks, more }
+  // IDs are given in the order things were written, so a thread's newest message is its highest ID.
+  const newest = ctx.db.raw.prepare('select max(id) as id from messages where thread = ? and deleted = 0')
+  const active = new Map(tasks.map((task) => [task.id, (newest.get(task.id) as { id: number | null }).id ?? task.id]))
+  // A sort keeps ties as they came, and no two messages share an ID.
+  const kept = tasks.sort((x, y) => active.get(x.id)! - active.get(y.id)!).slice(-limit)
+  return { tasks: kept, more: tasks.length > limit }
 }
 
 /** Holds an open task whose first message was changed by someone other than its owner. Sync calls it for edits a platform sends. */

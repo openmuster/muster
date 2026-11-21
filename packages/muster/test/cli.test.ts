@@ -107,6 +107,17 @@ describe('cli', () => {
     expect((await cli(dir, ['tasks', '--state', 'failed'])).stdout).toBe('no failed tasks\n')
   })
 
+  it('tasks --latest lists the last active, the latest last, and says when others are not shown', async () => {
+    const dir = tempDir()
+    for (const text of ['a', 'b', 'c']) await cli(dir, ['tasks', 'create', 'work', text])
+    await cli(dir, ['reply', '1', 'still on it'])
+    const ids = (run: { stdout: string }) => JSON.parse(run.stdout).tasks.map((task: { id: number }) => task.id)
+    expect(ids(await cli(dir, ['tasks', '--latest', '--limit', '2', '--json']))).toEqual([5, 1])
+    expect(ids(await cli(dir, ['tasks', '--limit', '2', '--json']))).toEqual([1, 3])
+    expect(lines((await cli(dir, ['tasks', '--latest', '--limit', '2'])).stdout).slice(-1)).toEqual(['(the last active: others not shown)'])
+    expect(lines((await cli(dir, ['tasks', '--limit', '2'])).stdout).slice(-1)).toEqual(['(more not shown: narrow with --state or --label, or see --latest)'])
+  })
+
   it("keeps a claim's token for the profile that took it, in a file only you can read, and forgets it on settling", async () => {
     const dir = tempDir()
     await cli(dir, ['tasks', 'create', 'work', 't'])

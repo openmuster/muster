@@ -374,6 +374,29 @@ describe('tasks', () => {
     expect(await reason(team.taskList({ state: 'done' as never }))).toBe('invalid_state')
   })
 
+  it('lists the last active tasks on request: by the newest message in each thread, the latest last', async () => {
+    const { team } = memoryBoard()
+    const [a, b, c, d] = await Promise.all(['a', 'b', 'c', 'd'].map(async (text) => (await team.taskCreate({ channel: 'work', text })).task.id)) as [number, number, number, number]
+    const ids = async (request: Parameters<typeof team.taskList>[0]) => (await team.taskList(request)).tasks.map((task) => task.id)
+    // With nothing said since, the last made are the last active, in the order they were made.
+    expect(await ids({ latest: true, limit: 2 })).toEqual([c, d])
+    expect((await team.taskList({ latest: true, limit: 2 })).more).toBe(true)
+    expect((await team.taskList({ latest: true, limit: 4 })).more).toBe(false)
+    expect(await ids({ limit: 2 })).toEqual([a, b])
+    await team.reply({ to: a, text: 'progress on the oldest' })
+    expect(await ids({ latest: true, limit: 2 })).toEqual([d, a])
+    // Holding a task says nothing in its thread, so a renewed claim doesn't make it active.
+    const held = await team.taskClaim({ id: b })
+    await team.taskRenew({ id: b, token: held.token })
+    expect(await ids({ latest: true, limit: 2 })).toEqual([d, a])
+    // It is the newest of what the rest of the request asks for.
+    await team.taskComplete({ id: b, token: held.token })
+    expect(await ids({ latest: true, state: 'completed' })).toEqual([b])
+    expect(await ids({ latest: true, limit: 1 })).toEqual([a])
+    expect(await ids({ latest: true })).toEqual([c, d, a])
+    for (const limit of [0, -1, 1.5]) expect([limit, await reason(team.taskList({ latest: true, state: 'all', limit }))]).toEqual([limit, 'invalid_limit'])
+  })
+
   it('a waiter on task outcomes hears a completion, a hold, and a failure, by the label the board keeps', async () => {
     const { team } = memoryBoard()
     const a = (await team.taskCreate({ channel: 'work', text: 'a' })).task
