@@ -136,6 +136,9 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
 
 const stopCode = (signal: AbortSignal) => (signal.reason === 'SIGTERM' ? 143 : 130)
 
+/** An argument as a shell takes it, quoted only when it has to be. */
+const shell = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`)
+
 function textOf(parsed: Parsed, at: number, io: Io): string {
   const file = str(parsed.flags, 'file')
   if (file !== undefined) return file === '-' ? io.stdin() : readFileSync(file, 'utf8')
@@ -992,12 +995,34 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       const common = { ...(needs.length ? { needs } : {}), ...(assignee !== undefined ? { for: assignee } : {}), ...(on(parsed.flags, 'claim') ? { claim: { ...lease(parsed.flags) } } : {}), ...key(parsed.flags) }
       const planFile = str(parsed.flags, 'file')
       if (planFile !== undefined && parsed.positionals[2] === undefined && target !== undefined && !/^#?[1-9][0-9]*$/.test(target)) {
+        let source: string
+        try {
+          source = planFile === '-' ? run.io.stdin() : readFileSync(planFile, 'utf8')
+        } catch (error) {
+          throw misuse('invalid_plan', `Couldn't read the plan at ${planFile}: ${(error as NodeJS.ErrnoException).code === 'ENOENT' ? 'no such file' : (error as Error).message}.`)
+        }
+        // What one task takes, as it was given: a plan's tasks carry their own.
+        const ofOne = [
+          ...list(parsed.flags, 'label').flatMap((label) => ['--label', label]),
+          ...list(parsed.flags, 'needs').flatMap((need) => ['--needs', need]),
+          ...(assignee !== undefined ? ['--for', assignee] : []),
+          ...(on(parsed.flags, 'claim') ? ['--claim'] : []),
+          ...(on(parsed.flags, 'no-sync') ? ['--no-sync'] : []),
+        ]
         let plan: PlanTask[]
         try {
-          plan = JSON.parse(planFile === '-' ? run.io.stdin() : readFileSync(planFile, 'utf8')) as PlanTask[]
-        } catch (error) {
-          throw misuse('invalid_plan', `Couldn't read the plan: ${(error as Error).message}`, 'A plan is a JSON array of { "key", "text", "labels", "needs" }.')
+          plan = JSON.parse(source) as PlanTask[]
+        } catch {
+          // `post` and `reply` read their text from --file, so a task's text arrives here the same way.
+          const kept = [...ofOne, ...(['lease', 'idempotency-key', 'as', 'board', 'dir', 'url'] as const).flatMap((name) => (str(parsed.flags, name) !== undefined ? [`--${name}`, str(parsed.flags, name)!] : []))]
+          const command = ['mu', 'tasks', 'create', target, '-', ...kept].map(shell).join(' ') + (planFile === '-' ? '' : ` < ${shell(planFile)}`)
+          throw new Failure('invalid_plan', `${planFile === '-' ? 'What came on stdin' : planFile} isn't JSON, so it isn't a plan of tasks.`, {
+            exit: 2,
+            hint: 'For one task with that text, give - as the text and the file on stdin.',
+            next: [command],
+          })
         }
+        if (ofOne.length) throw misuse('invalid_plan', `${ofOne[0]} is one task's, and this is a plan of tasks.`, 'In a plan each task carries its own: { "key", "text", "labels", "needs", "for" }.')
         const made = await run.team.taskPlan({ channel: target, tasks: plan, ...key(parsed.flags) })
         return print(run, made, () => made.tasks.map((task) => `created  #${task.id}  ${task.state.padEnd(8)}  ${task.key}`).join('\n'))
       }

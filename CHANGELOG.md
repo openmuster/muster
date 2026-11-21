@@ -78,6 +78,13 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   What follows `--` is now left to the command.
 - `mu read <channel> --mentions <who>` says which command lists mentions:
   `mu tail <channel> --mentions <who> --last 20`.
+- `mu tasks create <channel> --file task.md` reads a plan of tasks, where
+  `post` and `reply` read their text from `--file`. A file that isn't JSON
+  now names the command that makes one task of it: the same one, with `-`
+  as the text and the file on stdin, its options kept.
+- `--label`, `--needs`, `--for`, `--claim` and `--no-sync` given with a plan
+  file were dropped without a word. They are refused: a plan's tasks carry
+  their own.
 
 ## 0.2.0-alpha.2
 

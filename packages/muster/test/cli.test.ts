@@ -137,6 +137,40 @@ describe('cli', () => {
     expect(again.stdout).toBe(run.stdout)
   })
 
+  it("a plan file that isn't JSON names the command that makes one task of it, which works", async () => {
+    const dir = tempDir()
+    const file = join(dir, 'task.md')
+    writeFileSync(file, '# Fix the redirect\n\nFollow only same-origin paths.\n')
+    const run = await cli(dir, ['tasks', 'create', 'work', '--file', file, '--label', 'role=worker', '--label', 'note=two words', '--as', 'lead'])
+    expect(run.code).toBe(2)
+    expect(lines(run.stderr)).toEqual([
+      `error: ${file} isn't JSON, so it isn't a plan of tasks.`,
+      '',
+      '  For one task with that text, give - as the text and the file on stdin.',
+      `  mu tasks create work - --label role=worker --label 'note=two words' --as lead < ${file}`,
+    ])
+    const one = await cli(dir, ['tasks', 'create', 'work', '-', '--label', 'role=worker', '--label', 'note=two words', '--as', 'lead', '--json'], { input: readFileSync(file, 'utf8') })
+    expect(JSON.parse(one.stdout).task).toMatchObject({ id: 1, state: 'ready' })
+    const [listed] = JSON.parse((await cli(dir, ['tasks', '--json'])).stdout).tasks
+    expect(listed).toMatchObject({ text: '# Fix the redirect\n\nFollow only same-origin paths.\n', labels: { role: 'worker', note: 'two words' } })
+    const piped = await cli(dir, ['tasks', 'create', 'work', '--file', '-'], { input: 'not json' })
+    expect(lines(piped.stderr).slice(-1)).toEqual(['  mu tasks create work -'])
+    const missing = await cli(dir, ['tasks', 'create', 'work', '--file', join(dir, 'nowhere.json')])
+    expect([missing.code, lines(missing.stderr)[0]]).toEqual([2, `error: Couldn't read the plan at ${join(dir, 'nowhere.json')}: no such file.`])
+  })
+
+  it("refuses one task's options on a plan, where they were dropped", async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'plan.json'), JSON.stringify([{ key: 'a', text: 'a' }]))
+    await cli(dir, ['tasks', 'create', 'work', 'before'])
+    for (const option of [['--label', 'role=worker'], ['--needs', '1'], ['--for', 'ada'], ['--claim'], ['--no-sync']]) {
+      const run = await cli(dir, ['tasks', 'create', 'work', '--file', join(dir, 'plan.json'), ...option])
+      expect([option[0], run.code, lines(run.stderr)[0]]).toEqual([option[0], 2, `error: ${option[0]} is one task's, and this is a plan of tasks.`])
+    }
+    expect(JSON.parse((await cli(dir, ['tasks', '--json'])).stdout).tasks).toHaveLength(1)
+    expect((await cli(dir, ['tasks', 'create', 'work', '--file', join(dir, 'plan.json'), '--idempotency-key', 'k'])).code).toBe(0)
+  })
+
   it('tasks run completes on exit 0, fails with the exit code otherwise, and hands the command the task ID', async () => {
     const dir = tempDir()
     await cli(dir, ['tasks', 'create', 'work', 'passes'])
