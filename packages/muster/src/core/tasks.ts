@@ -362,18 +362,68 @@ function postInside(ctx: Context, caller: Caller, request: PostRequest, emit: Em
   return post(nested, caller, { ...request, idempotencyKey: undefined } as PostRequest)
 }
 
-export type PlanTask = { key: string; text: string; labels?: Record<string, string>; needs?: ({ key: string } | { id: number })[]; for?: string }
+/** What a task in a plan waits for: an earlier task by its key, or a task already on the board by its ID. Either may be written bare. */
+export type PlanNeed = { key: string } | { id: number } | string | number
+export type PlanTask = { key: string; text: string; labels?: Record<string, string>; needs?: PlanNeed[]; for?: string }
+
+const NEED_SHAPE = 'A need is an earlier task\'s key or a task\'s ID: { "key": "a" } or { "id": 12 }, or either one bare, "a" or 12.'
+const isId = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0
+const show = (value: unknown) => JSON.stringify(value) ?? String(value)
+
+/**
+ * What each task of a plan waits for, checked before anything is written: a plan comes from a file or a
+ * request, so nothing about its shape is taken on trust. A bare string is a key when the plan has that
+ * key, and otherwise a task's ID.
+ */
+function planNeeds(tasks: readonly PlanTask[]): ({ key: string } | { id: number })[][] {
+  const keys = new Set<string>()
+  for (const task of tasks as readonly unknown[]) {
+    if (typeof task !== 'object' || task === null || Array.isArray(task)) throw misuse('invalid_plan', `${show(task)} isn't a task.`, 'A task in a plan is { "key", "text", "labels", "needs" }.')
+    const { key, text } = task as { key?: unknown; text?: unknown }
+    if (typeof key !== 'string' || key.length === 0) throw misuse('invalid_plan', 'Every task in a plan needs a "key".')
+    if (keys.has(key)) throw misuse('invalid_plan', `Two tasks share the key "${key}".`)
+    if (typeof text !== 'string') throw misuse('invalid_plan', `"${key}" has no "text": the text is the job.`)
+    const { labels, for: assignee } = task as { labels?: unknown; for?: unknown }
+    if (labels !== undefined && (typeof labels !== 'object' || labels === null || Array.isArray(labels))) throw misuse('invalid_plan', `"${key}" has labels that aren't { "k": "v" }: ${show(labels)}.`)
+    if (assignee !== undefined && typeof assignee !== 'string') throw misuse('invalid_plan', `"${key}" is for ${show(assignee)}, which isn't a profile's name.`)
+    keys.add(key)
+  }
+  const earlier = new Set<string>()
+  return tasks.map((task) => {
+    const refuse = (what: string) => misuse('invalid_plan', `"${task.key}" ${what}`, NEED_SHAPE)
+    const byKey = (key: string) => {
+      if (!earlier.has(key)) throw refuse(`waits for "${key}", which isn't earlier in the plan.`)
+      return { key }
+    }
+    const needs: unknown = task.needs ?? []
+    if (!Array.isArray(needs)) throw refuse(`has needs that aren't a list: ${show(needs)}.`)
+    const settled = needs.map((need: unknown) => {
+      if (isId(need)) return { id: need }
+      if (typeof need === 'string') {
+        if (keys.has(need)) return byKey(need)
+        if (/^#?[1-9][0-9]*$/.test(need)) return { id: Number(need.replace('#', '')) }
+        throw refuse(`waits for "${need}", which is neither a key in this plan nor a task's ID.`)
+      }
+      if (typeof need === 'object' && need !== null) {
+        const { key, id } = need as { key?: unknown; id?: unknown }
+        if (isId(id) && key === undefined) return { id }
+        if (typeof key === 'string' && id === undefined) {
+          if (!keys.has(key)) throw refuse(`waits for "${key}", which isn't a key in this plan.`)
+          return byKey(key)
+        }
+      }
+      throw refuse(`has a need that isn't one: ${show(need)}.`)
+    })
+    earlier.add(task.key)
+    return settled
+  })
+}
 
 /** Queues a whole plan in one write: each task after the ones it waits for, by its key. */
 export function plan(ctx: Context, caller: Caller, request: { channel: string; tasks: PlanTask[]; idempotencyKey?: string }): { tasks: (Task & { key: string })[] } {
-  if (!Array.isArray(request.tasks) || request.tasks.length === 0) throw misuse('empty_plan', 'A plan needs at least one task.')
+  if (!Array.isArray(request.tasks) || request.tasks.length === 0) throw misuse('empty_plan', 'A plan is a JSON array of tasks, with at least one.')
   if (request.tasks.length > PLAN_MAX) throw new Failure('plan_too_large', `A plan holds at most ${PLAN_MAX} tasks.`, { hint: 'Queue it in several writes.' })
-  const keys = new Set<string>()
-  for (const task of request.tasks) {
-    if (typeof task.key !== 'string' || task.key.length === 0) throw misuse('invalid_plan', 'Every task in a plan needs a "key".')
-    if (keys.has(task.key)) throw misuse('invalid_plan', `Two tasks share the key "${task.key}".`)
-    keys.add(task.key)
-  }
+  const needed = planNeeds(request.tasks)
   return once(
     ctx,
     caller,
@@ -381,17 +431,12 @@ export function plan(ctx: Context, caller: Caller, request: { channel: string; t
     { op: 'tasks.plan', channel: request.channel, tasks: request.tasks },
     (emit) => {
       const made = new Map<string, number>()
-      for (const task of request.tasks) {
-        const needs = (task.needs ?? []).map((need) => {
-          if ('id' in need) return need.id
-          const id = made.get(need.key)
-          if (id === undefined) throw misuse('invalid_plan', `"${task.key}" waits for "${need.key}", which isn't earlier in the plan.`)
-          return id
-        })
+      request.tasks.forEach((task, at) => {
+        const needs = needed[at]!.map((need) => ('id' in need ? need.id : made.get(need.key)!))
         const root = postInside(ctx, caller, { channel: request.channel, text: task.text, ...(task.labels ? { labels: task.labels } : {}) }, emit)
         makeTask(ctx, caller, root, { needs, for: task.for }, emit)
         made.set(task.key, root.id)
-      }
+      })
       const ids = [...made.entries()]
       return { answer: { tasks: ids.map(([key, id]) => ({ ...view(ctx, id), key })) }, ref: ids }
     },

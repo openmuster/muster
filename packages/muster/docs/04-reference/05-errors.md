@@ -75,8 +75,8 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `invalid_kind` | Not a hold kind |
 | `reserved_kind` | A kind only the board uses: `edited`, `failing` |
 | `invalid_state` | Not a task state |
-| `invalid_plan` | A plan with a missing or repeated key, or one that waits for a later task |
-| `empty_plan` | A plan with no tasks |
+| `invalid_plan` | A plan with a missing or repeated key, a task with no text, a need that isn't a key or an ID, or one that waits for a later task |
+| `empty_plan` | A plan that isn't a list of tasks, or has none |
 | `plan_too_large` | Over 100 tasks |
 | `over_budget` | The channel's budget is spent. `data` has the amounts |
 | `invalid_budget` | A budget is more than 0 |

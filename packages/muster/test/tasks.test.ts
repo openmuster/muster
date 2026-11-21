@@ -259,6 +259,59 @@ describe('tasks', () => {
     expect((await team.taskList({ state: 'all' })).tasks).toHaveLength(2)
   })
 
+  it('takes a plan\'s need as a key, an ID, or either one bare', async () => {
+    const { team } = memoryBoard()
+    const before = (await team.taskCreate({ channel: 'work', text: 'before' })).task.id
+    const made = await team.taskPlan({
+      channel: 'work',
+      // A plan as it arrives from a file or a request: nothing has checked its shape.
+      tasks: [
+        { key: 'a', text: 'a' },
+        { key: 'b', text: 'b', needs: ['a'] },
+        { key: 'c', text: 'c', needs: [{ key: 'a' }, { id: before }] },
+        { key: 'd', text: 'd', needs: [before, `#${before}`, String(before)] },
+      ] as never,
+    })
+    const [a, b, c, d] = made.tasks
+    expect(b!.needs).toEqual([a!.id])
+    expect(c!.needs).toEqual([before, a!.id].sort((x, y) => x - y))
+    expect(d!.needs).toEqual([before])
+  })
+
+  it('reads a bare need that is both a key in the plan and a task\'s ID as the key', async () => {
+    const { team } = memoryBoard()
+    const one = (await team.taskCreate({ channel: 'work', text: 'task 1' })).task.id
+    expect(one).toBe(1)
+    const made = await team.taskPlan({ channel: 'work', tasks: [{ key: '1', text: 'keyed 1' }, { key: 'next', text: 'next', needs: ['1'] }] as never })
+    expect(made.tasks[1]!.needs).toEqual([made.tasks[0]!.id])
+    expect(made.tasks[0]!.id).not.toBe(one)
+  })
+
+  it('refuses a plan whose shape is wrong, saying which need and what one looks like, and makes nothing', async () => {
+    const { team } = memoryBoard()
+    const refusal = async (tasks: unknown) => {
+      try {
+        await team.taskPlan({ channel: 'work', tasks: tasks as never })
+      } catch (error) {
+        return error as { reason: string; message: string; hint?: string }
+      }
+      throw new Error('the plan was taken')
+    }
+    for (const needs of [['nowhere'], [null], [{}], [{ key: 3 }], [{ id: 'x' }], [0], [1.5], [true], 'a', { key: 'a' }]) {
+      const refused = await refusal([{ key: 'a', text: 'a' }, { key: 'b', text: 'b', needs }])
+      expect([needs, refused.reason]).toEqual([needs, 'invalid_plan'])
+      expect(refused.message).toContain('"b"')
+    }
+    const unknown = await refusal([{ key: 'a', text: 'a' }, { key: 'b', text: 'b', needs: ['nowhere'] }])
+    expect(unknown.message).toContain('"nowhere"')
+    expect(unknown.hint).toContain('{ "key": "a" }')
+    expect((await refusal([{ key: 'b', text: 'b', needs: ['later'] }, { key: 'later', text: 'l' }])).message).toContain("isn't earlier")
+    expect((await refusal([{ key: 'a', text: 'a', needs: ['a'] }])).message).toContain("isn't earlier")
+    for (const tasks of [[null], ['a'], [3], [[]], [{ key: 'a' }], [{ key: 'a', text: 4 }], [{ key: 'a', text: 'a', labels: 3 }], [{ key: 'a', text: 'a', labels: ['x'] }], [{ key: 'a', text: 'a', for: 5 }]]) expect([tasks, (await refusal(tasks)).reason]).toEqual([tasks, 'invalid_plan'])
+    for (const tasks of [{ key: 'a', text: 'a' }, 'a', null]) expect((await refusal(tasks)).message).toBe('A plan is a JSON array of tasks, with at least one.')
+    expect((await team.taskList({ state: 'all' })).tasks).toHaveLength(0)
+  })
+
   it('lists open tasks oldest first by default, and any one state on request', async () => {
     const { team } = memoryBoard()
     const a = (await team.taskCreate({ channel: 'work', text: 'a' })).task
