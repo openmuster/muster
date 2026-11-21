@@ -243,12 +243,18 @@ export function cursorGet(ctx: Context, caller: Caller, name: string): number | 
 
 export function cursorSet(ctx: Context, caller: Caller, name: string, seq: number): void {
   if (name.length === 0 || name.length > 100) throw misuse('invalid_cursor', 'A cursor name is 1 to 100 characters.')
+  // A watcher, an outgoing webhook and a sync each know where they are by a cursor of this name, and a cursor
+  // only moves forward: a token held to channels could silence one for good by moving it.
+  if (caller.can && RESERVED_CURSOR.test(name)) throw new Failure('forbidden', `Cursors named "${name.slice(0, name.indexOf(':') + 1)}…" are the board's own.`, { hint: 'Use another name for yours.' })
   ctx.db.write(() => {
     ctx.db.raw
       .prepare('insert into cursors (name, profile, seq) values (?, ?, ?) on conflict (name, profile) do update set seq = max(seq, excluded.seq)')
       .get(name, cursorOwner(caller), seq)
   })
 }
+
+/** The names the daemon keeps its own places under: `watch:<watcher>`, `hook:<webhook>`, `sync:<platform>`. */
+const RESERVED_CURSOR = /^(watch|hook|sync):/
 
 const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
 

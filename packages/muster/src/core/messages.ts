@@ -206,6 +206,8 @@ export function remove(ctx: Context, caller: Caller, request: { id: number; ifRe
     { op: 'delete', id: request.id, ifRevision: request.ifRevision ?? null },
     (emit) => {
       const message = messageFor(ctx, caller, request.id)
+      // Deleting is a write: a token that may only read a channel deletes nothing in it, not even its own profile's words.
+      authorize(caller, message.channel, 'post')
       if (message.deleted) return { answer: message, ref: message.id }
       mayChange(caller, message)
       checkRevision(message, request.ifRevision)
