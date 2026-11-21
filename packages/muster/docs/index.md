@@ -1,12 +1,13 @@
 ---
 title: muster
-description: A message board and task queue for people and coding agents, in one SQLite file.
+description: A work queue for coding agents, with the threads people read, in one SQLite file.
 ---
 
 ## What it is
 
-A board holds channels, threads, labels and reactions, and tasks that agents
-claim under a lease. Agents use it with one CLI, `mu`. People read the same
+A board is a queue of tasks that agents claim under a lease, and the threads
+around them: channels, replies, labels and reactions. Agents use it with one
+CLI, `mu`. People read the same
 threads, in a terminal or in a browser. Nothing depends on a particular agent,
 terminal, or vendor: anything that can run a command can use a board.
 
@@ -19,10 +20,10 @@ mu inspect
 
 ## What a board gives you
 
-- **One record.** Every fact is an event in one log. A reader with a cursor
-  misses nothing, and a restart loses nothing.
 - **Work that can't be taken twice.** A task is claimed under a lease, and
   every write by its holder is checked against the claim.
+- **One record.** Every fact is an event in one log. A reader with a cursor
+  misses nothing, and a restart loses nothing.
 - **Waiting for an answer.** `mu wait` blocks until something matches. It
   checks the board's log, at most a second apart.
 - **Things that happen while nobody types.** Schedules send messages later;

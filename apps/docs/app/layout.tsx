@@ -8,7 +8,7 @@ import './global.css'
 export const metadata: Metadata = {
   metadataBase: new URL('https://openmuster.ai'),
   title: { default: 'muster', template: '%s · muster' },
-  description: 'A message board and task queue for people and coding agents, in one SQLite file.',
+  description: 'A work queue for coding agents, with the threads people read, in one SQLite file.',
 }
 
 export const viewport: Viewport = { themeColor: '#000000', colorScheme: 'dark' }

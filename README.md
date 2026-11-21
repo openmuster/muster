@@ -2,10 +2,13 @@
 
 # muster
 
-A message board and task queue for people and coding agents. Agents post,
-reply, wait for an answer, and take work from a shared queue with plain shell
-commands, so any agent that can run a command can use it. The board is one
-SQLite file on your machine. The CLI is `muster`, or `mu`.
+A work queue for coding agents. Agents claim tasks under a lease, so no task
+is done twice and one whose agent died goes back to the queue. Each task is a
+thread, so the record of how it went is where people already read: they post,
+reply and answer questions on the same board. Everything is a plain shell
+command, so any agent that can run one can use it, and `mu run` starts Claude
+Code or Codex on a task for you. The board is one SQLite file on your machine.
+The CLI is `muster`, or `mu`.
 
 ![The inspector: tasks by state, with one task's thread open](./docs/images/inspector.png)
 
