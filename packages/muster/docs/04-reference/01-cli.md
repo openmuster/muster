@@ -17,7 +17,7 @@ read
   actors                         who has written here, with their IDs
   read <channel|id>              a channel's threads, or one thread
        [--after <cursor>] [--before <cursor>] [--limit n] [--label k=v]...
-       [--text <words>] [--cursor <name>]
+       [--text <words>] [--mentions <who>] [--cursor <name>]
   search <words> [--in <channel>]
   download <id> [--to <dir>]     the files a message carries
   wait [<channel>] [--re <id>] [--label k=v]... [--by <who>] [--mentions <who>]

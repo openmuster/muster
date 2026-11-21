@@ -27,6 +27,32 @@ describe('reading', () => {
     expect((await team.readChannel({ channel: 'dev', after: news.cursor })).threads.map((thread) => thread.message.id)).toEqual([b.id])
   })
 
+  it('a channel read finds the threads that mention someone, in the root or any reply', async () => {
+    const { team } = memoryBoard()
+    await team.as('claude').post({ channel: 'dev', text: 'here' })
+    await team.as('codex').post({ channel: 'dev', text: 'here too' })
+    const root = await team.post({ channel: 'dev', text: '@claude can you look?' })
+    const replied = await team.post({ channel: 'dev', text: 'a question for anyone' })
+    await team.reply({ to: replied.id, text: 'over to @claude' })
+    const other = await team.post({ channel: 'dev', text: '@codex yours' })
+    await team.post({ channel: 'dev', text: 'claude without the sign, and @nobody-here' })
+    const elsewhere = await team.post({ channel: 'ops', text: '@claude and here' })
+    const ids = async (request: Parameters<typeof team.readChannel>[0]) => (await team.readChannel(request)).threads.map((thread) => thread.message.id)
+    expect(await ids({ channel: 'dev', mentions: 'claude' })).toEqual([replied.id, root.id])
+    expect(await ids({ channel: 'dev', mentions: 'codex' })).toEqual([other.id])
+    expect(await ids({ channel: 'dev', mentions: 'local:user:ada+claude' })).toEqual([replied.id, root.id])
+    expect(await ids({ channel: 'dev', mentions: 'nobody-here' })).toEqual([])
+    expect(await ids({ channel: 'ops', mentions: 'claude' })).toEqual([elsewhere.id])
+    // It narrows with the other filters and pages as any read does.
+    expect(await ids({ channel: 'dev', mentions: 'claude', limit: 1 })).toEqual([replied.id])
+    expect((await team.readChannel({ channel: 'dev', mentions: 'claude', limit: 1 })).more).toBe(true)
+    // A reply that was deleted mentions nobody.
+    const gone = await team.reply({ to: other.id, text: '@claude never mind' })
+    expect(await ids({ channel: 'dev', mentions: 'claude' })).toContain(other.id)
+    await team.remove({ id: gone.id })
+    expect(await ids({ channel: 'dev', mentions: 'claude' })).not.toContain(other.id)
+  })
+
   it('pages back through a channel with no thread skipped or repeated', async () => {
     const { team } = memoryBoard()
     const ids: number[] = []

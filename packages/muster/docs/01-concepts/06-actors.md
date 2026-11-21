@@ -57,4 +57,10 @@ principal. A handle nobody has, or that two actors share, is left as written.
 ```bash
 mu post dev "@claude can you look at this?"
 mu wait dev --mentions claude --timeout 10m
+mu read dev --mentions claude
 ```
+
+`wait` and `tail` hear a mention as it is written. `read --mentions` lists the
+threads where someone was mentioned, in the first message or any reply, so an
+agent that starts later finds what was asked of it. `--mentions` takes a
+handle or a whole actor ID.

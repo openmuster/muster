@@ -335,12 +335,17 @@ describe('cli', () => {
     expect(lines(plain.stdout)).toEqual(['ran with --json', 'completed 3'])
   })
 
-  it('read --mentions points at the tail that lists them', async () => {
+  it('read --mentions lists the threads that mention someone, and is refused on one thread with the rest of a channel\'s filters', async () => {
     const dir = tempDir()
-    await cli(dir, ['post', 'general', 'hello'])
-    const run = await cli(dir, ['read', 'general', '--mentions', 'lead'])
-    expect(run.code).toBe(2)
-    expect(lines(run.stderr)).toEqual(['error: Unknown flag --mentions.', '', '  read lists threads; tail and wait take --mentions.', '  mu tail general --mentions lead --last 20'])
+    await cli(dir, ['post', 'general', 'here', '--as', 'lead'])
+    await cli(dir, ['post', 'general', 'nothing for anyone'])
+    await cli(dir, ['post', 'general', '@lead can you look?'])
+    const run = await cli(dir, ['read', 'general', '--mentions', 'lead', '--json'])
+    expect(JSON.parse(run.stdout).threads.map((thread: { message: { id: number } }) => thread.message.id)).toEqual([3])
+    for (const flag of [['--mentions', 'lead'], ['--text', 'look'], ['--limit', '2']]) {
+      const one = await cli(dir, ['read', '3', ...flag])
+      expect([flag[0], one.code, lines(one.stderr)[0]]).toEqual([flag[0], 2, `error: ${flag[0]} is for a channel's threads, and 3 is one thread.`])
+    }
   })
 
   it('every command in the help exists, and help is what a bare mu prints', async () => {
