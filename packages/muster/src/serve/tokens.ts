@@ -46,8 +46,10 @@ export function dbRegistry(db: Db, clock: () => number = () => Date.now()): Regi
     record(token) {
       db.write(() => {
         const now = Math.floor(clock() / 1000)
-        // What ran out opens nothing, so it is forgotten as new ones are made.
-        db.raw.prepare('delete from tokens where exp <= ?').run(now)
+        // What ran out opens nothing, so it is forgotten as new ones are made. One the owner stopped is kept:
+        // a schedule it made is canceled by the ticker when it next comes due, which may be long after the
+        // token would have run out, and forgetting the row would let that schedule go on.
+        db.raw.prepare('delete from tokens where exp <= ? and revoked = 0').run(now)
         const live = (db.raw.prepare('select count(*) as n from tokens where revoked = 0').get() as { n: number }).n
         if (live >= TOKENS_MAX) throw new Failure('too_many_tokens', `This board has ${TOKENS_MAX} live tokens, which is the most it keeps.`, { hint: 'Revoke some with mu token revoke, or wait for them to run out.' })
         db.raw.prepare('insert into tokens (id, profile, can, exp, at, revoked) values (?, ?, ?, ?, ?, 0)').run(token.id, token.profile, token.can ? JSON.stringify(token.can) : null, token.exp, token.at)

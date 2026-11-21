@@ -199,6 +199,14 @@ describe('serve', () => {
     const texts = (await owner.readChannel({ channel: 'work' })).threads.map((thread) => `${thread.message.by.profile}: ${thread.message.text}`)
     expect(texts.filter((text) => text === 'worker: still here')).toHaveLength(1)
     expect((await owner.scheduleList()).schedules.map((each) => each.id)).toEqual([kept.id])
+    // A stop is remembered past the token's own end, and past new tokens being made: a schedule that
+    // comes due only after its revoked token would have run out is still canceled.
+    const slow = await as().backend.tokens.create({ profile: 'slow', can: { work: ['read', 'post'] }, ttl: 60 })
+    const later = await board({ backend: http({ url: server.url, token: slow.token }) }).scheduleCreate({ channel: 'work', text: 'much later', at: new Date(time.now().getTime() + 600_000).toISOString() })
+    await as().backend.tokens.revoke({ id: slow.record.id })
+    time.advance(601_000)
+    await as().backend.tokens.create({ profile: 'other', can: { work: ['read'] }, ttl: 60 })
+    expect((await owner.scheduleTick()).canceled).toContain(later.id)
     // A token that only ran out was never stopped: what it scheduled goes on, as the access page says.
     const brief = await as().backend.tokens.create({ profile: 'brief', can: { work: ['read', 'post'] }, ttl: 60 })
     const late = await board({ backend: http({ url: server.url, token: brief.token }) }).scheduleCreate({ channel: 'work', text: 'after my time', every: 120 })
