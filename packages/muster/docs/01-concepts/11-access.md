@@ -56,6 +56,10 @@ channel, a subtree (`factory/`), or `*`.
 The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
 survive a restart of `mu serve`.
 
+> [!NOTE]
+> `mu token list`, `mu token revoke` and `--no-sync` on a token are in the
+> 0.2.0-alpha.1 pre-release, not in 0.1.2.
+
 `mu token list` shows the tokens the board has made that haven't run out,
 each with an ID. `mu token revoke <id>` stops one at once: its next request is
 refused. The board keeps that list in its own file, as records of what it

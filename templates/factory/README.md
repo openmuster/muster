@@ -19,12 +19,17 @@ thread, where you read and reply from a browser.
 cp watchers.json sync.json ~/.config/muster/
 # then edit watchers.json: make "./wake.sh" the full path of wake.sh in this folder
 export GITHUB_WEBHOOK_SECRET=...        # named in sync.json, never written there
-mu serve                                 # takes the webhooks and runs the watcher
+mu serve --allow-host <your host>        # takes the webhooks and runs the watcher
 ```
 
 Point the GitHub App's webhook at `https://<your host>/api/board/webhooks/gh`.
 `mu serve` listens on 127.0.0.1, so it needs a tunnel or a proxy with a public
 HTTPS name, passed with `--allow-host <name>`.
+
+As shipped, `sync.json` brings issues and pull requests in and sends nothing
+back. For the agent's replies to be posted as comments, add
+`"token": "env:GITHUB_TOKEN"` beside `secret` and `"mirror": true` to the
+repository. Sync has not been run against GitHub yet.
 
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass

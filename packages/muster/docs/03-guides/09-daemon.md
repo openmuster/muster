@@ -13,7 +13,9 @@ mu daemon uninstall
 ```
 
 `install` writes a LaunchAgent for this board and loads it. It starts at
-login, and launchd restarts it after a crash.
+login, and launchd restarts it after a crash. It is for macOS only: on Linux,
+run `mu daemon run` under your own service manager, such as a systemd user
+unit.
 
 - **It carries what it needs:** `PATH`, the board, and the config folder.
   launchd starts a job with almost nothing else.

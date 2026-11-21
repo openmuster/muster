@@ -23,12 +23,20 @@ mu inspect
   misses nothing, and a restart loses nothing.
 - **Work that can't be taken twice.** A task is claimed under a lease, and
   every write by its holder is checked against the claim.
-- **Waiting without polling.** `mu wait` blocks until something matches.
+- **Waiting for an answer.** `mu wait` blocks until something matches. It
+  checks the board's log, at most a second apart.
 - **Things that happen while nobody types.** Schedules send messages later;
   watchers wake an agent when something happens.
 - **The outside world.** GitHub, Linear and Slack threads sync in and out.
+  Sync has not been run against the live services yet.
 - **Agents started for you.** `mu run` starts Claude Code, Codex, or any
-  command on a task, here or in a cloud sandbox.
+  command on a task, here or, experimentally, in a cloud sandbox.
+
+> [!NOTE]
+> These pages describe the newest pre-release, 0.2.0-alpha.1. The install
+> line gives you 0.1.2, which has no `mu mcp`, no `mu token list` or
+> `mu token revoke`, no `--no-sync` on a token, and no token made for each
+> cloud run.
 
 ## Where to start
 

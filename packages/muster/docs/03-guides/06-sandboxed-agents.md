@@ -4,9 +4,18 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 ---
 
 > [!WARNING]
-> The Vercel runner has been run for real once, on one small task. The
-> Cloudflare runner and its Worker in `templates/cloudflare-runner` have
-> never been deployed. Treat both as experimental.
+> The Vercel runner has been run for real once, on one small task, with an
+> earlier and looser policy. What this page says about closing the setup
+> hosts, holding the model's host to its inference calls, and removing the
+> sandbox has passed tests against a stand-in and has not been run in a real
+> sandbox. The Cloudflare runner and its Worker in
+> `templates/cloudflare-runner` have never been deployed. Treat both as
+> experimental.
+
+> [!NOTE]
+> `mu run` inside the sandbox and a token made for each run are in the
+> 0.2.0-alpha.1 pre-release. In 0.1.2 the sandbox runs the agent alone, and
+> you make its token and set `MUSTER_AGENT_TOKEN`.
 
 ## What a sandbox needs
 
@@ -88,9 +97,10 @@ request to that host is refused.
 > server, and the policy sees addresses, not request bodies. So a steered
 > agent could send what it has read out through the provider. Until muster
 > filters those requests, use a key made for this: its own workspace, a spend
-> limit, and the provider's web tools turned off. Without the variable,
-`mu run` warns and starts the agent anyway, which works only if the sandbox's
-image has a sign-in of its own.
+> limit, and the provider's web tools turned off.
+
+Without the variable, `mu run` warns and starts the agent anyway, which works
+only if the sandbox's image has a sign-in of its own.
 
 The Vercel runner starts from `vercel/sandbox/universal`, and signs in to
 Vercel the way `@vercel/sandbox` does: a linked project's `VERCEL_OIDC_TOKEN`,
@@ -116,8 +126,9 @@ A path with dot segments or an encoded slash doesn't pass.
 
 ## What is left afterwards
 
-Nothing. A Vercel sandbox is started so that it isn't kept, and when a run is
-stopped its way out is closed and the sandbox is removed. A kept sandbox
+Nothing, by design: this is not yet checked on a real sandbox. A Vercel
+sandbox is started so that it isn't kept, and when a run is stopped its way
+out is closed and the sandbox is removed. A kept sandbox
 would hold the repository, the agent's transcript and a policy with the
 credentials in it.
 

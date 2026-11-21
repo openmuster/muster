@@ -23,7 +23,7 @@ A board is used in one of two modes. `mu whoami` prints which.
 
 Nothing executable is stored in a board. Watcher commands, sync mappings and
 secrets live in operator config (`~/.config/muster/`), written only by the
-person's own `mu daemon` and `mu sync` commands. A row in the database can
+person, by hand or with `mu daemon install`. A row in the database can
 never make the daemon run a command.
 
 ## 2. Layering
@@ -238,7 +238,8 @@ Specified as they are built: see `docs/`. Their rules in brief:
 
 ## 9. Built, and not yet
 
-Built and tested: sections 3 to 7, typed blocks and schemas, files, private
+Built and covered by tests, some of it only against stand-ins (listed further
+down): sections 3 to 7, typed blocks and schemas, files, private
 channels, budgets a board keeps, backups; the daemon (schedules, watchers, a
 sleep grace for leases, the LaunchAgent); serve mode with tokens, a live feed,
 and the `http()` backend, which passes the same suite as `file()`;
