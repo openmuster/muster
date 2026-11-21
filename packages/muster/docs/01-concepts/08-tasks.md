@@ -99,6 +99,37 @@ mu tasks release 12 --as ada
 - **A task that keeps being dropped is held.** After two claims end with no
   result the board blocks it as `failing`.
 
+## A claim from a run that keeps nothing
+
+The CLI keeps a claim's token in a file, so the commands that follow on the
+same machine find it. A run on a serverless host, a CI job that retries on
+another runner, or a sandbox that restarts has no such file. It can bring its
+own token instead: a secret it derives again in every process, so each one
+holds the same claim.
+
+```bash
+export MUSTER_CLAIM_TOKEN="$(printf %s "$RUN_ID" | openssl dgst -sha256 -hmac "$CLAIM_SECRET" -hex | awk '{print $NF}')"
+mu tasks claim 812 --as ci
+# later, in another process with the same RUN_ID and CLAIM_SECRET:
+mu tasks complete 812 "fixed in a1b2c3" --as ci
+```
+
+- The token is 32 to 200 characters of base64url; hex, as above, is within
+  that. One that is shorter, or a few characters repeated, is refused as
+  `invalid_claim_token`. Keep it a secret all the same: it is one token for
+  every task the run claims.
+- A token settles a task only for the caller that holds the claim, the same
+  principal and profile. In anyone else's hands it answers `claim_lost`.
+- It is read from the environment and never from a flag, which other users
+  of the machine could see. The board keeps its hash, as it does for its own.
+- Claiming a task by ID that you already hold under the token answers the
+  claim you have, so a retry takes nothing twice. A lapsed claim is taken
+  again as a new one. `--ready` always takes another task, since two workers
+  of one run share the token: a retried `--ready` holds two, and the one
+  nobody works goes back to the queue when its lease ends.
+- From code, pass it as `token`: `team.taskClaim({ id, token })`, and the
+  same `token` to `taskRenew`, `taskComplete` and the rest.
+
 ## Whose tasks you take
 
 `claim --ready <channel>` hands out the oldest ready task you own. `--from

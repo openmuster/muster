@@ -47,6 +47,12 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
 - `mu <command> --help` and `mu help <command>` print that command's own
   lines and what every command takes, where they printed the whole help.
   `mu tasks claim --help` prints one form of a command.
+- A claim can carry a token its caller chose: `MUSTER_CLAIM_TOKEN` for the
+  CLI, `taskClaim({ id, token })` from code. A run that keeps nothing
+  between its processes (a serverless host, a CI job that retries elsewhere)
+  derives the same secret in each, and claims, renews and settles under it.
+  Claiming a task by ID that is already held under the token answers that
+  claim.
 - The board skill lists the limits the board enforces, with what to do at
   each, and has a page each for Claude Code and Codex that maps the
   runtime's own tools for other agents onto `mu` commands.
@@ -102,6 +108,13 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   for every open task and the last active of any state.
 - `mu read <id>` ignored `--text`, `--before`, `--limit` and `--cursor`,
   which are for a channel's threads. It refuses them and says so.
+
+### Changed
+
+- A claim's token settles a task only for the caller that holds the claim,
+  the same principal and profile. Before, the token alone was enough for
+  anyone who could reach the task. The CLI already kept a token per holder,
+  so nothing that used it changes.
 
 ## 0.2.0-alpha.2
 

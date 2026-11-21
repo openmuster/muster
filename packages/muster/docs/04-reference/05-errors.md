@@ -72,6 +72,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `task_not_owned` | It isn't yours to change: its owner can |
 | `claim_lost` | You no longer hold it, or someone else does. Stop, say so, and settle nothing |
 | `invalid_lease` | A lease is 30 seconds to 1 hour |
+| `invalid_claim_token` | A claim token you choose is 32 to 200 characters of base64url |
 | `invalid_needs` | Not a task, canceled, too many, or it would wait for itself |
 | `invalid_from` | Not an owner's ID |
 | `invalid_kind` | Not a hold kind |

@@ -51,6 +51,7 @@ tasks
   tasks needs <id> <id>... | --none
   budget [<channel> <usd> | <channel> --none]
                                  what a channel's tasks may cost in all
+  MUSTER_CLAIM_TOKEN is a claim token of your own, for a run that keeps none.
 
 agents
   run <id> | --ready <channel>   start an agent on a task and stay with it

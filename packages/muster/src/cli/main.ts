@@ -941,6 +941,22 @@ const lease = (flags: Flags) => {
 
 const outcomeLine = (word: string, task: Task, now: number) => `${word}  #${task.id}  ${taskState(task, now)}`
 
+/**
+ * A claim token the caller chose, from the environment and never from a flag, where any user on the
+ * machine could read it. A run that can't keep a token between its processes derives the same one in
+ * each: it claims under it, and settles with it wherever it next runs.
+ */
+const chosenClaim = (run: Run) => run.io.env.MUSTER_CLAIM_TOKEN || undefined
+
+/** Keeps a claim for the commands that follow. With a chosen token the store is a convenience, so a host with nowhere to write still claims. */
+function keep(run: Run, me: Holder, task: number, claim: { token: string; until: string }) {
+  try {
+    keepClaim(me, task, claim)
+  } catch (error) {
+    if (chosenClaim(run) === undefined) throw error
+  }
+}
+
 async function claimWith(run: Run, parsed: Parsed, target: string | undefined, me: Holder, pid: number | undefined) {
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
@@ -951,6 +967,7 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
     ...(from.length ? { from } : {}),
     ...lease(parsed.flags),
     ...(pid !== undefined ? { pid, pidStart: processStart(pid) ?? undefined } : {}),
+    ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}),
   }
   const wait = str(parsed.flags, 'wait')
   const deadline = wait === undefined ? 0 : Date.now() + duration(wait, 'wait') * 1000
@@ -958,7 +975,7 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
   for (;;) {
     try {
       const claimed = await run.team.taskClaim(request as Parameters<Board['taskClaim']>[0])
-      keepClaim(me, claimed.task.id, { token: claimed.token, until: claimed.task.claim!.until })
+      keep(run, me, claimed.task.id, { token: claimed.token, until: claimed.task.claim!.until })
       return claimed
     } catch (error) {
       if (!(error instanceof Failure) || error.reason !== 'nothing_ready' || ready === undefined || wait === undefined) throw error
@@ -991,13 +1008,13 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
 
   const me = await run.team.whoami()
   const target = parsed.positionals[1]
-  const held = (task: number) => ({ id: task, token: heldClaim(me, task) })
+  const held = (task: number) => ({ id: task, token: chosenClaim(run) ?? heldClaim(me, task) })
 
   switch (verb) {
     case 'create': {
       const needs = list(parsed.flags, 'needs').map((need) => id(need, 'a task'))
       const assignee = str(parsed.flags, 'for')
-      const common = { ...(needs.length ? { needs } : {}), ...(assignee !== undefined ? { for: assignee } : {}), ...(on(parsed.flags, 'claim') ? { claim: { ...lease(parsed.flags) } } : {}), ...key(parsed.flags) }
+      const common = { ...(needs.length ? { needs } : {}), ...(assignee !== undefined ? { for: assignee } : {}), ...(on(parsed.flags, 'claim') ? { claim: { ...lease(parsed.flags), ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}) } } : {}), ...key(parsed.flags) }
       const planFile = str(parsed.flags, 'file')
       if (planFile !== undefined && parsed.positionals[2] === undefined && target !== undefined && !/^#?[1-9][0-9]*$/.test(target)) {
         let source: string
@@ -1036,7 +1053,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       const made = /^#?[1-9][0-9]*$/.test(target)
         ? await run.team.taskCreate({ thread: id(target), ...common })
         : await run.team.taskCreate({ channel: target, text: textOf({ ...parsed, flags: { ...parsed.flags, file: false } }, 2, run.io), ...(Object.keys(labels).length ? { labels } : {}), ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}), ...common })
-      if (made.token) keepClaim(me, made.task.id, { token: made.token, until: made.task.claim!.until })
+      if (made.token) keep(run, me, made.task.id, { token: made.token, until: made.task.claim!.until })
       const { token: _token, ...document } = made
       return print(run, { ...document, outcome: 'created' }, () => outcomeLine('created', made.task, now()))
     }
@@ -1047,7 +1064,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
     case 'renew': {
       const task = id(target, 'a task')
       const renewed = await run.team.taskRenew({ ...held(task), ...lease(parsed.flags) })
-      keepClaim(me, task, { token: heldClaim(me, task)!, until: renewed.task.claim!.until })
+      keep(run, me, task, { token: held(task).token!, until: renewed.task.claim!.until })
       return print(run, { ...renewed, outcome: 'renewed' }, () => `#${task}  yours for ${span(Date.parse(renewed.task.claim!.until) - now())}`)
     }
     case 'release': {
