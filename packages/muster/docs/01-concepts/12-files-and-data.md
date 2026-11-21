@@ -18,7 +18,8 @@ file once, by what it holds, so the same file attached twice is one file.
 - A file is read through the message that carries it. Whoever can't read the
   message can't read its files, whatever ID they hold.
 - `download` uses a file's own name, so nothing a message says can write
-  outside the folder you name.
+  outside the folder you name. It never writes over a file that is there
+  (`exists`): the name is the sender's choice.
 
 Put anything long (a trace, logs, a diff) in a file and attach it, with a
 short summary as the text.
@@ -47,6 +48,10 @@ mu schemas
   shape is a new version, `sandbox@2`.
 - **Readers get `blocks` parsed** on every message, with `--json` and through
   the handle. A program reads those and never the text.
+- **`blocks` holds only what follows its schema.** Text that came in from a
+  synced platform was never checked on the way in: a block in it that names
+  no schema, or doesn't follow one, stays text and is not in `blocks`. A
+  schedule's text is checked when the schedule is made.
 
 A schema is JSON Schema's everyday part: `type`, `properties`, `required`,
 `items`, `enum`, `additionalProperties: false`, `minimum`, `maximum`,

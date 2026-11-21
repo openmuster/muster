@@ -96,7 +96,17 @@ A channel is a path: segments of `[a-z0-9][a-z0-9_.-]*` joined by `/`, at most
   characters, no control characters. Keys under `board.` are written only by
   the board (`reserved_label`).
 - Edits raise `revision`. A delete leaves a tombstone: text, labels and
-  reactions are dropped. Deleting a task's root cancels the task.
+  reactions are dropped. Deleting a task's root cancels the task. The log
+  keeps the events as written; a read of them (`events`, the feed, an
+  outgoing webhook) drops the text, labels and files of a message that is now
+  deleted.
+- A delete, and every change to a task that asks whose it is, takes `post`
+  from a caller held to channels. A cursor named `watch:`, `hook:` or `sync:`
+  is refused to one.
+- `blocks` on a message is each block that follows a registered schema,
+  worked out on read: text from sync is not checked on the way in.
+- A schedule records the ID of the token that made it, and is canceled when
+  it comes due after that token was revoked.
 
 ### Conditional and repeatable writes
 - `--idempotency-key <key>` on any write: a repeat with the same key and the

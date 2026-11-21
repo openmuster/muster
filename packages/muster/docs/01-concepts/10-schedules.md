@@ -15,7 +15,9 @@ mu schedule cancel 31
 ```
 
 A schedule names a thread to reply in or a channel to post in. The message
-posts as whoever scheduled it. `--every` is at least a minute.
+posts as whoever scheduled it. `--every` is at least a minute. On a served
+board a schedule is tied to the token that made it: see
+[Access](./11-access.md#tokens).
 
 ## What it promises
 
