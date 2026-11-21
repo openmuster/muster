@@ -7,7 +7,7 @@ import { Failure, misuse } from '../failure.ts'
 import { board, type Board } from '../handle.ts'
 import { processStart } from '../process.ts'
 import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
-import { dropClaim, heldClaim, keepClaim } from './claims.ts'
+import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
@@ -826,7 +826,7 @@ const lease = (flags: Flags) => {
 
 const outcomeLine = (word: string, task: Task, now: number) => `${word}  #${task.id}  ${taskState(task, now)}`
 
-async function claimWith(run: Run, parsed: Parsed, target: string | undefined, me: { profile: string | null; where: string }, pid: number | undefined) {
+async function claimWith(run: Run, parsed: Parsed, target: string | undefined, me: Holder, pid: number | undefined) {
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
   const from = list(parsed.flags, 'from')
@@ -843,7 +843,7 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
   for (;;) {
     try {
       const claimed = await run.team.taskClaim(request as Parameters<Board['taskClaim']>[0])
-      keepClaim(me.where, claimed.task.id, me.profile, { token: claimed.token, until: claimed.task.claim!.until })
+      keepClaim(me, claimed.task.id, { token: claimed.token, until: claimed.task.claim!.until })
       return claimed
     } catch (error) {
       if (!(error instanceof Failure) || error.reason !== 'nothing_ready' || ready === undefined || wait === undefined) throw error
@@ -875,7 +875,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
 
   const me = await run.team.whoami()
   const target = parsed.positionals[1]
-  const held = (task: number) => ({ id: task, token: heldClaim(me.where, task, me.profile) })
+  const held = (task: number) => ({ id: task, token: heldClaim(me, task) })
 
   switch (verb) {
     case 'create': {
@@ -898,7 +898,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       const made = /^#?[1-9][0-9]*$/.test(target)
         ? await run.team.taskCreate({ thread: id(target), ...common })
         : await run.team.taskCreate({ channel: target, text: textOf({ ...parsed, flags: { ...parsed.flags, file: false } }, 2, run.io), ...(Object.keys(labels).length ? { labels } : {}), ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}), ...common })
-      if (made.token) keepClaim(me.where, made.task.id, me.profile, { token: made.token, until: made.task.claim!.until })
+      if (made.token) keepClaim(me, made.task.id, { token: made.token, until: made.task.claim!.until })
       const { token: _token, ...document } = made
       return print(run, { ...document, outcome: 'created' }, () => outcomeLine('created', made.task, now()))
     }
@@ -909,20 +909,20 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
     case 'renew': {
       const task = id(target, 'a task')
       const renewed = await run.team.taskRenew({ ...held(task), ...lease(parsed.flags) })
-      keepClaim(me.where, task, me.profile, { token: heldClaim(me.where, task, me.profile)!, until: renewed.task.claim!.until })
+      keepClaim(me, task, { token: heldClaim(me, task)!, until: renewed.task.claim!.until })
       return print(run, { ...renewed, outcome: 'renewed' }, () => `#${task}  yours for ${span(Date.parse(renewed.task.claim!.until) - now())}`)
     }
     case 'release': {
       const task = id(target, 'a task')
       const released = await run.team.taskRelease(held(task))
-      dropClaim(me.where, task, me.profile)
+      dropClaim(me, task)
       return print(run, { ...released, outcome: 'released' }, () => outcomeLine('released', released.task, now()))
     }
     case 'complete': {
       const task = id(target, 'a task')
       const result = parsed.positionals[2] ?? str(parsed.flags, 'result')
       const done = await run.team.taskComplete({ ...held(task), ...(result !== undefined ? { result } : {}) })
-      dropClaim(me.where, task, me.profile)
+      dropClaim(me, task)
       return print(run, { ...done, outcome: 'completed' }, () => [`completed  #${task}`, ...done.readied.map((next) => `ready      #${next}`)].join('\n'))
     }
     case 'fail': {
@@ -930,7 +930,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       const reason = parsed.positionals[2]
       if (reason === undefined) throw misuse('missing_reason', 'Say why: mu tasks fail 812 "the endpoint was removed".')
       const failed = await run.team.taskFail({ ...held(task), reason, ...(on(parsed.flags, 'no-count') ? { counts: false } : {}) })
-      dropClaim(me.where, task, me.profile)
+      dropClaim(me, task)
       return print(run, { ...failed, outcome: 'failed' }, () => `failed  #${task}`)
     }
     case 'block': {
@@ -938,7 +938,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
       const reason = parsed.positionals[2]
       const kind = str(parsed.flags, 'kind')
       const blocked = await run.team.taskBlock({ ...held(task), ...(reason !== undefined ? { reason } : {}), ...(kind !== undefined ? { kind } : {}) })
-      dropClaim(me.where, task, me.profile)
+      dropClaim(me, task)
       return print(run, { ...blocked, outcome: 'blocked' }, () => outcomeLine('blocked', blocked.task, now()))
     }
     case 'unblock': {
@@ -971,7 +971,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
 }
 
 /** Lets a command be the work: claims, renews while it runs, and settles the task by how it exits. */
-async function runTask(run: Run, parsed: Parsed, target: string | undefined, me: { profile: string | null; where: string }): Promise<number> {
+async function runTask(run: Run, parsed: Parsed, target: string | undefined, me: Holder): Promise<number> {
   if (parsed.rest.length === 0) throw misuse('missing_command', 'Give the command after "--": mu tasks run 812 -- pnpm test.')
   const claimed = await claimWith(run, parsed, target, me, process.pid)
   const task = claimed.task.id
@@ -1010,7 +1010,7 @@ async function runTask(run: Run, parsed: Parsed, target: string | undefined, me:
   clearInterval(renewing)
   run.io.stop.removeEventListener('abort', onStop)
   const done = (outcome: string, extra: Record<string, unknown> = {}) => {
-    dropClaim(me.where, task, me.profile)
+    dropClaim(me, task)
     if (run.json) run.io.out(JSON.stringify({ task, outcome, ...extra }, null, 2))
     else run.io.out(`${outcome} ${task}`)
   }
@@ -1124,7 +1124,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
     }
     outcome = await settle().catch(() => 'unsettled')
   }
-  dropClaim(me.where, task, me.profile)
+  dropClaim(me, task)
   const labels: Record<string, string> = {}
   if (result.parsed.costUsd !== undefined) labels.cost = result.parsed.costUsd.toFixed(4)
   if (result.parsed.usage) labels.tokens = String(result.parsed.usage.input + result.parsed.usage.output)

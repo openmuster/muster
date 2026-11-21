@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { refusal } from '../src/cli/mcp.ts'
 import { BIN, cli, cliStart, tempDir } from './helpers.ts'
+import { boardKey, mint } from '../src/serve/token.ts'
 
 /** Starts `mu mcp` and speaks to it as an agent's MCP client would: one JSON message per line, answers matched by id. */
 function client(dir: string, env: Record<string, string> = {}) {
@@ -158,6 +159,20 @@ describe('mcp over http, on mu serve', () => {
     expect([settled.isError, settled.content[0].text]).toEqual([false, `completed  #${task}`])
     const minting = await board.mu(fixer, ['token', 'create', '--as', 'fixer'])
     expect([minting.isError, minting.content[0].text]).toEqual([true, expect.stringMatching(/isn't available/)])
+    await board.stop()
+  }, 20_000)
+
+  it("one caller's claim is never used for another who writes under the same profile name", async () => {
+    const board = await serve()
+    const task = JSON.parse((await cli(board.dir, ['tasks', 'create', 'work', 'fix the redirect', '--json'])).stdout).task.id
+    const claimed = await board.mu(board.owner, ['tasks', 'claim', String(task)], { 'x-muster-profile': 'fixer' })
+    expect(claimed.isError).toBe(false)
+    const where = JSON.parse((await cli(board.dir, ['whoami', '--json'])).stdout).where
+    const eve = mint(boardKey(where, join(board.dir, 'config')), { sub: 'local:user:eve', profile: 'fixer', exp: Math.floor(Date.now() / 1000) + 3600 })
+    const taken = await board.mu(eve, ['tasks', 'complete', String(task), 'not mine to finish'])
+    expect(taken.isError).toBe(true)
+    const mine = await board.mu(board.owner, ['tasks', 'complete', String(task), 'fixed'], { 'x-muster-profile': 'fixer' })
+    expect([mine.isError, mine.content[0].text]).toEqual([false, `completed  #${task}`])
     await board.stop()
   }, 20_000)
 
