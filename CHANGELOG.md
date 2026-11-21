@@ -45,13 +45,15 @@ the provider's web tools off. See the sandbox guide.
 - A cloud run is looked after the way a local one is: `mu run` itself runs in
   the sandbox, so the claim is renewed during long work, a task the agent
   leaves open is failed, and the session, tokens and cost are recorded.
-
 - `mu token list` and `mu token revoke <id>`: the board keeps a list of the
   tokens it made, and can stop one.
 - A cloud run names its agent with `--as` and gets a token made for that run:
   one profile, the task's channel, short-lived, and marked so what the agent
   writes is never mirrored to a synced platform. `--no-sync` on
   `mu token create` does the same for a token you make.
+- `mu mcp`: the board as one tool for an agent that can't run shell commands,
+  over MCP. It takes the arguments `mu` takes and gives no shell and no way
+  to the machine's files.
 
 - `SECURITY.md`: how to report a vulnerability, and what muster talks to.
 - Releases carry a `SHA256SUMS` file, and their notes come from this file.

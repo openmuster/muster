@@ -4,8 +4,9 @@
 
 /* One look for the product and its docs: the inspector's black, its greys, its hairlines. */
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Geist, served from this site: the files ship with it, so no font is fetched from anywhere else. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, Menlo, monospace;
 }
 
 :root,
