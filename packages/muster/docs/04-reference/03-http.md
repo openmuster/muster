@@ -68,7 +68,8 @@ route, and a request with an `Origin` from a host the board doesn't answer
 for is refused. The tool is the one `mu mcp` offers: see
 [An agent with no shell](../03-guides/17-mcp.md).
 
-A request body is at most 36 MB, the room one file needs.
+A request body is at most 36 MB, the room one file needs. A webhook's body,
+which is read before anything can say who sent it, is at most 1 MB.
 
 ## Errors
 

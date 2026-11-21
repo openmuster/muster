@@ -29,6 +29,8 @@ function withoutPids(value: unknown, depth = 0): void {
 export const MOUNT = '/api/board'
 /** Room for one file, as base64, and its envelope. */
 const BODY_MAX = 36 * 1024 * 1024
+/** A webhook is read before anything can say who sent it, so it gets far less room than a request with a token. */
+const WEBHOOK_MAX = 1024 * 1024
 
 const statusOf = (failure: Failure) =>
   failure.reason === 'unauthorized' ? 401 : failure.reason === 'forbidden' ? 403 : failure.reason === 'not_found' ? 404 : failure.exit === 2 ? 400 : failure.reason === 'internal' ? 500 : 409
@@ -96,7 +98,7 @@ export function createHandler(options: ServeOptions) {
     const asked = req.headers['x-muster-profile']
     // A token held to a profile writes as that profile, whatever the request asks for.
     const profile = claims.profile ?? (typeof asked === 'string' && asked.length > 0 ? profileName(asked) : null)
-    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can } : {}), ...(claims.noSync ? { noSync: true as const } : {}) }
+    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.jti ?? claims.profile ?? '' } : {}), ...(claims.noSync ? { noSync: true as const } : {}) }
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -115,7 +117,7 @@ export function createHandler(options: ServeOptions) {
         let size = 0
         for await (const chunk of req) {
           size += (chunk as Buffer).length
-          if (size > BODY_MAX) throw misuse('body_too_large', 'A request body is at most 36 MB.')
+          if (size > WEBHOOK_MAX) throw misuse('body_too_large', 'A webhook body is at most 1 MB.')
           chunks.push(chunk as Buffer)
         }
         const headers: Record<string, string | undefined> = {}
@@ -213,6 +215,12 @@ export function createHandler(options: ServeOptions) {
         req.on('close', () => (open = false))
         let quiet = 0
         while (open) {
+          // The token is asked about on every turn, so a feed ends when its token is revoked or runs out.
+          try {
+            claimsOf(req)
+          } catch {
+            break
+          }
           const page = await options.backend.events(caller, { after, filter })
           after = page.cursor
           for (const event of page.events) res.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
@@ -221,6 +229,7 @@ export function createHandler(options: ServeOptions) {
           if (quiet > 0 && quiet % 30 === 0) res.write(`: ${after}\n\n`)
           await new Promise((resolve) => setTimeout(resolve, options.feedInterval ?? 500))
         }
+        res.end()
         return
       }
       if (!ALLOWED.has(route)) throw new Failure('not_found', 'No such route.')

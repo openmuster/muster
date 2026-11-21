@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto'
-import { Failure } from '../failure.ts'
+import { Failure, misuse } from '../failure.ts'
 import { actorId, inScope, LIMITS, type Attachment, type By, type Caller, type Message, type Permission } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
 import { blocksOf } from './blocks.ts'
 import type { Db } from '../store/sqlite.ts'
+
+/** How many a read returns: what was asked, held to a ceiling. Anything but a whole number of at least 1 is refused, so no value slips past the ceiling. */
+export function limitOf(limit: number | undefined, normally: number, most: number): number {
+  if (limit === undefined || limit === null) return normally
+  if (!Number.isInteger(limit) || limit < 1) throw misuse('invalid_limit', '--limit is a whole number of at least 1.')
+  return Math.min(limit, most)
+}
 
 /** What every operation gets: the open file, the clock, and a way to check whether a process lives. */
 export type Context = {

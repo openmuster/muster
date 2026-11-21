@@ -1,7 +1,7 @@
 import { Failure, misuse } from '../failure.ts'
 import { actorId, channelScope, inScope, labelFilter, LIMITS, matchesLabels, profileName, type BoardEvent, type Caller, type LabelFilter, type Message } from '../model.ts'
 import { toEvent } from '../store/log.ts'
-import { allowed, findMessage, messageFor, toMessage, type Context } from './context.ts'
+import { allowed, findMessage, limitOf, messageFor, toMessage, type Context } from './context.ts'
 import { findTask, type Task } from './tasks.ts'
 
 export type ThreadSummary = { message: Message; replies: number; last: Message | null; task: Task | null }
@@ -20,11 +20,7 @@ export type Filter = {
 
 export const head = (ctx: Context): number => (ctx.db.raw.prepare('select coalesce(max(seq), 0) as s from events').get() as { s: number }).s
 
-const clampLimit = (limit: number | undefined) => {
-  if (limit === undefined) return LIMITS.read
-  if (!Number.isInteger(limit) || limit < 1) throw misuse('invalid_limit', '--limit is a whole number of at least 1.')
-  return Math.min(limit, LIMITS.readMax)
-}
+const clampLimit = (limit: number | undefined) => limitOf(limit, LIMITS.read, LIMITS.readMax)
 
 /** The rowids a full-text query matches, or null when there is no query. */
 function textMatches(ctx: Context, text: string | undefined): Set<number> | null {
@@ -159,7 +155,7 @@ export type FeedEvent = BoardEvent & { message?: Message; task?: Task }
 export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number }): { events: FeedEvent[]; cursor: number } {
   const filter = compile(request.filter ?? {})
   if (filter.re !== null) messageFor(ctx, caller, filter.re)
-  const limit = Math.min(request.limit ?? 200, 1000)
+  const limit = limitOf(request.limit, 200, 1000)
   const after = request.after ?? head(ctx)
   const roots = new Map<number, Message | null>()
   const out: FeedEvent[] = []

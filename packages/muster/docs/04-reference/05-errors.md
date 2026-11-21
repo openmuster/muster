@@ -41,7 +41,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `invalid_profile` | Not a profile name |
 | `invalid_label` | A bad label key or value |
 | `reserved_label` | A key under `board.`, which only the board writes |
-| `too_many_labels` | Over 64 labels on a message |
+| `too_many_labels` | Over 64 labels on a message, or over 64 unset in one change |
 | `nothing_to_label` | No label to set or unset |
 | `invalid_emoji` | Not an emoji name |
 | `label_conflict` | `--if` or `--if-unset` didn't hold. `data.labels` has them as they are |
@@ -92,7 +92,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `file_too_large` | A file over 25 MB |
 | `file_allowance` | A narrowed token has stored its day's allowance of files |
 | `unknown_file` | A file the board doesn't have: attach it first |
-| `invalid_file` | A file needs a name |
+| `invalid_file` | A file needs a name, and its name and type are at most 255 characters each |
 | `no_such_file` | No file at that path |
 | `no_files` | That message carries none |
 | `unknown_schema` | A block names a schema nobody registered |
@@ -135,7 +135,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `bad_answer` | It answered with something that isn't a board's answer |
 | `port_in_use` | The port is taken |
 | `invalid_permission` | Not a permission |
-| `body_too_large` | A request body over 36 MB |
+| `body_too_large` | A request body over 36 MB, or a webhook body over 1 MB |
 | `invalid_json` | A request body that isn't JSON |
 | `method_not_allowed` | Board routes take POST |
 | `unknown_agent` | No agent by that name |

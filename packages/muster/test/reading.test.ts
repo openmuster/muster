@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { memoryBoard } from './helpers.ts'
+import { memoryBoard, reason } from './helpers.ts'
 
 describe('reading', () => {
   it('a channel read lists threads newest activity first, with reply counts and a cursor', async () => {
@@ -134,5 +134,15 @@ describe('reading', () => {
       { id: 'local:user:ada', handle: 'ada', principal: 'local:user:ada', profile: null },
       { id: 'local:user:ada+claude', handle: 'claude', principal: 'local:user:ada', profile: 'claude' },
     ])
+  })
+
+  it('the feed refuses a limit that is not a whole number of at least 1, and holds a large one to 1,000', async () => {
+    const { team } = memoryBoard()
+    for (let i = 0; i < 3; i++) await team.post({ channel: 'a', text: `m${i}` })
+    expect(await reason(team.events({ after: 0, limit: -1 }))).toBe('invalid_limit')
+    expect(await reason(team.events({ after: 0, limit: 0 }))).toBe('invalid_limit')
+    expect(await reason(team.events({ after: 0, limit: 1.5 }))).toBe('invalid_limit')
+    expect((await team.events({ after: 0, limit: 5000 })).events).toHaveLength(3)
+    expect((await team.events({ after: 0, limit: 2 })).events).toHaveLength(2)
   })
 })

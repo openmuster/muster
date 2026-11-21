@@ -56,6 +56,10 @@ describe('agent descriptors', () => {
     const out = [JSON.stringify({ type: 'thread.started', thread_id: 't-9' }), JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 70 } })].join('\n')
     expect(codex.parse(out)).toEqual({ terminal: true, sessionId: 't-9', usage: { input: 1000, output: 70 } })
     expect(codex.classify({ code: 1, signal: null, parsed: { terminal: false, error: "You've hit your usage limit" }, stderr: '' })).toBe('quota')
+    expect(codex.classify({ code: 1, signal: null, parsed: { terminal: false }, stderr: 'Not logged in. Please run /login' })).toBe('auth')
+    expect(codex.classify({ code: 1, signal: null, parsed: { terminal: false, error: 'no rollout found for thread id t-9' }, stderr: '' })).toBe('bad_resume')
+    expect(codex.classify({ code: 1, signal: null, parsed: { terminal: false }, stderr: 'panicked at main.rs' })).toBe('crash')
+    expect(codex.classify({ code: 0, signal: null, parsed: { terminal: true }, stderr: '' })).toBe('ok')
   })
 
   it("an agent's environment is built from nothing: only PATH, HOME, its own keys, and what is allowed by name", () => {

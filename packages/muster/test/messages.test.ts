@@ -138,4 +138,16 @@ describe('messages', () => {
     expect(await reason(team.label({ id: 99, set: { a: 'b' } }))).toBe('not_found')
     expect(await reason(team.react({ id: 99, emoji: 'eyes' }))).toBe('not_found')
   })
+
+  it("a file's name and type on a message are held to 255 characters, and one change unsets at most 64 labels", async () => {
+    const { team } = memoryBoard()
+    const stored = await team.filePut({ name: 'f', data: Buffer.from('x').toString('base64') })
+    expect(await reason(team.post({ channel: 'dev', text: 'long name', attachments: [{ ...stored, name: 'n'.repeat(256) }] }))).toBe('invalid_file')
+    expect(await reason(team.post({ channel: 'dev', text: 'long type', attachments: [{ ...stored, type: 't'.repeat(256) }] }))).toBe('invalid_file')
+    const message = await team.post({ channel: 'dev', text: 'at the edge', attachments: [{ ...stored, name: 'n'.repeat(255), type: 't'.repeat(255) }] })
+    expect(message.attachments[0]!.name).toHaveLength(255)
+    const keys = (count: number) => Array.from({ length: count }, (_, i) => `k${i}`)
+    expect(await reason(team.label({ id: message.id, unset: keys(65) }))).toBe('too_many_labels')
+    await team.label({ id: message.id, unset: keys(64) })
+  })
 })

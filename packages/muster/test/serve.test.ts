@@ -281,6 +281,10 @@ describe('serve', () => {
     expect(await reason(writer.filePut({ name: 'f5', data }))).toBe('file_allowance')
     // The allowance is each token holder's own, and the owner has none to run out of.
     expect((await as({ profile: 'x', can: { 'work/': ['post'] } }).filePut({ name: 'f', data: 'eA==' })).size).toBe(1)
+    // A token held to no profile names one per request, and gets no new allowance for each name it thinks of.
+    const loose = as({ can: { 'work/': ['read', 'post'] } })
+    for (let i = 0; i < 4; i++) await loose.as(`name-${i}`).filePut({ name: `g${i}`, data: Buffer.alloc(24 * 1024 * 1024, 2 + i).toString('base64') })
+    expect(await reason(loose.as('another').filePut({ name: 'g5', data }))).toBe('file_allowance')
     await server.close()
   })
 
@@ -387,6 +391,36 @@ describe('serve', () => {
     // A token carrying an ID this board never recorded is refused too, however well it is signed.
     const unknown = mint(key, { sub: 'local:user:ada', profile: 'fixer', can: { 'work/': ['read'] }, exp: Math.floor(time.now().getTime() / 1000) + 600, jti: 'not-ours' })
     expect(await reason(board({ backend: http({ url: server.url, token: unknown }) }).readChannel({ channel: 'work' }))).toBe('unauthorized')
+    await server.close()
+  })
+
+  it('a webhook body over 1 MB is refused before anything reads it, with no token asked', async () => {
+    const { server, raw } = await served()
+    const big = await raw('/webhooks/gh', { method: 'POST', body: 'x'.repeat(1024 * 1024 + 1) })
+    expect([big.status, (await big.json()).error.reason]).toEqual([400, 'body_too_large'])
+    // Under the cap it gets as far as the sync, which this board has none of.
+    expect((await raw('/webhooks/gh', { method: 'POST', body: 'x'.repeat(1024) })).status).not.toBe(400)
+    await server.close()
+  })
+
+  it('a feed that is open ends when its token is revoked', async () => {
+    const time = clock()
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now })
+    const key = randomBytes(32)
+    const server = await listen({ backend, key, now: () => time.now().getTime(), feedInterval: 20 })
+    const exp = Math.floor(time.now().getTime() / 1000) + 600
+    const token = mint(key, { sub: 'local:user:ada', profile: 'fixer', can: { 'work/': ['read'] }, exp, jti: 'tok-feed' })
+    backend.registry!().record({ id: 'tok-feed', profile: 'fixer', can: { 'work/': ['read'] }, exp, at: 1, revoked: false })
+    const response = await fetch(`${server.url}/feed?channel=work`, { headers: { authorization: `Bearer ${token}` } })
+    expect(response.status).toBe(200)
+    const reader = response.body!.getReader()
+    await reader.read()
+    await backend.tokens.revoke({ id: 'tok-feed' })
+    const ended = (async () => {
+      for (;;) if ((await reader.read()).done) return 'ended'
+    })()
+    expect(await Promise.race([ended, new Promise((resolve) => setTimeout(() => resolve('still open'), 1500))])).toBe('ended')
+    await reader.cancel().catch(() => {})
     await server.close()
   })
 })

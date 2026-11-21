@@ -52,7 +52,7 @@ to settle it. Never the task's text. It reads the thread itself with `mu read`.
 | --- | --- |
 | Settles it (complete, fail, block) | Is as the agent left it |
 | Ends without settling it | Fails: "the agent ended without settling the task" |
-| Hits a usage limit or a sign-in error | Fails, without counting against it |
+| Hits a usage limit or a sign-in error | Fails, without counting against it. `mu tasks reopen` readies it again |
 | Runs out of `--timeout` | Fails: "the agent ran out of time". Everything it started is stopped |
 | Can't be started | Is released |
 | Is stopped (Ctrl-C, SIGTERM) | Is released |
