@@ -1,6 +1,7 @@
 import { Failure } from '../failure.ts'
 import type { Caller } from '../model.ts'
 import { ROUTES } from '../serve/server.ts'
+import type { MintRequest, TokenRecord } from '../serve/tokens.ts'
 import type { Backend } from './types.ts'
 
 export type HttpOptions = {
@@ -48,6 +49,8 @@ export function http(options: HttpOptions): Backend {
     return body.ok
   }
 
+  const post = (route: string, request: unknown) => call(route, { profile: null }, { method: 'POST', args: [request] })
+
   const backend = {
     kind: 'http',
     get where() {
@@ -55,6 +58,11 @@ export function http(options: HttpOptions): Backend {
     },
     async self(profile: string | null) {
       return (await call('whoami', { profile }, { method: 'GET' })) as Caller
+    },
+    tokens: {
+      create: (request: MintRequest) => post('tokenCreate', request) as Promise<{ token: string; record: TokenRecord }>,
+      list: () => post('tokenList', {}) as Promise<{ tokens: TokenRecord[] }>,
+      revoke: (request: { id: string }) => post('tokenRevoke', request) as Promise<{ revoked: string }>,
     },
     scheduleTick: async () => {
       throw new Failure('forbidden', 'The board itself sends what is due.')

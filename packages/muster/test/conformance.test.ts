@@ -111,6 +111,8 @@ describe('mu run in a cloud sandbox', () => {
     }
     // Your own token is never passed on in its place.
     expect(await refused(undefined)).toBe('agent_token_missing')
+    // With a name for the agent, a token is made for it by the board, which here can't be reached.
+    expect(await refused(undefined, ['--as', 'fixer'])).toMatch(/runner_not_installed|network_error/)
     expect(await refused(agent({ profile: 'fixer' }))).toBe('agent_token_too_wide')
     expect(await refused(agent({ profile: 'fixer', can: {} }))).toBe('agent_token_too_wide')
     expect(await refused(agent({ profile: null, can: { 'work/': ['read', 'post'] } }))).toBe('agent_token_too_wide')

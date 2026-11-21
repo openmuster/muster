@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Backend } from '../backend/types.ts'
 import { Failure, misuse } from '../failure.ts'
 import { profileName, type Caller } from '../model.ts'
-import { verify } from './token.ts'
+import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
+import { verify, type Claims } from './token.ts'
 
 /** What a client may call. `scheduleTick` is the ticker's, never a client's. */
 export const ROUTES = [
@@ -57,6 +58,8 @@ export type ServeOptions = {
   backend: Backend
   key: Buffer
   now?: () => number
+  /** The board's list of tokens it made. Default: the backend's own. */
+  tokens?: Registry
   /** Host names requests may come for, beside the address it listens on. */
   hosts?: readonly string[]
   /** Milliseconds between looks at the log for an open feed. */
@@ -71,13 +74,21 @@ export function createHandler(options: ServeOptions) {
   const now = options.now ?? (() => Date.now())
   const extra = new Set((options.hosts ?? []).map((host) => host.toLowerCase()))
 
-  const callerOf = (req: IncomingMessage): Caller => {
+  // The board's own list where it keeps one, so a token stopped with `mu token revoke` is stopped here too.
+  const tokens = options.tokens ?? options.backend.registry?.() ?? memoryRegistry()
+  const claimsOf = (req: IncomingMessage): Claims => {
     const header = req.headers.authorization
     const claims = verify(options.key, header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())
+    // A token the board's owner stopped is refused like one that ran out.
+    if (claims.jti && tokens.revoked(claims.jti)) throw new Failure('unauthorized', 'That token was revoked.', { hint: 'Get a new one from whoever runs the board.' })
+    return claims
+  }
+  const callerOf = (req: IncomingMessage): Caller => {
+    const claims = claimsOf(req)
     const asked = req.headers['x-muster-profile']
     // A token held to a profile writes as that profile, whatever the request asks for.
     const profile = claims.profile ?? (typeof asked === 'string' && asked.length > 0 ? profileName(asked) : null)
-    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can } : {}) }
+    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can } : {}), ...(claims.noSync ? { noSync: true as const } : {}) }
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -105,7 +116,22 @@ export function createHandler(options: ServeOptions) {
       }
       const route = url.pathname.slice(MOUNT.length + 1)
       const caller = callerOf(req)
-      if (route === 'whoami' && req.method === 'GET') return send(res, 200, { ok: { principal: caller.principal, profile: caller.profile, can: caller.can ?? null } })
+      if (route === 'whoami' && req.method === 'GET') return send(res, 200, { ok: { principal: caller.principal, profile: caller.profile, can: caller.can ?? null, exp: claimsOf(req).exp } })
+      // Tokens are the board's own business, not a backend's: the key is here. None of these is a route a
+      // sandbox's policy lets through, and a token held to channels, or made from another, can't use them.
+      if (route === 'tokenCreate' || route === 'tokenList' || route === 'tokenRevoke') {
+        if (req.method !== 'POST') throw misuse('method_not_allowed', 'Board routes take POST.')
+        const held = claimsOf(req)
+        if (held.can || held.minted) throw new Failure('forbidden', "A token that is held to channels, or was made from another, can't manage tokens.", { hint: 'Ask whoever runs the board.' })
+        const [request] = ((await bodyOf(req)) as { args?: unknown[] }).args ?? []
+        if (route === 'tokenList') return send(res, 200, { ok: { tokens: tokens.list(now()) } })
+        if (route === 'tokenRevoke') {
+          const id = (request as { id?: unknown } | undefined)?.id
+          if (typeof id !== 'string' || !tokens.revoke(id)) throw new Failure('not_found', 'No such token.')
+          return send(res, 200, { ok: { revoked: id } })
+        }
+        return send(res, 200, { ok: mintToken(options.key, tokens, { principal: held.sub, claims: held }, (request ?? {}) as MintRequest, now()) })
+      }
       if (route === 'feed' && req.method === 'GET') {
         // A live feed: every matching event after a cursor, as it happens. `id:` is the cursor to come back with.
         const filter: Record<string, unknown> = {}

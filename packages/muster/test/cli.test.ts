@@ -308,4 +308,15 @@ describe('files', () => {
     server.close()
     expect(readFileSync(log, 'utf8')).toContain('connect')
   })
+
+  it('token list shows what the board has made, and revoke stops one', async () => {
+    const dir = tempDir()
+    const made = JSON.parse((await cli(dir, ['token', 'create', '--as', 'fixer', '--can', 'work/=read,post', '--ttl', '2h', '--json'])).stdout)
+    expect(made.token).toMatch(/^mu1\./)
+    expect(made.claims).toMatchObject({ profile: 'fixer', can: { 'work/': ['read', 'post'] } })
+    expect((await cli(dir, ['token', 'list'])).stdout).toMatch(new RegExp(`^${made.id}  fixer  work/=read,post  until \\d{4}-`))
+    expect((await cli(dir, ['token', 'revoke', made.id])).stdout).toBe(`revoked  ${made.id}\n`)
+    expect((await cli(dir, ['token', 'list'])).stdout).toMatch(/revoked\n$/)
+    expect(JSON.parse((await cli(dir, ['token', 'revoke', 'nope', '--json'])).stderr).error.reason).toBe('not_found')
+  })
 })

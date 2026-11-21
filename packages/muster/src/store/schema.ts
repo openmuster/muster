@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 4
+export const STORE_VERSION = 5
 
 const DDL = `
 create table if not exists events (
@@ -169,6 +169,16 @@ create table if not exists cursors (
   profile text not null default '',
   seq integer not null,
   primary key (name, profile)
+) without rowid;
+
+-- The tokens this board has made: enough to list one and to stop it, never the token itself.
+create table if not exists tokens (
+  id text primary key,
+  profile text,
+  can text,
+  exp integer not null,
+  at integer not null,
+  revoked integer not null default 0
 ) without rowid;
 `
 

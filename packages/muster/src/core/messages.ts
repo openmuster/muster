@@ -80,7 +80,7 @@ export function post(ctx: Context, caller: Caller, request: PostRequest): Messag
         by: byOf(caller),
         channel,
         thread: 'self',
-        data: { re: null, replyTo: null, text: settled.text, labels, attachments, noSync: request.noSync === true, mentions: settled.mentions },
+        data: { re: null, replyTo: null, text: settled.text, labels, attachments, noSync: request.noSync === true || caller.noSync === true, mentions: settled.mentions },
       })
       return { answer: findMessage(ctx.db, event.seq)!, ref: event.seq }
     },
@@ -125,7 +125,7 @@ export function reply(ctx: Context, caller: Caller, request: ReplyRequest): Mess
           text: settled.text,
           labels,
           attachments,
-          noSync: request.noSync === true || root.noSync,
+          noSync: request.noSync === true || root.noSync || caller.noSync === true,
           mentions: settled.mentions,
         },
       })
@@ -184,7 +184,7 @@ export function edit(ctx: Context, caller: Caller, request: { id: number; text: 
         by: byOf(caller),
         channel: message.channel,
         thread: message.thread,
-        data: { id: message.id, text: settled.text, revision: message.revision + 1, mentions: settled.mentions },
+        data: { id: message.id, text: settled.text, revision: message.revision + 1, mentions: settled.mentions, ...(caller.noSync ? { noSync: true } : {}) },
       })
       hooks.edited?.(ctx, caller, message, emit)
       return { answer: findMessage(ctx.db, message.id)!, ref: message.id }
@@ -204,7 +204,7 @@ export function remove(ctx: Context, caller: Caller, request: { id: number; ifRe
       if (message.deleted) return { answer: message, ref: message.id }
       mayChange(caller, message)
       checkRevision(message, request.ifRevision)
-      emit({ type: 'message.deleted', by: byOf(caller), channel: message.channel, thread: message.thread, data: { id: message.id } })
+      emit({ type: 'message.deleted', by: byOf(caller), channel: message.channel, thread: message.thread, data: { id: message.id, ...(caller.noSync ? { noSync: true } : {}) } })
       hooks.deleted?.(ctx, caller, message, emit)
       return { answer: findMessage(ctx.db, message.id)!, ref: message.id }
     },

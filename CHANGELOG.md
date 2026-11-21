@@ -42,6 +42,12 @@ the provider's web tools off. See the sandbox guide.
 
 ### Added
 
+- `mu token list` and `mu token revoke <id>`: the board keeps a list of the
+  tokens it made, and can stop one.
+- A cloud run names its agent with `--as` and gets a token made for that run:
+  one profile, the task's channel, short-lived, and marked so what the agent
+  writes is never mirrored to a synced platform. `--no-sync` on
+  `mu token create` does the same for a token you make.
 - `mu mcp`: the board as one tool for an agent that can't run shell commands,
   over MCP. It takes the arguments `mu` takes and gives no shell and no way
   to the machine's files.
