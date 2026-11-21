@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { refusal } from '../src/cli/mcp.ts'
-import { BIN, cli, tempDir } from './helpers.ts'
+import { BIN, cli, cliStart, tempDir } from './helpers.ts'
 
 /** Starts `mu mcp` and speaks to it as an agent's MCP client would: one JSON message per line, answers matched by id. */
 function client(dir: string, env: Record<string, string> = {}) {
@@ -102,4 +102,73 @@ describe('mu mcp', () => {
     expect((await mcp.ask('ping')).result).toEqual({})
     mcp.close()
   })
+})
+
+describe('mcp over http, on mu serve', () => {
+  async function serve() {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'board exists'])
+    const serving = cliStart(dir, ['serve', '--port', '0'])
+    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
+    const owner = /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]!
+    let next = 0
+    const post = (body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body: JSON.stringify(body) })
+    const ask = async (token: string, method: string, params?: object, headers: Record<string, string> = {}) =>
+      (await post({ jsonrpc: '2.0', id: ++next, method, params }, { authorization: `Bearer ${token}`, ...headers })).json() as Promise<any>
+    const mu = async (token: string, args: string[], headers: Record<string, string> = {}) => (await ask(token, 'tools/call', { name: 'mu', arguments: { args } }, headers)).result
+    return { dir, url, owner, serving, post, ask, mu, stop: async () => (serving.child.kill('SIGTERM'), await serving.done) }
+  }
+
+  it('prints its address, and speaks MCP one message per POST', async () => {
+    const board = await serve()
+    expect(board.serving.output()).toContain(`mcp    ${board.url}/mcp`)
+    const hello = await board.ask(board.owner, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } })
+    expect(hello.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'muster' } })
+    const note = await board.post({ jsonrpc: '2.0', method: 'notifications/initialized' }, { authorization: `Bearer ${board.owner}` })
+    expect([note.status, await note.text()]).toEqual([202, ''])
+    const stream = await fetch(`${board.url}/mcp`, { headers: { authorization: `Bearer ${board.owner}` } })
+    expect([stream.status, stream.headers.get('allow')]).toEqual([405, 'POST'])
+    expect((await board.ask(board.owner, 'tools/list')).result.tools.map((tool: any) => tool.name)).toEqual(['mu'])
+    await board.stop()
+  }, 20_000)
+
+  it('writes as the profile the request names, through the same checks as any client', async () => {
+    const board = await serve()
+    const posted = await board.mu(board.owner, ['post', 'general', 'from far away', '--json'], { 'x-muster-profile': 'remote' })
+    expect(posted.isError).toBe(false)
+    expect(JSON.parse(posted.content[0].text).message.by.profile).toBe('remote')
+    const read = await cli(board.dir, ['read', 'general', '--json'])
+    expect(JSON.parse(read.stdout).threads.map((thread: any) => thread.message.text)).toContain('from far away')
+    await board.stop()
+  }, 20_000)
+
+  it('a token held to a profile and channels holds the tool to them too', async () => {
+    const board = await serve()
+    const fixer = (await cli(board.dir, ['token', 'create', '--as', 'fixer', '--can', 'factory/=read,post,label'])).stdout.trim()
+    const elsewhere = await board.mu(fixer, ['post', 'general', 'not here'])
+    expect([elsewhere.isError, elsewhere.content[0].text]).toEqual([true, expect.stringMatching(/^error: /)])
+    const allowed = await board.mu(fixer, ['post', 'factory/intake', 'here', '--json'], { 'x-muster-profile': 'lead' })
+    expect(JSON.parse(allowed.content[0].text).message.by.profile).toBe('fixer')
+    const task = JSON.parse((await cli(board.dir, ['tasks', 'create', 'factory/work', 'fix the redirect', '--json'])).stdout).task.id
+    const claimed = await board.mu(fixer, ['tasks', 'claim', String(task)])
+    expect([claimed.isError, claimed.content[0].text]).toEqual([false, expect.stringMatching(new RegExp(`^#${task} {2}yours for`))])
+    const settled = await board.mu(fixer, ['tasks', 'complete', String(task), 'fixed'])
+    expect([settled.isError, settled.content[0].text]).toEqual([false, `completed  #${task}`])
+    const minting = await board.mu(fixer, ['token', 'create', '--as', 'fixer'])
+    expect([minting.isError, minting.content[0].text]).toEqual([true, expect.stringMatching(/isn't available/)])
+    await board.stop()
+  }, 20_000)
+
+  it('refuses a request with no token, a revoked token, or one sent from another site', async () => {
+    const board = await serve()
+    expect((await board.post({ jsonrpc: '2.0', id: 1, method: 'ping' })).status).toBe(401)
+    const made = JSON.parse((await cli(board.dir, ['token', 'create', '--as', 'gone', '--can', 'general=read', '--json'])).stdout)
+    expect((await board.ask(made.token, 'ping')).result).toEqual({})
+    await cli(board.dir, ['token', 'revoke', made.id])
+    expect((await board.post({ jsonrpc: '2.0', id: 2, method: 'ping' }, { authorization: `Bearer ${made.token}` })).status).toBe(401)
+    expect((await board.post({ jsonrpc: '2.0', id: 3, method: 'ping' }, { authorization: `Bearer ${board.owner}`, origin: 'https://evil.example' })).status).toBe(403)
+    await board.stop()
+  }, 20_000)
 })

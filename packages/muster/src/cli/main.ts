@@ -12,6 +12,7 @@ import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } f
 import { loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
+import { answer as answerMcp } from './mcp.ts'
 import * as launchd from '../daemon/launchd.ts'
 import { configDir } from './claims.ts'
 import { HELP } from './help.ts'
@@ -713,8 +714,14 @@ const commands: Record<string, Command> = {
       const key = boardKey(me.where)
       const port = Number(str(parsed.flags, 'port') ?? run.io.env.MUSTER_PORT ?? 4100)
       let serving
+      // The MCP tool runs the CLI against this same server, with the caller's token: every request it makes
+      // passes the token checks any other client's does.
+      let self = ''
+      const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
+        answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
       try {
-        serving = await listen({ backend: run.team.backend, key, port, hosts: list(parsed.flags, 'allow-host') })
+        serving = await listen({ backend: run.team.backend, key, port, hosts: list(parsed.flags, 'allow-host'), mcp })
+        self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
         throw error
@@ -722,6 +729,7 @@ const commands: Record<string, Command> = {
       const token = mint(key, { sub: me.principal, profile: null, exp: Math.floor(Date.now() / 1000) + 30 * 86_400 })
       run.io.out(`board  ${me.where}`)
       run.io.out(`url    ${serving.url}`)
+      run.io.out(`mcp    ${serving.url}/mcp`)
       run.io.out('')
       run.io.out('    # a token for you, good for 30 days:')
       run.io.out(`    export MUSTER_URL=${serving.url}`)

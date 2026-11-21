@@ -58,53 +58,64 @@ const TOOL = {
 }
 
 type Message = { jsonrpc?: string; id?: number | string | null; method?: string; params?: Record<string, unknown> }
+type Run = (argv: readonly string[], io: Io) => Promise<number>
 
-export async function mcp(input: Readable, output: Writable, env: NodeJS.ProcessEnv, run: (argv: readonly string[], io: Io) => Promise<number>): Promise<void> {
-  const send = (message: object) => void output.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
-  const answer = (id: Message['id'], result: object) => send({ id, result })
-  const refuse = (id: Message['id'], code: number, message: string) => send({ id: id ?? null, error: { code, message } })
+const reply = (id: Message['id'], result: object) => ({ jsonrpc: '2.0', id, result })
+const error = (id: Message['id'], code: number, message: string) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } })
 
-  async function call(args: string[]): Promise<{ text: string; failed: boolean }> {
-    const why = refusal(args)
-    if (why) return { text: why, failed: true }
-    // A wait with no limit would hold the tool call open for as long as nothing happens.
-    const argv = args[0] === 'wait' && !args.some((arg) => arg === '--timeout' || arg.startsWith('--timeout=')) ? [...args, '--timeout', '50s'] : args
-    const out: string[] = []
-    const err: string[] = []
-    const stop = new AbortController()
-    const code = await run(argv, { out: (text) => void out.push(text), err: (text) => void err.push(text), stdin: () => '', env, stop: stop.signal })
-    return { text: [...out, ...err].join('\n') || (code === 0 ? 'done' : `exit ${code}`), failed: code !== 0 }
+async function call(args: string[], env: NodeJS.ProcessEnv, run: Run): Promise<{ text: string; failed: boolean }> {
+  const why = refusal(args)
+  if (why) return { text: why, failed: true }
+  // A wait with no limit would hold the tool call open for as long as nothing happens.
+  const argv = args[0] === 'wait' && !args.some((arg) => arg === '--timeout' || arg.startsWith('--timeout=')) ? [...args, '--timeout', '50s'] : args
+  const out: string[] = []
+  const err: string[] = []
+  const stop = new AbortController()
+  const code = await run(argv, { out: (text) => void out.push(text), err: (text) => void err.push(text), stdin: () => '', env, stop: stop.signal })
+  return { text: [...out, ...err].join('\n') || (code === 0 ? 'done' : `exit ${code}`), failed: code !== 0 }
+}
+
+/**
+ * Answers one JSON-RPC message, whichever transport brought it: a response, or null for a notification,
+ * which gets none. `env` says which board the tool uses and as whom; nothing in the message changes it.
+ */
+export async function answer(message: unknown, env: NodeJS.ProcessEnv, run: Run): Promise<object | null> {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return error(null, -32600, 'Send one JSON-RPC message, as an object.')
+  const { id, method, params } = message as Message
+  // A notification carries no id and gets no answer.
+  if (id === undefined) return null
+  if (method === 'initialize') {
+    const asked = typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18'
+    return reply(id, { protocolVersion: asked, capabilities: { tools: {} }, serverInfo: { name: 'muster', version: VERSION }, instructions: TOOL.description })
   }
+  if (method === 'ping') return reply(id, {})
+  if (method === 'tools/list') return reply(id, { tools: [TOOL] })
+  if (method === 'tools/call') {
+    const args = (params?.arguments as { args?: unknown } | undefined)?.args
+    if (params?.name !== TOOL.name) return error(id, -32602, `No tool "${String(params?.name)}".`)
+    if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) return error(id, -32602, '"args" is a list of strings.')
+    try {
+      const done = await call(args as string[], env, run)
+      return reply(id, { content: [{ type: 'text', text: done.text }], isError: done.failed })
+    } catch (failure) {
+      return reply(id, { content: [{ type: 'text', text: `error: ${failure instanceof Error ? failure.message : String(failure)}` }], isError: true })
+    }
+  }
+  return error(id, -32601, `No method "${String(method)}".`)
+}
 
+/** `mu mcp`: the server on this process's standard input and output, one message per line. */
+export async function mcp(input: Readable, output: Writable, env: NodeJS.ProcessEnv, run: Run): Promise<void> {
   for await (const line of createInterface({ input, crlfDelay: Infinity })) {
     if (!line.trim()) continue
-    let message: Message
+    let message: unknown
     try {
-      message = JSON.parse(line) as Message
+      message = JSON.parse(line)
     } catch {
-      refuse(null, -32700, 'That line is not JSON.')
+      output.write(`${JSON.stringify(error(null, -32700, 'That line is not JSON.'))}\n`)
       continue
     }
-    const { id, method, params } = message
-    // A notification carries no id and gets no answer.
-    if (id === undefined) continue
-    if (method === 'initialize') {
-      const asked = typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18'
-      answer(id, { protocolVersion: asked, capabilities: { tools: {} }, serverInfo: { name: 'muster', version: VERSION }, instructions: TOOL.description })
-    } else if (method === 'ping') answer(id, {})
-    else if (method === 'tools/list') answer(id, { tools: [TOOL] })
-    else if (method === 'tools/call') {
-      const args = (params?.arguments as { args?: unknown } | undefined)?.args
-      if (params?.name !== TOOL.name) refuse(id, -32602, `No tool "${String(params?.name)}".`)
-      else if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) refuse(id, -32602, '"args" is a list of strings.')
-      else {
-        try {
-          const done = await call(args as string[])
-          answer(id, { content: [{ type: 'text', text: done.text }], isError: done.failed })
-        } catch (error) {
-          answer(id, { content: [{ type: 'text', text: `error: ${error instanceof Error ? error.message : String(error)}` }], isError: true })
-        }
-      }
-    } else refuse(id, -32601, `No method "${String(method)}".`)
+    const response = await answer(message, env, run)
+    if (response) output.write(`${JSON.stringify(response)}\n`)
   }
 }

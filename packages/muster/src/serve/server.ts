@@ -64,6 +64,11 @@ export type ServeOptions = {
   hosts?: readonly string[]
   /** Milliseconds between looks at the log for an open feed. */
   feedInterval?: number
+  /**
+   * MCP over HTTP at `/api/board/mcp`, for agents on other machines. It is handed one JSON-RPC message
+   * and the caller's own token and profile, so the tool can do exactly what that token can, and no more.
+   */
+  mcp?: (message: unknown, as: { token: string; profile: string | null }) => Promise<object | null>
 }
 
 /**
@@ -131,6 +136,30 @@ export function createHandler(options: ServeOptions) {
           return send(res, 200, { ok: { revoked: id } })
         }
         return send(res, 200, { ok: mintToken(options.key, tokens, { principal: held.sub, claims: held }, (request ?? {}) as MintRequest, now()) })
+      }
+      if (route === 'mcp' && options.mcp) {
+        // A page in a browser can't hold a token, but refuse one that came from another site all the same.
+        const origin = req.headers.origin
+        if (origin !== undefined && origin !== 'null') {
+          let from = ''
+          try {
+            from = new URL(origin).hostname.toLowerCase()
+          } catch {
+            // Not a URL: refused below.
+          }
+          if (from !== '127.0.0.1' && from !== 'localhost' && !extra.has(from)) throw new Failure('forbidden', `This board doesn't take MCP requests from "${origin}".`)
+        }
+        // One message per POST, answered in its response: there is no stream to open with GET.
+        if (req.method !== 'POST') {
+          res.writeHead(405, { allow: 'POST' })
+          return res.end()
+        }
+        const response = await options.mcp(await bodyOf(req), { token: (req.headers.authorization ?? '').slice(7), profile: caller.profile })
+        if (response === null) {
+          res.writeHead(202)
+          return res.end()
+        }
+        return send(res, 200, response)
       }
       if (route === 'feed' && req.method === 'GET') {
         // A live feed: every matching event after a cursor, as it happens. `id:` is the cursor to come back with.
