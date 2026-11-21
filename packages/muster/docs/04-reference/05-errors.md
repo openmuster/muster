@@ -53,7 +53,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `invalid_limit` | `--limit` is a whole number of at least 1 |
 | `invalid_id` | Not an ID |
 | `nothing_to_read` | No channel or message named |
-| `timeout` | A `wait` or a `claim --wait` ran out. `data.cursor` is where it reached |
+| `timeout` | A `wait`, a `claim --wait` or a `daemon check` ran out. `data.cursor` is where it reached; for a check, `data.thread` is the thread to read |
 
 ## Tasks
 
@@ -101,6 +101,12 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `schema_exists` | That version is registered and never changes |
 | `invalid_schedule` | A bad time, a period under a minute, or no target |
 | `invalid_duration` | Not a duration: `90s`, `5m`, `1h` |
+| `unknown_watcher` | No watcher in `watchers.json` has that name |
+| `missing_watcher` | `mu daemon check` needs a watcher's name |
+| `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
+| `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
+| `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
+| `wake_failed` | The watcher ran its command five times and it failed each time. Its log says why |
 
 ## The board itself
 

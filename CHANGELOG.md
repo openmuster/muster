@@ -5,6 +5,13 @@ versions are affected.
 
 ## Unreleased
 
+### Added
+
+- `mu daemon check <watcher>` writes a message the watcher listens for and
+  waits for a reply, so you know the daemon, the filter, the gate and what
+  the command wakes all work. It says when nothing is running the watchers,
+  when the command keeps failing, and when nothing answered.
+
 ### Fixed
 
 - `mu help` lists flags that worked but were left out: `--type` on `wait` and

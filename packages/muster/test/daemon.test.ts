@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { loadWatchers, runDaemon, tickOnce } from '../src/daemon/daemon.ts'
 import { plist } from '../src/daemon/launchd.ts'
 import { takeLock } from '../src/daemon/lock.ts'
+import { checkWrite } from '../src/daemon/check.ts'
 import { gateSaysNo, type Deps, type Watcher, type WatchState } from '../src/daemon/watchers.ts'
 import { board } from '../src/index.ts'
-import { cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
+import { BIN, cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
 
 const MIN = 60_000
 const texts = async (team: ReturnType<typeof memoryBoard>['team'], channel: string) => (await team.readChannel({ channel, limit: 500 })).threads.map((thread) => thread.message.text)
@@ -333,4 +334,79 @@ describe("a watcher's environment", () => {
     expect(env).toMatch(/^PASSED_ON=fine$/m)
     expect(env).toMatch(/^MUSTER_THREAD=1$/m)
   }, 20_000)
+})
+
+describe('checking a watcher', () => {
+  const watcher = (tail: Watcher['tail'], extra: Partial<Watcher> = {}): Watcher => ({ name: 'lead', tail, run: ['true'], ...extra })
+
+  it('writes what the filter matches: its channel, its labels, a mention, its words', () => {
+    expect(checkWrite(watcher({ channel: 'work', labels: ['kind=bug|feature', 'urgent'], mentions: 'local:user:ada+lead', text: 'ping' }))).toEqual({
+      kind: 'post',
+      channel: 'work',
+      text: 'Watcher check for "lead". If a watcher woke you for this, reply in this thread with anything. @lead ping',
+      labels: { kind: 'bug', urgent: 'check' },
+    })
+    expect(checkWrite(watcher({ re: 12, by: 'ci' }))).toMatchObject({ kind: 'reply', to: 12, as: 'ci' })
+    expect(checkWrite(watcher({ channel: 'work/', types: ['message.'] }), { in: 'work/checks' })).toMatchObject({ kind: 'post', channel: 'work/checks' })
+  })
+
+  it("refuses what a message can't trigger, and asks where to write for a subtree", async () => {
+    expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work', types: ['task.completed'] }))))).toBe('watcher_not_checkable')
+    expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work', by: 'lead' }, { as: 'lead' }))))).toBe('watcher_not_checkable')
+    expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work', by: 'gh:user:octo' }))))).toBe('watcher_not_checkable')
+    expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work/' }), { in: 'ops' })))).toBe('watcher_not_checkable')
+    expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work/' }))))).toBe('missing_channel')
+  })
+
+  const setUp = (run: string[]) => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work' }, run, as: 'lead', every: 1 }] }))
+    return dir
+  }
+
+  it('says nothing runs the watchers when no daemon holds the board, before writing anything', async () => {
+    const dir = setUp(['true'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--json'])
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr).error.reason).toBe('no_ticker')
+    expect(JSON.parse((await cli(dir, ['read', 'work', '--json'])).stdout).threads).toEqual([])
+  })
+
+  it('reports who answered when the command wakes something that replies', async () => {
+    const dir = setUp([process.execPath, BIN, 'reply', '{thread}', 'here'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s'])
+    daemon.child.kill('SIGTERM')
+    await daemon.done
+    expect([run.code, run.stderr]).toEqual([0, ''])
+    expect(run.stdout).toMatch(/^answered {2}#2 {2}by .*lead.* {2}in \d+s?/)
+  }, 30_000)
+
+  it('says the wake failed when the command keeps failing, rather than taking the notice for an answer', async () => {
+    const dir = setUp(['false'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '20s', '--json'])
+    daemon.child.kill('SIGTERM')
+    await daemon.done
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'wake_failed', data: { thread: 2 } })
+  }, 40_000)
+
+  it('times out with the thread to read when the command wakes nothing that answers', async () => {
+    const dir = setUp(['true'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '3s', '--json'])
+    daemon.child.kill('SIGTERM')
+    await daemon.done
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'timeout', data: { thread: 2 } })
+  }, 30_000)
 })

@@ -103,7 +103,8 @@ esac
 
 A watcher's command starts with a small, clean environment. If tmux needs a
 socket path, pass it: `tmux -S /path/to/socket ...`, or name the variable
-under `"env"` in the watcher. Start the daemon with `mu daemon run`.
+under `"env"` in the watcher. Start the daemon with `mu daemon run`, then
+check that the pane wakes and its agent answers: `mu daemon check <watcher>`.
 
 ### Herdr
 
