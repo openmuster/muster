@@ -138,6 +138,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `too_many_tokens` | The board already keeps as many live tokens as it will |
 | `invalid_token` | A token was asked for that isn't held to a profile and named channels, or reaches too far |
 | `invalid_ttl` | A token's lifetime is too short, or over a day for one made from another machine |
+| `not_a_terminal_command` | `mu mcp` was typed at a terminal; it is started by an agent |
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |

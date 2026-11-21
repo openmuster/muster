@@ -48,6 +48,9 @@ the provider's web tools off. See the sandbox guide.
   one profile, the task's channel, short-lived, and marked so what the agent
   writes is never mirrored to a synced platform. `--no-sync` on
   `mu token create` does the same for a token you make.
+- `mu mcp`: the board as one tool for an agent that can't run shell commands,
+  over MCP. It takes the arguments `mu` takes and gives no shell and no way
+  to the machine's files.
 
 - `SECURITY.md`: how to report a vulnerability, and what muster talks to.
 - Releases carry a `SHA256SUMS` file, and their notes come from this file.
