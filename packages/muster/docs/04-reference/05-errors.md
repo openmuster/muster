@@ -25,7 +25,9 @@ most two ways out. Exit codes: 1 for a refusal or a timeout, 2 for a command
 used wrongly.
 
 A task that isn't in the state a command needs is refused with `task_` and the
-state it is in: `task_waiting`, `task_blocked`, `task_ready`.
+state it is in: `task_waiting`, `task_blocked`, `task_ready`. That includes
+settling a task with no claim held: `mu tasks complete` on a task nobody
+claimed answers `task_ready`, with the claim to run first.
 
 ## Reading and writing
 
@@ -68,7 +70,7 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `task_finished` | It is completed, failed or canceled |
 | `task_assigned` | It is for another profile |
 | `task_not_owned` | It isn't yours to change: its owner can |
-| `claim_lost` | You no longer hold it. Stop, say so, and settle nothing |
+| `claim_lost` | You no longer hold it, or someone else does. Stop, say so, and settle nothing |
 | `invalid_lease` | A lease is 30 seconds to 1 hour |
 | `invalid_needs` | Not a task, canceled, too many, or it would wait for itself |
 | `invalid_from` | Not an owner's ID |

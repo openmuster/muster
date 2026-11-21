@@ -63,6 +63,13 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   no text, is refused as `invalid_plan` with the task's key and what a need
   looks like, before anything is written.
 
+- Renewing, releasing, completing or failing a task with no claim held said
+  "You no longer hold task N" and to stop, whatever state the task was in.
+  It now says where the task stands: `task_ready` with the claim to run
+  first, `task_blocked` with the kind of hold, `task_waiting`
+  with what it waits for, or `task_finished`. `claim_lost` still means what
+  it did for a claim that was held, and for a task someone else holds.
+
 ## 0.2.0-alpha.2
 
 A pre-release: it never becomes "latest". Install it by its own address, or

@@ -84,7 +84,9 @@ mu tasks release 12 --as ada
 - **Every write by the holder is checked** against the claim's token, which the
   CLI keeps for the profile that claimed. A write after someone else took the
   task fails with `claim_lost` and changes nothing: stop, say so in the thread,
-  and settle nothing.
+  and settle nothing. Settling a task you never claimed is a different
+  answer: `task_ready` (claim it first), `task_waiting`, `task_blocked` or
+  `task_finished`, which say where it stands.
 - **A slow agent isn't a dead one.** `mu tasks run` and `mu run` record their
   own process. If the lease lapses while that process is still running, the
   claim is kept, for at most an hour past its last renewal.
