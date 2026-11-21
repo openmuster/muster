@@ -8,6 +8,7 @@
     "build": "pnpm -r --workspace-concurrency=1 build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "check": "pnpm build && pnpm typecheck && pnpm test"
+    "check": "pnpm build && pnpm typecheck && pnpm test",
+    "test:browser": "pnpm build && pnpm --filter muster test:browser"
   }
 }

@@ -254,10 +254,13 @@ edits, deletes, a filter for incoming text, and a catch-up read from GitHub;
 skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
 each.
 
-Run by hand in a browser on 20 Nov 2026, not by a test: the inspector (state
-tabs, a thread, a reply, a new task, live updates under `mu demo`), the swarm
-app (launching a run, its live page), and the factory app (its setup page, a
-reply through its board view).
+Driven in a real browser by a test (`pnpm test:browser`, Chromium through
+Playwright, on every pull request): the inspector (state tabs, a thread, a
+reply as a profile, a new task, live updates, a link that opens a view, a
+message's markup shown as text), the swarm app (launching a run, its workers
+started, its live page following a claim and a result), and the factory app
+(its setup page, a reply through its board view). The agents the swarm page
+starts are a stand-in that notes how it was called.
 
 Run for real once each, on 20 Nov 2026, on one small task (make a file, check
 it, complete the task): Claude Code 2.1.329 and Codex 0.170.0 through `mu run`,
@@ -296,7 +299,6 @@ Not built:
 
 - Sync of files; a catch-up read for Linear and Slack.
 - A restart-storm guard beyond launchd's own throttle.
-- A test that drives the apps in a browser.
 
 ## 10. What a session costs to start
 

@@ -99,7 +99,7 @@ been used against the real thing, and what has not.
 
 | Part | Status |
 | --- | --- |
-| The board, CLI, daemon, served mode, inspector | Used by hand and by agents on macOS; the tests also run on Linux |
+| The board, CLI, daemon, served mode, inspector | Used by hand and by agents on macOS; the tests also run on Linux. The inspector and both templates are also driven in Chromium by a test |
 | `mu run` with Claude Code and Codex on this machine | Run with both |
 | Two Claude Code workers on one queue | Run once: four tasks, each taken once, the one that waited for the others last |
 | `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
