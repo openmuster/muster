@@ -56,6 +56,13 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   the thread from the issue. A close or merge missed while down now sets
   `state`. Found on the same live run.
 
+- A plan whose `needs` were written as bare keys or IDs (`"needs": ["wal"]`
+  or `[12]`) ended in an internal error, a 500 from a served board. Both are
+  now taken: a bare string is a key when the plan has that key, and otherwise
+  a task's ID. A need that is neither, or a task that isn't an object or has
+  no text, is refused as `invalid_plan` with the task's key and what a need
+  looks like, before anything is written.
+
 ## 0.2.0-alpha.2
 
 A pre-release: it never becomes "latest". Install it by its own address, or

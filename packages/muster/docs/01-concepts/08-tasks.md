@@ -155,8 +155,11 @@ mu tasks create work/checkout --file plan.json --idempotency-key checkout-plan
 ]
 ```
 
-Each task comes after the ones it waits for, by `key`. With the same
-idempotency key a retry makes nothing twice. A plan holds up to 100 tasks.
+Each task comes after the ones it waits for, by `key`. A need is an earlier
+task's key or the ID of a task already on the board: `{ "key": "limiter" }` or
+`{ "id": 12 }`, or either one bare, `"limiter"` or `12`. A bare string is a key
+when the plan has that key, and otherwise an ID. With the same idempotency key
+a retry makes nothing twice. A plan holds up to 100 tasks.
 
 ## A review that sends work back
 

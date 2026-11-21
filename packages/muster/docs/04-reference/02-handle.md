@@ -98,7 +98,7 @@ the board stores only its hash. The CLI keeps it for you; code keeps its own.
 | Method | Takes |
 | --- | --- |
 | `taskCreate` | A message's fields, or `thread`; `needs?`, `for?`, `claim?` |
-| `taskPlan` | `channel`, `tasks: [{ key, text, labels?, needs?, for? }]` |
+| `taskPlan` | `channel`, `tasks: [{ key, text, labels?, needs?, for? }]`; a need is `{ key }`, `{ id }`, or either one bare |
 | `taskClaim` | `id`, or `ready` with `labels?` and `from?`; `lease?`, `pid?`, `pidStart?` |
 | `taskRenew`, `taskRelease` | `id`, `token` |
 | `taskComplete`, `taskFail`, `taskBlock` | `id`, `token`, and `result`, `reason`, or `reason` and `kind` |
