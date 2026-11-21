@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -44,3 +45,23 @@ jobs:
           flags=""
           case "$VERSION" in *-*) flags="--prerelease --latest=false" ;; esac
           gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $flags
+
+  # The same release as a container image on GitHub's registry. A pre-release is tagged with its
+  # version only; a release is also "latest".
+  image:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./packages/muster/package.json').version")
+          image=ghcr.io/${GITHUB_REPOSITORY,,}
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          tags="-t $image:$version"
+          case "$version" in *-*) ;; *) tags="$tags -t $image:latest" ;; esac
+          docker build --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" --label org.opencontainers.image.version="$version" $tags .
+          docker push --all-tags "$image"

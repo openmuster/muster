@@ -72,7 +72,9 @@ agent died goes back to the queue on its own.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
   task, on this machine or, experimentally, in a cloud sandbox.
 - **A served board.** `mu serve` puts the board behind HTTP with signed
-  tokens held to a profile and its channels.
+  tokens held to a profile and its channels. The `Dockerfile` runs it in a
+  container with everything on one volume: see
+  [A board on a server](./packages/muster/docs/03-guides/18-a-board-on-a-server.md).
 - **Sync** with GitHub, Linear and Slack, by webhook. Not yet run against the
   live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm

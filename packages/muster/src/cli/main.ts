@@ -29,7 +29,7 @@ import { AGENTS, generic, isSessionId } from '../runner/agents.ts'
 import { runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
-import { listen } from '../serve/server.ts'
+import { isLoopback, listen } from '../serve/server.ts'
 import { boardKey, mint } from '../serve/token.ts'
 import type { Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
@@ -434,7 +434,7 @@ const commands: Record<string, Command> = {
       const to = parsed.positionals[0]
       if (to === undefined) throw misuse('missing_path', 'Name the file to write: mu backup ./board-backup.db.')
       const made = await run.team.backend.backup(to)
-      print(run, made, () => `backed up  ${made.path}`)
+      print(run, made, () => [`backed up  ${made.path}`, ...(made.files ? [`files      ${made.files}`] : [])].join('\n'))
     },
   },
 
@@ -707,12 +707,15 @@ const commands: Record<string, Command> = {
   },
 
   serve: {
-    spec: { value: ['port'], many: ['allow-host'] },
+    spec: { value: ['port', 'host'], many: ['allow-host'], bool: ['no-token'] },
     async run(run, parsed) {
       const me = await run.team.whoami()
       if (me.mode !== 'file') throw new Failure('forbidden', 'mu serve serves a board on this machine.')
       const key = boardKey(me.where)
       const port = Number(str(parsed.flags, 'port') ?? run.io.env.MUSTER_PORT ?? 4100)
+      const host = str(parsed.flags, 'host') ?? run.io.env.MUSTER_HOST ?? '127.0.0.1'
+      // In a container the names come from its environment, beside any given as flags.
+      const allowed = [...list(parsed.flags, 'allow-host'), ...(run.io.env.MUSTER_ALLOW_HOSTS ?? '').split(',').map((name) => name.trim()).filter(Boolean)]
       let serving
       // The MCP tool runs the CLI against this same server, with the caller's token: every request it makes
       // passes the token checks any other client's does.
@@ -720,20 +723,26 @@ const commands: Record<string, Command> = {
       const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
         answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
       try {
-        serving = await listen({ backend: run.team.backend, key, port, hosts: list(parsed.flags, 'allow-host'), mcp })
+        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp })
         self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
         throw error
       }
-      const token = mint(key, { sub: me.principal, profile: null, exp: Math.floor(Date.now() / 1000) + 30 * 86_400 })
       run.io.out(`board  ${me.where}`)
       run.io.out(`url    ${serving.url}`)
       run.io.out(`mcp    ${serving.url}/mcp`)
-      run.io.out('')
-      run.io.out('    # a token for you, good for 30 days:')
-      run.io.out(`    export MUSTER_URL=${serving.url}`)
-      run.io.out(`    export MUSTER_TOKEN=${token}`)
+      if (!isLoopback(host)) run.io.out(`listen ${host}  for ${allowed.join(', ')}`)
+      if (on(parsed.flags, 'no-token')) {
+        // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
+        run.io.out('token  none printed: make one with mu token create')
+      } else {
+        const token = mint(key, { sub: me.principal, profile: null, exp: Math.floor(Date.now() / 1000) + 30 * 86_400 })
+        run.io.out('')
+        run.io.out('    # a token for you, good for 30 days:')
+        run.io.out(`    export MUSTER_URL=${serving.url}`)
+        run.io.out(`    export MUSTER_TOKEN=${token}`)
+      }
       let watchers: ReturnType<typeof loadWatchers> = []
       try {
         watchers = loadWatchers()

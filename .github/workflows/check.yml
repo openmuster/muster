@@ -11,11 +11,11 @@ permissions:
 jobs:
   # The status a pull request needs. It passes only when every leg below did.
   check:
-    needs: [test, pack]
+    needs: [test, pack, image]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success && test "${{ needs.pack.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.pack.result }}" = success && test "${{ needs.image.result }}" = success
 
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
@@ -55,3 +55,25 @@ jobs:
       - run: pnpm build
       - run: node scripts/release.mjs pack out
       - run: node scripts/release.mjs notes "$(node -p "require('./packages/muster/package.json').version")" > /dev/null
+
+  # The container image builds, starts healthy, and serves the board it keeps on its volume.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t muster:check .
+      - name: Run it and use it
+        run: |
+          docker run -d --name board -p 127.0.0.1:4100:4100 -v board-data:/data -e MUSTER_ALLOW_HOSTS=board.example.com muster:check
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:4100/api/board/health && break; sleep 1; done
+          docker logs board
+          if docker logs board 2>&1 | grep -q 'mu1\.'; then echo "the log holds a token" >&2; exit 1; fi
+          docker exec board mu post general "from the image"
+          token=$(docker exec board mu token create --as ci --can 'general=read' --ttl 10m)
+          curl -fs -H "Authorization: Bearer $token" http://127.0.0.1:4100/api/board/whoami
+          docker exec board mu backup /data/check.db
+          docker restart board
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:4100/api/board/health && break; sleep 1; done
+          # The volume kept the board and its key: the token made before the restart still works.
+          curl -fs -H "Authorization: Bearer $token" http://127.0.0.1:4100/api/board/whoami

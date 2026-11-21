@@ -84,7 +84,7 @@ export type Backend = {
   syncTick(): Promise<{ imported: number; delivered: number; failed: number }>
 
   /** Writes a consistent copy of the board to `path`, while others keep writing. File boards only. */
-  backup(path: string): Promise<{ path: string }>
+  backup(path: string): Promise<{ path: string; files?: string }>
 
   close(): void
 }

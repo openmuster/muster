@@ -116,6 +116,10 @@ request, and the sync named `<name>` checks it. See
 
 ## What it won't answer
 
-`mu serve` listens on 127.0.0.1 and refuses a request whose `Host` isn't its
-own or one named with `--allow-host`. Sending schedules, importing sync and
+`mu serve` listens on 127.0.0.1, or where `--host` says, and refuses a request
+whose `Host` isn't its own or one named with `--allow-host`.
+
+`GET /api/board/health` answers `200 { "ok": { "version": "..." } }` with no
+token, for a container's health check or a load balancer. It says nothing
+about the board. Sending schedules, importing sync and
 running watchers are the server's own work: no route asks for them.

@@ -100,6 +100,7 @@ serve
   serve [--port 4100]            the board over HTTP, for agents you don't
                                  trust with the file and for other machines
        [--allow-host <name>]...  a name a proxy or tunnel reaches it by
+       [--host 0.0.0.0] [--no-token]  listen beyond this machine; print no token
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
        [--no-sync]
   token list | token revoke <id>
