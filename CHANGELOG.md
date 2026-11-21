@@ -8,8 +8,60 @@ versions are affected.
 ### Security
 
 Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
-`mu serve`. A board used as a file on your own machine is not affected.
+`mu serve`. A board used as a file on your own machine is not affected,
+except by the inspector and the swarm template, which are marked.
 
+- A token held to `read` could delete messages, cancel schedules, and
+  cancel, assign, unblock and reopen tasks. Every token speaks for the board's owner, and those
+  changes asked only whose a thing was: a read-only token held to no profile,
+  such as `--can '*=read'`, could change anything in the channels it read,
+  and one held to a profile could change that profile's own. They now take
+  `post`.
+- A token held to channels could move the cursors the daemon keeps its place
+  under (`watch:`, `hook:`, `sync:`). A cursor only moves forward, so that
+  silenced a watcher for good, and would have done the same to an outgoing
+  webhook, which no release has yet. It is now refused.
+- The schedule list showed a schedule in a private channel, text included,
+  to a token that held only the subtree above it.
+- The feed still carried what a deleted message said: `mu tail --last`,
+  `mu wait`, the HTTP feed and an outgoing webhook returned the original
+  text, labels and files. They are now empty in every event of a deleted
+  message, and a filter can't match on them. The board's file and its
+  backups still hold the words: the log is never rewritten.
+- 0.2.0-alpha.1 and alpha.2, where tokens can be revoked: the token
+  `mu serve` prints had no ID, so it was in no list and could not be. It is now made like any other token. One printed by an earlier
+  version works until its 30 days are up; deleting the board's key stops it
+  sooner, along with every other token.
+- 0.2.0-alpha.1 and alpha.2: a schedule went on posting after its token was
+  revoked. In every version a token held to channels could make any number
+  of schedules. A schedule is now
+  canceled when it comes due after its token was revoked, a revoked token
+  stays on record so that still holds later, and a token held to channels
+  has 20 schedules going at most.
+- A typed block reached `blocks` unchecked two ways: in a schedule's text,
+  and in text a synced platform sent, such as an issue's body. A schedule is
+  now checked when it is made, and `blocks` holds only what follows a schema
+  the board has.
+- The inspector (file boards too): its page carried the token that lets it
+  act as you, and served that page to anything on the machine that asked,
+  another user included. The token is now only in the link `mu inspect`
+  prints, after the `#`.
+- The swarm template (file boards too): the launcher started whatever
+  command a request named as its agent. It now starts claude or codex only,
+  and both templates' `pnpm dev` listens on 127.0.0.1.
+- The Cloudflare runner template accepted `Bearer undefined` when deployed
+  with no secret, and would then start a container for anyone. It now starts
+  nothing until a secret of 16 characters or more is set.
+- `mu download` wrote over a file of the same name in the folder it saved
+  to. It now refuses (`exists`).
+- The LaunchAgent file `mu daemon install --env` writes holds secrets and was
+  left readable to whoever could reach the folder. It is now 0600.
+- A GitHub delivery was known by a header GitHub doesn't sign, so a kept
+  webhook sent again under a new ID could set a thread's labels back. It is
+  now known by its signed body.
+- Releases: every GitHub Action is pinned to a commit, the release jobs hold
+  only the permission each needs, and a checkout no longer leaves the job's
+  token where the install and the tests could read it.
 - `mu serve` read up to 36 MB of a webhook's body before checking who sent
   it, with no token asked. A webhook body is now at most 1 MB.
 - A file's name and type on a message, and the labels one change unsets,

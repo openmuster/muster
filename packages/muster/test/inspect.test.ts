@@ -19,15 +19,20 @@ async function page() {
 }
 
 describe('the inspector', () => {
-  it('serves its page with the per-run token, and the same page for any path, so a view is a link', async () => {
+  it('serves the same page for any path, so a view is a link, and never sends its token: that is only in the link it hands back', async () => {
     const { serving } = await page()
-    for (const path of ['/', '/c/db%2Fstorage?thread=5', '/activity']) {
+    for (const path of ['/', '/c/db%2Fstorage?thread=5', '/activity', '/app.js']) {
       const response = await fetch(serving.url + path)
-      const html = await response.text()
+      const body = await response.text()
+      // Anything on this machine can ask for these, so nothing in them may let it act as you.
+      expect(body).not.toContain(serving.token)
+      response.headers.forEach((value) => expect(value).not.toContain(serving.token))
+      if (path === '/app.js') continue
       expect(response.headers.get('content-type')).toMatch(/text\/html/)
-      expect(html).toContain(JSON.stringify({ token: serving.token }))
-      expect(html).toContain('<script type="module" src="/app.js">')
+      expect(body).toContain('<script type="module" src="/app.js">')
     }
+    expect(serving.link).toBe(`${serving.url}/#k=${serving.token}`)
+    expect(serving.token).toMatch(/^[A-Za-z0-9_-]{32}$/)
     await serving.close()
   })
 

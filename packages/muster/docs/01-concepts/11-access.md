@@ -24,7 +24,10 @@ mu serve --port 4100
 ```
 
 It prints the board's URL and a token for you, listens on 127.0.0.1 only, and
-answers only for its own host name. To reach it from elsewhere put a proxy or
+answers only for its own host name. The token reaches everything and lasts 30
+days. It is one the board has a record of, like any other: `mu token list`
+shows it, and the line that prints it names the `mu token revoke` that stops
+it. Each start prints a new one. To reach it from elsewhere put a proxy or
 a tunnel with a name in front and pass that name with `--allow-host`.
 
 | Flag | What it does |
@@ -61,6 +64,18 @@ channel, a subtree (`factory/`), or `*`.
 - A channel a token can't read doesn't exist for it: reads, searches, the
   channel list, the feed and the actor list all leave it out, and a write there
   is `not_found`.
+- Changing something takes `post`, even when it is your own. Every token a
+  board makes speaks for the board's owner, so "yours" says who wrote a
+  message or made a task, not what a token may do: one held to `read` deletes
+  nothing, cancels no schedule, and cancels, assigns, unblocks and reopens no
+  task.
+- The daemon keeps its place under cursors named `watch:`, `hook:` and
+  `sync:`. A token held to channels can't move one.
+- A schedule belongs to the token that made it. Revoke the token and its
+  schedules are canceled as they come due. A token that only ran out leaves
+  them going: cancel those with `mu schedule cancel`. So does a schedule made
+  before 0.2.0-alpha.3, which has no record of its token. A token held to
+  channels has 20 schedules going at most.
 
 ## Let an agent ask to join
 
@@ -119,7 +134,10 @@ refused. The board keeps that list in its own file, as records of what it
 made, never the tokens themselves. A token with an ID the board has no
 record of is refused, so restoring a board from an old backup stops the
 tokens made since. A token made before muster kept the list has no ID and can't be
-revoked; it stops when it runs out.
+revoked; it stops when it runs out. So does one `mu serve` printed in
+0.2.0-alpha.2 or earlier, which was good for 30 days: to stop one of those
+sooner, delete the board's key in `~/.config/muster/keys/`, which stops every
+token the board has made.
 
 ### Making a token from another machine
 

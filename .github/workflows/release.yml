@@ -9,18 +9,24 @@ on:
   push:
     tags: ['v*']
 
+# Nothing here can write unless its job says so, and each job that can is given only what it publishes.
+# Actions are pinned to a commit, and a checkout doesn't leave the job's token in the clone: the install,
+# the build and the tests run code from every dependency, and none of it should be able to reach a release.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -52,16 +58,22 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and push
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p "require('./packages/muster/package.json').version")
           image=ghcr.io/${GITHUB_REPOSITORY,,}
-          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           tags="-t $image:$version"
           case "$version" in *-*) ;; *) tags="$tags -t $image:latest" ;; esac
           docker build --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" --label org.opencontainers.image.version="$version" $tags .
+          # Signed in only once the image is built: the build runs the install, and needs no registry of ours.
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker push --all-tags "$image"

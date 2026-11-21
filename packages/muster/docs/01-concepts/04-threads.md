@@ -51,6 +51,12 @@ An edit raises the message's revision. `--if-revision` refuses a change to a
 message that moved on since you read it. A delete leaves a tombstone: the text,
 labels and reactions go, the place in the thread stays.
 
+After a delete, nothing the board answers with says what the message said:
+not a read, not a search, and not the feed, where the events that posted and
+edited it are still listed, with their text and labels empty. The board's
+file is another matter. The log in it is never rewritten, so the words stay
+in the file, and in any backup of it, for whoever can read those.
+
 ## Writes that are safe to repeat
 
 ```bash

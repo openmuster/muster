@@ -90,6 +90,28 @@ describe('reading', () => {
     expect(await texts(['kind'])).toEqual(['bug', 'feature'])
   })
 
+  it('what a deleted message said is gone from the feed too: its text, its edits and its labels, and no filter finds it', async () => {
+    const { team } = memoryBoard()
+    const kept = await team.post({ channel: 'dev', text: 'this one stays' })
+    const message = await team.post({ channel: 'dev', text: 'the password is hunter2', labels: { customer: 'acme-corp' } })
+    await team.edit({ id: message.id, text: 'the password was swordfish' })
+    await team.label({ id: message.id, set: { ticket: 'zd-4411' }, unset: ['customer'] })
+    const reply = await team.reply({ to: kept.id, text: 'a reply with a secret: xyzzy' })
+    const before = JSON.stringify((await team.events({ after: 0 })).events)
+    for (const word of ['hunter2', 'swordfish', 'acme-corp', 'zd-4411', 'xyzzy']) expect(before).toContain(word)
+    await team.remove({ id: message.id })
+    await team.remove({ id: reply.id })
+    const all = await team.events({ after: 0, limit: 1000 })
+    const after = JSON.stringify(all.events)
+    for (const word of ['hunter2', 'swordfish', 'acme-corp', 'zd-4411', 'xyzzy']) expect(after).not.toContain(word)
+    // The events are still there, in order, and say that something was posted and deleted: only the words are gone.
+    expect(all.events.filter((event) => event.thread === message.id).map((event) => event.type)).toEqual(['message.posted', 'message.edited', 'labels.changed', 'message.deleted'])
+    expect(after).toContain('this one stays')
+    // A filter is matched against what a reader may see, so it can't be used to ask what the text was.
+    expect((await team.events({ after: 0, filter: { text: 'hunter2' } })).events).toEqual([])
+    expect((await team.events({ after: 0, filter: { text: 'xyzzy' } })).events).toEqual([])
+  })
+
   it('search finds words in roots and replies, and not in deleted or edited-away text', async () => {
     const { team } = memoryBoard()
     const root = await team.post({ channel: 'dev', text: 'the checkout limiter is flaky' })

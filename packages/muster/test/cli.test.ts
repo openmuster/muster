@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -460,6 +460,23 @@ describe('files', () => {
     await cli(dir, ['download', '2', '--to', join(dir, 'out', 'deep')])
     expect(existsSync(join(dir, 'out', 'deep', 'escaped.txt'))).toBe(true)
     expect(existsSync(join(dir, 'escaped.txt'))).toBe(false)
+  })
+
+  it("a download never writes over a file: the name is the sender's choice, and the folder may be your repository", async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'a.txt'), 'registry=https://evil.example/')
+    const posted = JSON.parse((await cli(dir, ['post', 'work', 'x', '--attach', join(dir, 'a.txt'), '--json'])).stdout)
+    const team = (await import('../src/index.ts')).board({ dir: join(dir, 'board') })
+    await team.post({ channel: 'work', text: 'config for you', attachments: [{ ...posted.message.attachments[0], name: '.npmrc' }] })
+    team.close()
+    const repo = join(dir, 'repo')
+    mkdirSync(repo)
+    writeFileSync(join(repo, '.npmrc'), 'mine')
+    const refused = await cli(dir, ['download', '2', '--to', repo, '--json'])
+    expect([refused.code, JSON.parse(refused.stderr).error.reason]).toEqual([1, 'exists'])
+    expect(readFileSync(join(repo, '.npmrc'), 'utf8')).toBe('mine')
+    expect((await cli(dir, ['download', '2', '--to', join(dir, 'elsewhere')])).code).toBe(0)
+    expect(readFileSync(join(dir, 'elsewhere', '.npmrc'), 'utf8')).toBe('registry=https://evil.example/')
   })
   it('makes no network call of its own: a board on a file is read and written without one', async () => {
     const dir = tempDir()

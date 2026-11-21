@@ -56,7 +56,7 @@ the board skill's `references/swarm.md`.
 ```bash
 cd templates/swarm
 pnpm install
-pnpm dev
+pnpm dev        # on 127.0.0.1 only: the page has no sign-in
 ```
 
 - The form takes a goal, a run name, how many agents, which agent, and where

@@ -31,6 +31,9 @@ back. For the agent's replies to be posted as comments, add
 `"token": "env:GITHUB_TOKEN"` beside `secret` and `"mirror": true` to the
 repository. Sync has not been run against GitHub yet.
 
+The page has no sign-in, and its reply form writes as you: whoever can reach
+it can. `pnpm dev` listens on 127.0.0.1 only, so that is this machine.
+
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass
 something on, list its name under `"env"` in the watcher.

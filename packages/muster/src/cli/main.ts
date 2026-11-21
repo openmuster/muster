@@ -31,7 +31,7 @@ import { runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
-import { boardKey, mint } from '../serve/token.ts'
+import { boardKey } from '../serve/token.ts'
 import { profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -398,9 +398,15 @@ const commands: Record<string, Command> = {
       const saved: { name: string; path: string; size: number }[] = []
       for (const file of message.attachments) {
         const got = await run.team.fileGet({ message: wanted, id: file.id })
-        // Only a file's own name is used, so nothing a message says can write outside the folder.
+        // Only a file's own name is used, so nothing a message says can write outside the folder. And the
+        // name is the sender's choice, so it never replaces a file that is already there.
         const path = join(to, basename(file.name))
-        writeFileSync(path, Buffer.from(got.data, 'base64'))
+        try {
+          writeFileSync(path, Buffer.from(got.data, 'base64'), { flag: 'wx' })
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          throw new Failure('exists', `There is already a file at ${path}.`, { hint: 'Download into another folder with --to: a download never writes over a file.', data: { saved } })
+        }
         saved.push({ name: file.name, path, size: file.size })
       }
       print(run, { files: saved }, () => saved.map((file) => `saved  ${file.path}`).join('\n'))
@@ -631,9 +637,9 @@ const commands: Record<string, Command> = {
       const pace = duration(str(parsed.flags, 'pace') ?? '3s', 'pace') * 1000
       const port = str(parsed.flags, 'port')
       const serving = await inspect({ backend: demo.backend, ...(port ? { port: Number(port) } : {}), title: 'muster demo' })
-      run.io.out(`inspector  ${serving.url}`)
+      run.io.out(`inspector  ${serving.link}`)
       run.io.out(`board      ${join(dir, 'main.db')}`)
-      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.url], { stdio: 'ignore', detached: true }).unref()
+      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.link], { stdio: 'ignore', detached: true }).unref()
       const lead = demo.as('lead')
       const step = async (name: string, what: string, play: () => Promise<unknown>) => {
         if (run.io.stop.aborted) return
@@ -693,9 +699,10 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       const port = str(parsed.flags, 'port')
       const serving = await inspect({ backend: run.team.backend, ...(port ? { port: Number(port) } : {}) })
-      run.io.out(`inspector  ${serving.url}`)
+      // The part after the # is what lets a page act as you: a browser keeps it, and nothing else on this machine is told it.
+      run.io.out(`inspector  ${serving.link}`)
       run.io.out('reads and writes as you; stop it with ctrl-c')
-      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.url], { stdio: 'ignore', detached: true }).unref()
+      if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.link], { stdio: 'ignore', detached: true }).unref()
       await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       await serving.close()
       return 0
@@ -819,11 +826,19 @@ const commands: Record<string, Command> = {
         // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
         run.io.out('token  none printed: make one with mu token create')
       } else {
-        const token = mint(key, { sub: me.principal, profile: null, exp: Math.floor(Date.now() / 1000) + 30 * 86_400 })
-        run.io.out('')
-        run.io.out('    # a token for you, good for 30 days:')
-        run.io.out(`    export MUSTER_URL=${serving.url}`)
-        run.io.out(`    export MUSTER_TOKEN=${token}`)
+        // Made the way `mu token create` makes one, so the board has a record of it: it is in `mu token list`,
+        // and `mu token revoke` stops it if this output ends up somewhere it shouldn't.
+        try {
+          const made = await run.team.backend.tokens.create({ profile: null, can: {}, ttl: 30 * 86_400 })
+          run.io.out('')
+          run.io.out(`    # a token for you, good for 30 days (mu token revoke ${made.record.id} stops it):`)
+          run.io.out(`    export MUSTER_URL=${serving.url}`)
+          run.io.out(`    export MUSTER_TOKEN=${made.token}`)
+        } catch (error) {
+          // A board that already keeps as many tokens as it will is still served: it only prints no new one.
+          if (!(error instanceof Failure) || error.reason !== 'too_many_tokens') throw error
+          run.io.out(`token  none printed: ${error.message} Revoke some with mu token revoke.`)
+        }
       }
       let watchers: ReturnType<typeof loadDaemonConfig>['watchers'] = []
       let hooks: ReturnType<typeof armHooks> = []

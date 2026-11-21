@@ -10,7 +10,7 @@ import { ROUTES } from '../serve/server.ts'
 
 const ALLOWED = new Set<string>(ROUTES)
 
-const PAGE = (token: string, title: string) => `<!doctype html>
+const PAGE = (title: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -20,7 +20,6 @@ const PAGE = (token: string, title: string) => `<!doctype html>
 </head>
 <body>
 <div id="root"></div>
-<script>window.__MUSTER__ = ${JSON.stringify({ token })}</script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>`
@@ -43,9 +42,13 @@ export type InspectOptions = { backend: Backend; port?: number; bundle?: string;
 /**
  * The inspector: a page, its bundle, and `/board/*`, a proxy that acts as you. Because it acts as you
  * it trusts nothing but its own page: it listens on 127.0.0.1, answers only for its own host name,
- * needs the token it gave the page on every board request, and the page's own origin on writes.
+ * needs its token on every board request, and the page's own origin on writes.
+ *
+ * The token is never in anything the server sends: any process on this machine can ask 127.0.0.1 for
+ * the page, another user's included. It is in `link`, after the `#`, which a browser keeps to itself:
+ * so only whoever was handed the link, by `mu inspect` in their own terminal, has it.
  */
-export function inspect(options: InspectOptions): Promise<{ url: string; token: string; close(): Promise<void> }> {
+export function inspect(options: InspectOptions): Promise<{ url: string; link: string; token: string; close(): Promise<void> }> {
   const token = randomBytes(24).toString('base64url')
   let origin = ''
   const send = (res: ServerResponse, status: number, body: unknown) => {
@@ -94,7 +97,7 @@ export function inspect(options: InspectOptions): Promise<{ url: string; token: 
       if (req.method === 'GET') {
         // Every path is the page: the view is in the URL.
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:" })
-        return res.end(PAGE(token, options.title ?? 'muster'))
+        return res.end(PAGE(options.title ?? 'muster'))
       }
       throw new Failure('not_found', 'No such route.')
     } catch (error) {
@@ -106,7 +109,7 @@ export function inspect(options: InspectOptions): Promise<{ url: string; token: 
     server.once('error', reject)
     server.listen(options.port ?? 0, '127.0.0.1', () => {
       origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-      resolve({ url: origin, token, close: () => new Promise((done) => { server.closeAllConnections?.(); server.close(() => done()) }) })
+      resolve({ url: origin, link: `${origin}/#k=${token}`, token, close: () => new Promise((done) => { server.closeAllConnections?.(); server.close(() => done()) }) })
     })
   })
 }

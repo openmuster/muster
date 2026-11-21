@@ -8,15 +8,38 @@ import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
 import { STYLE } from './style.ts'
 
-declare global {
-  interface Window {
-    __MUSTER__: { token: string }
+/**
+ * The page's token. It arrives in the link `mu inspect` printed, after the `#`: the one part of an
+ * address a browser never sends anywhere. It is kept for this address alone (a port is part of it), so a
+ * link to a view opens in a new tab too, and taken out of the address bar so it isn't copied with a link.
+ */
+const KEPT = 'muster.inspect'
+function pageToken(): string | null {
+  const given = /^#k=([A-Za-z0-9_-]+)$/.exec(window.location.hash)?.[1]
+  if (given) {
+    try {
+      window.localStorage.setItem(KEPT, given)
+    } catch {
+      // No storage: the token lasts as long as this page does.
+    }
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    return given
+  }
+  try {
+    return window.localStorage.getItem(KEPT)
+  } catch {
+    return null
   }
 }
+const TOKEN = pageToken()
+/** What the page says when it has no token, or one from an inspector that has since stopped. */
+const NO_TOKEN = 'This page needs the link mu inspect printed: open that one. A link to a view works once it has been opened here.'
 
 /** The page's data: every read and write goes through the board's own routes, by way of the proxy. */
 async function call<T>(route: string, args: unknown[] = [], as: string | null = null): Promise<T> {
-  const response = await fetch(`/board/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-muster-inspect': window.__MUSTER__.token }, body: JSON.stringify({ args, as }) })
+  if (TOKEN === null) throw new Error(NO_TOKEN)
+  const response = await fetch(`/board/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-muster-inspect': TOKEN }, body: JSON.stringify({ args, as }) })
+  if (response.status === 401) throw new Error(NO_TOKEN)
   const body = (await response.json()) as { ok?: T; error?: { message: string } }
   if (body.error) throw new Error(body.error.message)
   return body.ok as T

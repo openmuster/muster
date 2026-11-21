@@ -1,6 +1,7 @@
 import { Failure, misuse } from '../failure.ts'
 import { channelPath, messageText, type By, type Caller } from '../model.ts'
 import { append } from '../store/log.ts'
+import { checkBlocks } from './blocks.ts'
 import { allowed, authorize, byOf, findMessage, messageFor, type Context } from './context.ts'
 
 export type Schedule = {
@@ -22,6 +23,8 @@ export const EVERY_MIN_S = 60
 export const graceMs = (everyS: number | null) => Math.min(Math.max((everyS ?? 240) * 500, 120_000), 7_200_000)
 /** At most this many schedules catch up in one tick after downtime; the rest wait for the next. */
 export const CATCH_UP_MAX = 5
+/** How many schedules one token held to channels may have going at once. The board's owner has no such limit. */
+export const SCHEDULES_MAX = 20
 
 type Row = { id: number; principal: string; profile: string | null; channel: string; thread: number | null; text: string; every_s: number | null; times: number | null; until: string | null; fired: number; next_at: string | null; canceled: number }
 
@@ -69,9 +72,15 @@ export function create(ctx: Context, caller: Caller, request: ScheduleRequest): 
     } else if (request.channel !== undefined) channel = channelPath(request.channel)
     else throw misuse('invalid_schedule', 'Name a channel or a thread.')
     authorize(caller, channel, 'post')
+    // What a schedule sends is a message like any other, so its data is checked like any other's, now: nobody is there to refuse it when it goes out.
+    checkBlocks(ctx, text)
+    if (caller.can && caller.token) {
+      const going = (ctx.db.raw.prepare("select count(*) as n from schedules s join events e on e.seq = s.id where s.canceled = 0 and s.next_at is not null and json_extract(e.data, '$.jti') = ?").get(caller.token) as { n: number }).n
+      if (going >= SCHEDULES_MAX) throw new Failure('too_many_schedules', `This token has ${SCHEDULES_MAX} schedules going, which is the most it may.`, { hint: 'Cancel one with mu schedule cancel, or ask whoever runs the board.' })
+    }
     const event = append(
       ctx.db,
-      { type: 'schedule.created', by: byOf(caller), channel, thread, data: { thread, text, first: first.toISOString(), every: request.every ?? null, times: request.every === undefined ? 1 : (request.times ?? null), until: request.until ?? null } },
+      { type: 'schedule.created', by: byOf(caller), channel, thread, data: { thread, text, first: first.toISOString(), every: request.every ?? null, times: request.every === undefined ? 1 : (request.times ?? null), until: request.until ?? null, ...(caller.token ? { jti: caller.token } : {}) } },
       now.toISOString(),
     )
     return find(ctx, event.seq)!
@@ -97,7 +106,10 @@ export function cancel(ctx: Context, caller: Caller, request: { id: number }): S
     if (!schedule) throw new Failure('not_found', `No schedule ${request.id}.`)
     // One a caller can't see doesn't exist for it; one it can see is its own to cancel, or its channel's manager's.
     if (!allowed(caller, schedule.channel, 'read')) throw new Failure('not_found', `No schedule ${request.id}.`)
-    if (!mine(caller, schedule) && !(caller.can !== undefined && allowed(caller, schedule.channel, 'manage'))) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
+    const manages = caller.can !== undefined && allowed(caller, schedule.channel, 'manage')
+    if (!mine(caller, schedule) && !manages) throw new Failure('not_yours', `Schedule ${request.id} isn't yours to cancel.`)
+    // Its own to cancel, and canceling is a write: it takes what making the schedule took.
+    if (!manages) authorize(caller, schedule.channel, 'post')
     if (!schedule.canceled) append(ctx.db, { type: 'schedule.canceled', by: byOf(caller), channel: schedule.channel, thread: schedule.thread, data: { id: schedule.id } }, ctx.now().toISOString())
     return find(ctx, request.id)!
   })
@@ -107,16 +119,28 @@ export function cancel(ctx: Context, caller: Caller, request: { id: number }): S
  * Sends what is due. Each send is one transaction that also records its slot, so a slot is sent once
  * however many processes tick, and a crash between two sends loses neither. After downtime a schedule
  * sends one message for all the slots it missed, if the latest of them is within its grace.
+ *
+ * A schedule made with a token is that token's doing: once the board's owner stops the token, `stopped`
+ * says so, and the schedule is canceled here instead of sent. It writes as the token's profile, and
+ * would otherwise go on doing so for as long as it repeats.
  */
-export function tick(ctx: Context): { sent: number[]; skipped: number[] } {
+export function tick(ctx: Context, stopped?: (token: string) => boolean): { sent: number[]; skipped: number[]; canceled: number[] } {
   const now = ctx.now().getTime()
   const due = (ctx.db.raw.prepare('select id from schedules where canceled = 0 and next_at is not null and next_at <= ? order by next_at').all(new Date(now).toISOString()) as { id: number }[]).slice(0, CATCH_UP_MAX)
   const sent: number[] = []
   const skipped: number[] = []
+  const canceled: number[] = []
   for (const { id } of due) {
     ctx.db.write(() => {
       const row = ctx.db.raw.prepare('select * from schedules where id = ?').get(id) as Row
       if (row.canceled === 1 || row.next_at === null || Date.parse(row.next_at) > now) return
+      // A schedule's ID is the place in the log of the event that made it, which says what token asked.
+      const made = ctx.db.raw.prepare("select json_extract(data, '$.jti') as jti from events where seq = ?").get(id) as { jti: string | null } | undefined
+      if (stopped && made?.jti && stopped(made.jti)) {
+        append(ctx.db, { type: 'schedule.canceled', by: { principal: 'board', profile: null }, channel: row.channel, thread: row.thread, data: { id, why: 'token_revoked' } }, new Date(now).toISOString())
+        canceled.push(id)
+        return
+      }
       const by: By = { principal: row.principal, profile: row.profile }
       // The slot to send is the latest one due: the ones before it were missed, and one message stands for them.
       let slot = Date.parse(row.next_at)
@@ -147,5 +171,5 @@ export function tick(ctx: Context): { sent: number[]; skipped: number[] } {
       sent.push(id)
     })
   }
-  return { sent, skipped }
+  return { sent, skipped, canceled }
 }

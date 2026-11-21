@@ -15,7 +15,15 @@ export type Launch = {
   runner?: 'local' | 'vercel' | 'cloudflare'
   /** The repository a cloud sandbox clones. */
   repo?: string
+  /**
+   * Lets `agent` be any command. Off unless code of yours says so: a launch that takes its fields from a
+   * request, as the page does, must never start whatever command the request names.
+   */
+  allowCommand?: boolean
 }
+
+const KNOWN = ['claude', 'codex']
+const RUNNERS = ['local', 'vercel', 'cloudflare']
 
 export const AGENTS_MAX = 16
 const SLUG = /^[a-z0-9][a-z0-9-]{0,30}$/
@@ -41,6 +49,8 @@ export function workerArgv(launch: Launch, swarm: string): string[] {
 export async function launch(team: Board, swarm: string, request: Launch, spawn: Spawner): Promise<{ run: number; plan: number; workers: string[] }> {
   if (!SLUG.test(request.slug)) throw new Error('A run name is lowercase letters, numbers and "-".')
   if (!request.goal.trim()) throw new Error('Say what the swarm is for.')
+  if (request.runner !== undefined && !RUNNERS.includes(request.runner)) throw new Error('A run is on this machine, or in a vercel or cloudflare sandbox.')
+  if (!KNOWN.includes(request.agent) && !request.allowCommand) throw new Error('A run starts claude or codex. Another command is started only by code that passes allowCommand.')
   if (request.runner && request.runner !== 'local') {
     if (request.agent !== 'claude' && request.agent !== 'codex') throw new Error('A cloud sandbox runs claude or codex.')
     if (!process.env.MUSTER_URL) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set.')

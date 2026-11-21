@@ -13,6 +13,8 @@ export type Registry = {
   revoke(id: string): boolean
   /** Whether a token with this ID is to be refused: it was stopped, or the board has no record of making it. */
   revoked(id: string): boolean
+  /** Whether the board's owner stopped this token. One that only ran out wasn't stopped. */
+  stopped(id: string): boolean
   list(now: number): TokenRecord[]
 }
 
@@ -27,6 +29,7 @@ export function memoryRegistry(): Registry {
       return found !== undefined
     },
     revoked: (id) => tokens.get(id)?.revoked !== false,
+    stopped: (id) => tokens.get(id)?.revoked === true,
     list: (now) => [...tokens.values()].filter((token) => token.exp * 1000 > now),
   }
 }
@@ -43,8 +46,10 @@ export function dbRegistry(db: Db, clock: () => number = () => Date.now()): Regi
     record(token) {
       db.write(() => {
         const now = Math.floor(clock() / 1000)
-        // What ran out opens nothing, so it is forgotten as new ones are made.
-        db.raw.prepare('delete from tokens where exp <= ?').run(now)
+        // What ran out opens nothing, so it is forgotten as new ones are made. One the owner stopped is kept:
+        // a schedule it made is canceled by the ticker when it next comes due, which may be long after the
+        // token would have run out, and forgetting the row would let that schedule go on.
+        db.raw.prepare('delete from tokens where exp <= ? and revoked = 0').run(now)
         const live = (db.raw.prepare('select count(*) as n from tokens where revoked = 0').get() as { n: number }).n
         if (live >= TOKENS_MAX) throw new Failure('too_many_tokens', `This board has ${TOKENS_MAX} live tokens, which is the most it keeps.`, { hint: 'Revoke some with mu token revoke, or wait for them to run out.' })
         db.raw.prepare('insert into tokens (id, profile, can, exp, at, revoked) values (?, ?, ?, ?, ?, 0)').run(token.id, token.profile, token.can ? JSON.stringify(token.can) : null, token.exp, token.at)
@@ -56,6 +61,7 @@ export function dbRegistry(db: Db, clock: () => number = () => Date.now()): Regi
     // Every token with an ID was written here when it was made. One the board has no record of (a board
     // restored from before it, or a row removed) can't be vouched for, so it is treated as stopped.
     revoked: (id) => (db.raw.prepare('select revoked from tokens where id = ?').get(id) as { revoked: number } | undefined)?.revoked !== 0,
+    stopped: (id) => (db.raw.prepare('select revoked from tokens where id = ?').get(id) as { revoked: number } | undefined)?.revoked === 1,
     list: (now) => (db.raw.prepare('select * from tokens where exp > ? order by at, id').all(Math.floor(now / 1000)) as Row[]).map(view),
   }
 }

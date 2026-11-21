@@ -123,6 +123,117 @@ describe('serve', () => {
     await server.close()
   })
 
+  it('a token that may only read changes nothing: no delete, no task change, and never a cursor the daemon reads from', async () => {
+    const { as, owner, server } = await served()
+    const mine = await owner.post({ channel: 'work', text: 'the owner wrote this' })
+    const hers = await owner.as('lead').post({ channel: 'work', text: 'lead wrote this' })
+    const task = (await owner.as('lead').taskCreate({ channel: 'work', text: 't' })).task
+    const held = (await owner.as('lead').taskCreate({ channel: 'work', text: 'held' })).task
+    await owner.as('lead').taskBlock({ id: held.id, reason: 'wait' })
+    const failed = (await owner.as('lead').taskCreate({ channel: 'work', text: 'failed', claim: {} }))
+    await owner.as('lead').taskFail({ id: failed.task.id, token: failed.token!, reason: 'no' })
+    // The token the access page shows: it reads everything, and is held to no profile, so it "is" the owner.
+    const reader = as({ can: { '*': ['read'] } })
+    expect(await reason(reader.remove({ id: mine.id }))).toBe('forbidden')
+    expect(await reason(reader.remove({ id: hers.id }))).toBe('forbidden')
+    expect(await reason(reader.taskCancel({ id: task.id }))).toBe('forbidden')
+    expect(await reason(reader.taskAssign({ id: task.id, for: 'x' }))).toBe('forbidden')
+    expect(await reason(reader.taskNeeds({ id: task.id, needs: [held.id] }))).toBe('forbidden')
+    expect(await reason(reader.taskBlock({ id: task.id, reason: 'mine now' }))).toBe('forbidden')
+    expect(await reason(reader.taskUnblock({ id: held.id }))).toBe('forbidden')
+    expect(await reason(reader.taskReopen({ id: failed.task.id }))).toBe('forbidden')
+    const standup = await owner.scheduleCreate({ channel: 'work', text: 'standup', every: 600 })
+    expect(await reason(reader.scheduleCancel({ id: standup.id }))).toBe('forbidden')
+    expect((await owner.scheduleList()).schedules.map((schedule) => schedule.id)).toEqual([standup.id])
+    expect((await owner.readThread({ id: mine.id })).message.deleted).toBe(false)
+    expect((await owner.task(task.id))?.state).toBe('ready')
+    // One held to a profile is no better off for its own profile's words and tasks.
+    const own = await owner.as('bot').post({ channel: 'work', text: 'bot wrote this' })
+    const ownTask = (await owner.as('bot').taskCreate({ channel: 'work', text: 'bot made this' })).task
+    const bot = as({ profile: 'bot', can: { work: ['read'] } })
+    expect(await reason(bot.remove({ id: own.id }))).toBe('forbidden')
+    expect(await reason(bot.taskCancel({ id: ownTask.id }))).toBe('forbidden')
+    const ownSchedule = await owner.as('bot').scheduleCreate({ channel: 'work', text: 'bot scheduled this', every: 600 })
+    expect(await reason(bot.scheduleCancel({ id: ownSchedule.id }))).toBe('forbidden')
+    // With `post` the same profile deletes and cancels what is its own, and still nothing of anyone else's.
+    const writer = as({ profile: 'bot', can: { work: ['read', 'post'] } })
+    expect(await reason(writer.remove({ id: hers.id }))).toBe('not_yours')
+    expect((await writer.remove({ id: own.id })).deleted).toBe(true)
+    expect((await writer.taskCancel({ id: ownTask.id })).task.state).toBe('canceled')
+    expect((await writer.scheduleCancel({ id: ownSchedule.id })).canceled).toBe(true)
+    // The daemon's own cursors: a watcher that runs as `bot`, the owner's webhook.
+    await owner.cursorSet('hook:alerts', 3)
+    await owner.as('bot').cursorSet('watch:factory', 3)
+    for (const token of [reader, bot, writer]) {
+      expect(await reason(token.cursorSet('hook:alerts', Number.MAX_SAFE_INTEGER))).toBe('forbidden')
+      expect(await reason(token.cursorSet('watch:factory', Number.MAX_SAFE_INTEGER))).toBe('forbidden')
+      expect(await reason(token.cursorSet('sync:gh', Number.MAX_SAFE_INTEGER))).toBe('forbidden')
+    }
+    expect([await owner.cursorGet('hook:alerts'), await owner.as('bot').cursorGet('watch:factory')]).toEqual([3, 3])
+    // A reader's own cursor, under a name of its own, still works.
+    await bot.cursorSet('inbox', 9)
+    expect(await bot.cursorGet('inbox')).toBe(9)
+    await server.close()
+  })
+
+  it("a schedule in a private channel isn't listed for a token that holds only the subtree above it", async () => {
+    const { as, owner, server } = await served()
+    await owner.createChannel({ path: 'work/secret', private: true })
+    await owner.scheduleCreate({ channel: 'work/secret', text: 'rotate the leaked key', every: 600 })
+    const open = await owner.scheduleCreate({ channel: 'work/open', text: 'standup', every: 600 })
+    // Held to no profile, so every schedule the owner's principal made is "its own".
+    const above = as({ can: { 'work/': ['read'] } })
+    expect((await above.scheduleList()).schedules.map((schedule) => schedule.id)).toEqual([open.id])
+    const named = as({ can: { 'work/secret': ['read'] } })
+    expect((await named.scheduleList()).schedules.map((schedule) => schedule.text)).toEqual(['rotate the leaked key'])
+    await server.close()
+  })
+
+  it('a schedule stops with the token that made it: once the owner revokes the token, nothing more is sent in its name', async () => {
+    const { server, as, owner, time } = await served()
+    const made = await as().backend.tokens.create({ profile: 'worker', can: { work: ['read', 'post'] }, ttl: 3000 })
+    const worker = board({ backend: http({ url: server.url, token: made.token }) })
+    const schedule = await worker.scheduleCreate({ channel: 'work', text: 'still here', every: 60 })
+    const kept = await owner.as('lead').scheduleCreate({ channel: 'work', text: 'standup', every: 60 })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [schedule.id, kept.id], canceled: [] })
+    await as().backend.tokens.revoke({ id: made.record.id })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [kept.id], canceled: [schedule.id] })
+    time.advance(61_000)
+    expect(await owner.scheduleTick()).toMatchObject({ sent: [kept.id], canceled: [] })
+    const texts = (await owner.readChannel({ channel: 'work' })).threads.map((thread) => `${thread.message.by.profile}: ${thread.message.text}`)
+    expect(texts.filter((text) => text === 'worker: still here')).toHaveLength(1)
+    expect((await owner.scheduleList()).schedules.map((each) => each.id)).toEqual([kept.id])
+    // A stop is remembered past the token's own end, and past new tokens being made: a schedule that
+    // comes due only after its revoked token would have run out is still canceled.
+    const slow = await as().backend.tokens.create({ profile: 'slow', can: { work: ['read', 'post'] }, ttl: 60 })
+    const later = await board({ backend: http({ url: server.url, token: slow.token }) }).scheduleCreate({ channel: 'work', text: 'much later', at: new Date(time.now().getTime() + 600_000).toISOString() })
+    await as().backend.tokens.revoke({ id: slow.record.id })
+    time.advance(601_000)
+    await as().backend.tokens.create({ profile: 'other', can: { work: ['read'] }, ttl: 60 })
+    expect((await owner.scheduleTick()).canceled).toContain(later.id)
+    // A token that only ran out was never stopped: what it scheduled goes on, as the access page says.
+    const brief = await as().backend.tokens.create({ profile: 'brief', can: { work: ['read', 'post'] }, ttl: 60 })
+    const late = await board({ backend: http({ url: server.url, token: brief.token }) }).scheduleCreate({ channel: 'work', text: 'after my time', every: 120 })
+    time.advance(121_000)
+    expect((await owner.scheduleTick()).sent).toContain(late.id)
+    await server.close()
+  })
+
+  it('a token held to channels has 20 schedules going at most; the owner has no such limit', async () => {
+    const { server, as, owner } = await served()
+    const made = await as().backend.tokens.create({ profile: 'worker', can: { work: ['read', 'post'] }, ttl: 600 })
+    const worker = board({ backend: http({ url: server.url, token: made.token }) })
+    const ids: number[] = []
+    for (let i = 0; i < 20; i++) ids.push((await worker.scheduleCreate({ channel: 'work', text: `n${i}`, every: 60 })).id)
+    expect(await reason(worker.scheduleCreate({ channel: 'work', text: 'one more', every: 60 }))).toBe('too_many_schedules')
+    await worker.scheduleCancel({ id: ids[0]! })
+    expect((await worker.scheduleCreate({ channel: 'work', text: 'room again', every: 60 })).text).toBe('room again')
+    for (let i = 0; i < 25; i++) await owner.as('worker').scheduleCreate({ channel: 'work', text: `o${i}`, every: 60 })
+    await server.close()
+  })
+
   it('only a token that may manage registers a schema', async () => {
     const { as, server } = await served()
     expect(await reason(as({ can: { '*': ['read', 'post', 'label'] } }).schemaAdd({ name: 'a@1', schema: {} }))).toBe('forbidden')
@@ -217,6 +328,14 @@ describe('serve', () => {
     const second = await start()
     const again = await cli(dir, ['read', 'general', '--json'], { env: { MUSTER_URL: second.env.MUSTER_URL, MUSTER_TOKEN: first.env.MUSTER_TOKEN } })
     expect(JSON.parse(again.stdout).threads.map((thread: { message: { text: string } }) => thread.message.text).sort()).toEqual(['from the file', 'over http'])
+    // The printed token is one the board has a record of: it is listed, and its owner can stop it.
+    const id = /mu token revoke (\S+) stops it/.exec(first.serving.output())![1]!
+    const listed = JSON.parse((await cli(dir, ['token', 'list', '--json'])).stdout).tokens as { id: string; profile: string | null; can: unknown }[]
+    expect(listed.find((token) => token.id === id)).toMatchObject({ profile: null, can: null })
+    expect((await cli(dir, ['token', 'revoke', id])).stdout).toBe(`revoked  ${id}\n`)
+    const stopped = await cli(dir, ['read', 'general', '--json'], { env: { MUSTER_URL: second.env.MUSTER_URL, MUSTER_TOKEN: first.env.MUSTER_TOKEN } })
+    expect([stopped.code, JSON.parse(stopped.stderr).error.reason]).toEqual([1, 'unauthorized'])
+    expect((await cli(dir, ['read', 'general', '--json'], { env: second.env })).code).toBe(0)
     second.serving.child.kill('SIGTERM')
     await second.serving.done
   }, 30_000)

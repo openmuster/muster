@@ -59,7 +59,11 @@ export function github(options: GitHubOptions): Provider {
     parse({ headers, body }) {
       const payload = JSON.parse(body) as Record<string, any>
       const kind = headers['x-github-event']
-      const delivery = headers['x-github-delivery'] ?? `${kind}:${hmac('id', body).slice(0, 16)}`
+      // What makes a delivery this one and not another is what GitHub signed: its body, and nothing else. No
+      // header is signed, the delivery ID and the event's kind included, so an old body sent again under a
+      // new ID, or as another kind that reads the same, would otherwise be news, and set a thread's labels
+      // back to what they were.
+      const delivery = `gh:${hmac('id', body).slice(0, 32)}`
       const repo = payload.repository?.full_name as string | undefined
       if (!repo) return []
       const self = options.bot !== undefined && payload.sender?.login === options.bot

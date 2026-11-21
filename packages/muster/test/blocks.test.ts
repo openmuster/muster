@@ -6,6 +6,17 @@ const SANDBOX = { type: 'object', required: ['id', 'state'], additionalPropertie
 const block = (data: unknown, name = 'sandbox@1') => 'status\n\n```json#' + name + '\n' + JSON.stringify(data) + '\n```'
 
 describe('typed blocks', () => {
+  it('a schedule is checked when it is made, like a post: what it sends later is data a program will read', async () => {
+    const { team, time } = memoryBoard()
+    await team.schemaAdd({ name: 'sandbox@1', schema: SANDBOX })
+    expect(await reason(team.scheduleCreate({ channel: 'ops', text: block({ id: 'sbx_1', state: 'paused' }), at: '2026-01-01T00:00:01.000Z' }))).toBe('invalid_block')
+    expect(await reason(team.scheduleCreate({ channel: 'ops', text: block({}, 'unknown@1'), at: '2026-01-01T00:00:01.000Z' }))).toBe('unknown_schema')
+    await team.scheduleCreate({ channel: 'ops', text: block({ id: 'sbx_1', state: 'running' }), at: '2026-01-01T00:00:01.000Z' })
+    time.advance(2000)
+    await team.scheduleTick()
+    expect((await team.readChannel({ channel: 'ops' })).threads.map((thread) => thread.message.blocks)).toEqual([[{ schema: 'sandbox@1', data: { id: 'sbx_1', state: 'running' } }]])
+  })
+
   it('a message carries data as a block that names its schema, and a reader gets it parsed', async () => {
     const { team } = memoryBoard()
     await team.schemaAdd({ name: 'sandbox@1', schema: SANDBOX })

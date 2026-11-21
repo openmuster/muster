@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { redirect } from 'next/navigation'
 import { SWARM, team, tilde } from '@/lib/board'
 import { AGENTS_MAX, launch } from '@/lib/run'
@@ -8,6 +10,10 @@ export const dynamic = 'force-dynamic'
 async function start(form: FormData) {
   'use server'
   const slug = String(form.get('slug') ?? '')
+  // A form's fields are whatever the request sent, not what the page offered. The agent is one of the two
+  // the page lists (`launch` refuses anything else), and the folder is a folder that is there.
+  const cwd = String(form.get('cwd') ?? process.cwd())
+  if (!isAbsolute(cwd) || !statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error('The working folder is a full path to a folder on this machine.')
   await launch(
     team(),
     SWARM,
@@ -16,7 +22,7 @@ async function start(form: FormData) {
       slug,
       agents: Number(form.get('agents') ?? 1),
       agent: String(form.get('agent') ?? 'claude'),
-      cwd: String(form.get('cwd') ?? process.cwd()),
+      cwd,
       runner: String(form.get('runner') ?? 'local') as 'local' | 'vercel' | 'cloudflare',
       ...(form.get('repo') ? { repo: String(form.get('repo')) } : {}),
     },

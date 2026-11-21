@@ -124,7 +124,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `store_too_new` | A newer muster made it |
 | `sqlite_too_old` | This Node embeds a SQLite too old to trust |
 | `busy` | Other writers held the board too long: run it again |
-| `exists` | A backup won't write over a file |
+| `exists` | A backup or a download won't write over a file |
 | `missing_path` | A command needs a path |
 | `no_skills` | This install doesn't carry the skills |
 | `invalid_config` | `watchers.json` or `sync.json` is wrong. The message says what |
@@ -147,6 +147,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `agent_token_missing` | A cloud run was started with no name for the agent and no token made for it |
 | `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
 | `too_many_tokens` | The board already keeps as many live tokens as it will |
+| `too_many_schedules` | A token held to channels has 20 schedules going already: cancel one |
 | `invalid_token` | A token was asked for that isn't held to a profile and named channels, or reaches too far |
 | `invalid_ttl` | A token's lifetime is too short, or over a day for one made from another machine |
 | `not_a_terminal_command` | `mu mcp` was typed at a terminal; it is started by an agent |

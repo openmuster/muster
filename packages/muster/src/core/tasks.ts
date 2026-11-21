@@ -159,7 +159,13 @@ const manages = (caller: Caller, channel: string) => caller.can !== undefined &&
 const owns = (caller: Caller, row: TaskRow) => caller.principal === row.owner && (caller.profile === null || caller.profile === row.owner_profile)
 
 function mustOwn(caller: Caller, row: TaskRow, root: Message) {
-  if (owns(caller, row) || manages(caller, root.channel)) return
+  if (manages(caller, root.channel)) return
+  if (owns(caller, row)) {
+    // Every token a board makes speaks for its owner's principal, so owning a task says who made it and not
+    // what this token may do: changing one is a write, and takes what making one takes.
+    authorize(caller, root.channel, 'post')
+    return
+  }
   throw new Failure('task_not_owned', `Task ${row.id} isn't yours to change.`, { hint: 'Its owner can, or the agent that holds it.' })
 }
 

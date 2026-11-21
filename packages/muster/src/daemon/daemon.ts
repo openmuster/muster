@@ -118,6 +118,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
         const did = await tickOnce(options.team, options.watchers, states, deps, hooks)
         for (const id of did.schedules.sent) options.log(`sent      schedule ${id}`)
         for (const id of did.schedules.skipped) options.log(`skipped   schedule ${id}`)
+        for (const id of did.schedules.canceled) options.log(`canceled  schedule ${id}  its token was revoked`)
         for (const [name, result] of Object.entries(did.watched)) {
           if (result.woke.length) options.log(`woke      ${name}  ${result.woke.length}`)
           if (result.failed.length) options.log(`failed    ${name}  at ${result.failed[0]}`)

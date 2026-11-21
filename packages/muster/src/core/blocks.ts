@@ -1,5 +1,6 @@
 import { Failure, misuse } from '../failure.ts'
 import type { Caller } from '../model.ts'
+import type { Db } from '../store/sqlite.ts'
 import { append } from '../store/log.ts'
 import { byOf, type Context } from './context.ts'
 
@@ -57,6 +58,26 @@ export function blocksOf(text: string): Block[] {
       out.push({ schema: `${match[1]}@${match[2]}`, data: JSON.parse(match[3]!) })
     } catch {
       // Refused on write; text written before its schema existed is shown as text.
+    }
+  }
+  return out
+}
+
+/**
+ * The blocks a stored message carries: each one that follows a schema the board has. A write through the
+ * board was checked already, but text also arrives from a platform under sync, and that never was: so a
+ * program that reads `blocks` is given only what the schema allows, wherever the text came from.
+ */
+export function blocksIn(db: Db, text: string): Block[] {
+  const out: Block[] = []
+  for (const match of text.matchAll(FENCE)) {
+    const row = db.raw.prepare('select schema from schemas where name = ? and version = ?').get(match[1]!, Number(match[2])) as { schema: string } | undefined
+    if (!row) continue
+    try {
+      const data: unknown = JSON.parse(match[3]!)
+      if (violation(JSON.parse(row.schema) as Schema, data) === null) out.push({ schema: `${match[1]}@${match[2]}`, data })
+    } catch {
+      // Not JSON: it is text, and stays text.
     }
   }
   return out

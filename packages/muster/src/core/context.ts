@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
 import { actorId, inScope, LIMITS, type Attachment, type By, type Caller, type Message, type Permission } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
-import { blocksOf } from './blocks.ts'
+import { blocksIn } from './blocks.ts'
 import type { Db } from '../store/sqlite.ts'
 
 /** How many a read returns: what was asked, held to a ceiling. Anything but a whole number of at least 1 is refused, so no value slips past the ceiling. */
@@ -62,7 +62,7 @@ type MessageRow = {
   activity: number
 }
 
-export const toMessage = (row: MessageRow): Message => ({
+export const toMessage = (db: Db, row: MessageRow): Message => ({
   id: row.id,
   channel: row.channel,
   thread: row.thread,
@@ -73,7 +73,7 @@ export const toMessage = (row: MessageRow): Message => ({
   labels: JSON.parse(row.labels) as Record<string, string>,
   reactions: JSON.parse(row.reactions) as Record<string, string[]>,
   attachments: JSON.parse(row.attachments) as Attachment[],
-  blocks: row.deleted === 1 ? [] : blocksOf(row.text),
+  blocks: row.deleted === 1 ? [] : blocksIn(db, row.text),
   revision: row.revision,
   deleted: row.deleted === 1,
   noSync: row.no_sync === 1,
@@ -83,7 +83,7 @@ export const toMessage = (row: MessageRow): Message => ({
 
 export function findMessage(db: Db, id: number): Message | null {
   const row = db.raw.prepare('select * from messages where id = ?').get(id) as MessageRow | undefined
-  return row ? toMessage(row) : null
+  return row ? toMessage(db, row) : null
 }
 
 /** The message with that ID, for a caller who may read its channel. Anything else is `not_found`. */

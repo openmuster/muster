@@ -2,7 +2,7 @@
   "name": "muster-factory",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "next dev", "build": "next build", "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "scripts": { "dev": "next dev -H 127.0.0.1", "build": "next build", "typecheck": "tsc --noEmit", "test": "vitest run" },
   "dependencies": { "muster": "workspace:*", "next": "^16.0.0", "react": "^19.0.0", "react-dom": "^19.0.0" },
   "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "typescript": "^5.9.0", "vitest": "^3.2.0" }
 }

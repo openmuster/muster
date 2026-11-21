@@ -177,7 +177,10 @@ export function file(options: FileOptions = {}): Backend {
     schemaList: async () => blocks.schemaList(ctx()),
     scheduleCreate: op(schedules.create),
     scheduleCancel: op(schedules.cancel),
-    scheduleList: async (caller) => schedules.list(ctx(), caller),
+    scheduleList: async (caller) => {
+      const c = ctx()
+      return schedules.list(c, narrowed(c, caller))
+    },
     scheduleTick: async () => {
       const c = ctx()
       // The ticker also keeps the write-ahead log from growing while readers hold it open.
@@ -193,7 +196,7 @@ export function file(options: FileOptions = {}): Backend {
           // A busy checkpoint is tried again next time.
         }
       }
-      return schedules.tick(c)
+      return schedules.tick(c, (token) => registry().stopped(token))
     },
     backup: async (path) => {
       const target = resolve(path)

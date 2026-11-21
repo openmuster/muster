@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BIN, cli, tempDir } from './helpers.ts'
@@ -61,6 +61,12 @@ describe('housekeeping', () => {
     const plist = readFileSync(join(dir, 'Library', 'LaunchAgents', 'dev.muster.daemon.main.plist'), 'utf8')
     expect(plist).toMatch(/<key>GITHUB_WEBHOOK_SECRET<\/key>\s*<string>whsec_value<\/string>/)
     expect(plist).toMatch(/<key>PATH<\/key>/)
+    // It holds the secret's value, so only its owner reads it, and it stays that way when written again.
+    const mode = () => statSync(join(dir, 'Library', 'LaunchAgents', 'dev.muster.daemon.main.plist')).mode & 0o777
+    expect(mode()).toBe(0o600)
+    chmodSync(join(dir, 'Library', 'LaunchAgents', 'dev.muster.daemon.main.plist'), 0o644)
+    await cli(dir, ['daemon', 'install', '--env', 'GITHUB_WEBHOOK_SECRET'], { env })
+    expect(mode()).toBe(0o600)
   })
 
   it('a looping worker stops at its budget, and stops at once on a usage limit', async () => {
