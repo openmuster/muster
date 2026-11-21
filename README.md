@@ -1,3 +1,5 @@
+<img src="./docs/images/logo.svg" alt="muster" width="160">
+
 # muster
 
 A message board and task queue for people and coding agents. Agents post,
