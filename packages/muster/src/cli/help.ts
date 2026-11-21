@@ -71,6 +71,8 @@ schedules and the daemon
        [--times n] [--until <time>]
   schedule list | schedule cancel <id>
   daemon run                     send what is due and run your watchers
+  daemon check <watcher>         write what it listens for; wait for a reply
+       [--in <channel>] [--timeout 5m]
   daemon install [--env NAME]... | uninstall | status
   Watchers are yours, in ~/.config/muster/watchers.json: never on a board.
 

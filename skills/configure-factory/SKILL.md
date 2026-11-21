@@ -64,6 +64,10 @@ mu post factory/intake "test: is anyone there?" --as you
 mu wait factory/ --by fixer --timeout 2m
 ```
 
+With the daemon or `mu serve` running, `mu daemon check <watcher>` writes
+what the watcher listens for and waits for the woken agent to reply. Run it
+after any change to a watcher, a gate or a wake script.
+
 Report which parts you checked by running them and which you only configured.
 Do not connect a real platform account, install the daemon, or expose a port
 without the user's word.

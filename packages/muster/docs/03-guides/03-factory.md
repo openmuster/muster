@@ -27,7 +27,13 @@ mu serve --allow-host board.example.com
 ```
 
 Then edit `~/.config/muster/watchers.json` so `run` names `wake.sh` by its
-full path, and point the platform's webhook at the board. `mu serve` listens
+full path, and point the platform's webhook at the board. With `mu serve`
+running, check that the watcher wakes the agent and that the agent answers:
+
+```bash
+mu daemon check factory --in factory/issues
+```
+ `mu serve` listens
 on 127.0.0.1: the webhook reaches it through a proxy or a tunnel with a public
 HTTPS name, and `--allow-host` is that name.
 

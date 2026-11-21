@@ -10,6 +10,8 @@ import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Par
 import { dropClaim, heldClaim, keepClaim } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { GAVE_UP, checkWrite } from '../daemon/check.ts'
+import { takeLock } from '../daemon/lock.ts'
 import * as launchd from '../daemon/launchd.ts'
 import { configDir } from './claims.ts'
 import { HELP } from './help.ts'
@@ -55,6 +57,61 @@ const sleep = (ms: number, signal: AbortSignal) =>
     }
     signal.addEventListener('abort', done)
   })
+
+/**
+ * Writes something a watcher's filter matches and waits for a reply: proof that the daemon is running,
+ * the filter matches, the gate lets it through, and the command it runs wakes something that answers.
+ */
+async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string): Promise<number> {
+  const wanted = parsed.positionals[1]
+  if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher: mu daemon check <name>.')
+  const watcher = loadWatchers().find((each) => each.name === wanted)
+  if (!watcher) throw new Failure('unknown_watcher', `No watcher is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${watchersPath()}.` })
+  const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}) })
+  const timeout = duration(str(parsed.flags, 'timeout') ?? '5m', 'timeout') * 1000
+  // Nothing runs watchers unless a ticker holds the board's lock: say so now, not after the timeout.
+  if (mode === 'file') {
+    const free = takeLock(lock)
+    if (free) {
+      free.release()
+      throw new Failure('no_ticker', 'Nothing is running the watchers for this board.', { next: ['mu daemon run', 'mu daemon install'] })
+    }
+  }
+  const author = write.as ? run.team.as(write.as) : run.team
+  const after = await run.team.head()
+  const sent =
+    write.kind === 'post'
+      ? await author.post({ channel: write.channel, text: write.text, labels: write.labels, noSync: true })
+      : await author.reply({ to: write.to, text: write.text, noSync: true })
+  const thread = write.kind === 'post' ? sent.id : write.to
+  const started = run.now()
+  const deadline = Date.now() + timeout
+  let cursorAt = after
+  let pause = 100
+  for (;;) {
+    const page = await run.team.events({ after: cursorAt, filter: { re: thread, types: ['message.posted'] }, limit: 50 })
+    cursorAt = page.cursor
+    for (const event of page.events) {
+      if (event.message?.id === sent.id) continue
+      if (GAVE_UP.test(event.message?.text ?? '')) {
+        throw new Failure('wake_failed', `Watcher "${watcher.name}" ran its command, and the command kept failing.`, { hint: `Its log says why: ${join(configDir(), 'logs')}.`, data: { thread } })
+      }
+      const answered = { watcher: watcher.name, thread, by: event.by, seconds: Math.round((run.now() - started) / 1000) }
+      print(run, answered, () => `answered  #${thread}  by ${who(event.by)}  in ${span(run.now() - started)}`)
+      return 0
+    }
+    if (run.io.stop.aborted) return stopCode(run.io.stop)
+    if (Date.now() >= deadline) {
+      throw new Failure('timeout', `Nothing answered in #${thread} within ${span(timeout)}.`, {
+        hint: 'The daemon is running: check the watcher\'s filter, its gate, and what its command starts.',
+        data: { thread },
+        next: [`mu read ${thread}`],
+      })
+    }
+    await sleep(Math.min(pause, Math.max(0, deadline - Date.now())), run.io.stop)
+    pause = Math.min(pause * 2, 1000)
+  }
+}
 
 const stopCode = (signal: AbortSignal) => (signal.reason === 'SIGTERM' ? 143 : 130)
 
@@ -688,12 +745,13 @@ const commands: Record<string, Command> = {
   },
 
   daemon: {
-    spec: { many: ['env'] },
+    spec: { value: ['in', 'timeout'], many: ['env'] },
     async run(run, parsed) {
       const me = await run.team.whoami()
       const name = run.io.env.MUSTER_BOARD ?? 'main'
       const verb = parsed.positionals[0] ?? 'status'
       const lock = `${me.where}.tick.lock`
+      if (verb === 'check') return checkWatcher(run, parsed, me.mode, lock)
       if (verb === 'run') {
         let watchers
         try {
@@ -737,7 +795,7 @@ const commands: Record<string, Command> = {
           [`service   ${running ? 'loaded' : 'not installed'}`, `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`].join('\n'),
         )
       }
-      throw misuse('unknown_command', `Unknown daemon command "${verb}".`, 'One of: run, install, uninstall, status.')
+      throw misuse('unknown_command', `Unknown daemon command "${verb}".`, 'One of: run, check, install, uninstall, status.')
     },
   },
 

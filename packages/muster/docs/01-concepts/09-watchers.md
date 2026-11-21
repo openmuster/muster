@@ -77,6 +77,33 @@ Try the filter by hand first: `mu tail work/ --type task.completed --json`.
   it wakes is often an agent reading a stranger's text, so nothing else is
   passed on unless `env` names it.
 
+## Check that it wakes something
+
+```bash
+mu daemon check lead
+mu daemon check triage --in work/checks --timeout 10m
+```
+
+`check` writes a message the watcher's filter matches, then waits for a reply
+in its thread. A reply proves the whole path: the daemon is running, the
+filter matches, the gate lets it through, and the command wakes something
+that answers. It prints who answered and how long it took.
+
+- **Its message is built from the filter:** the watcher's channel, its labels,
+  a mention or words it asks for. A watcher on a subtree needs `--in` to say
+  which channel under it. It stays on the board, never synced.
+- **It fails fast when nothing runs the watchers** (`no_ticker`), before
+  writing anything.
+- **A command that keeps failing is `wake_failed`,** after the five tries a
+  wake gets. A command that runs but wakes nothing that replies is `timeout`,
+  with the thread to read.
+- **Some watchers can't be checked with a message:** one that listens only
+  for task events, or only to a platform's users. Write what it listens for
+  by hand instead.
+
+Whatever the command wakes has to reply. The factory's and the terminal
+guide's agents read the thread and answer it like any other.
+
 ## What it promises
 
 - **It starts from now.** What was on the board before a watcher first ran
