@@ -100,7 +100,27 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
   const at = ctx.now().toISOString()
   const by: By = { principal: `${key}:user:${event.author}`, profile: null }
-  const root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined
+  let root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined
+
+  // About a platform thread the board never saw, and carrying it: start the thread from it, as its opener wrote it.
+  if (!root && event.kind !== 'root' && event.parent) {
+    const channel = provider.channelFor(event.place, 'root')
+    if (!channel) return
+    const text = provider.filter ? provider.filter(event.parent.text) : event.parent.text
+    if (text === null) return
+    append(
+      ctx.db,
+      {
+        type: 'message.posted',
+        by: { principal: `${key}:user:${event.parent.author}`, profile: null },
+        channel,
+        thread: 'self',
+        data: { re: null, replyTo: null, text, labels: { ...event.parent.labels, source: key }, attachments: [], noSync: false, mentions: [], origin: { key, external: event.thread, thread: event.thread, place: event.place } },
+      },
+      at,
+    )
+    root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number }
+  }
 
   if (event.kind === 'labels') {
     if (!root) return

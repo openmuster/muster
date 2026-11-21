@@ -28,6 +28,23 @@ export type GitHubOptions = {
 
 /** GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors. */
 export function github(options: GitHubOptions): Provider {
+  /** An issue or pull request as a thread's first message, written by whoever opened it, in the state it is in now. */
+  const rootOf = (repo: string, item: Record<string, any>, isPull: boolean, id: string): Inbound => {
+    const thread = `${repo}#${item.number}`
+    const opener = item.user?.login as string | undefined
+    const merged = Boolean(item.merged || item.merged_at || item.pull_request?.merged_at)
+    return {
+      id,
+      author: String(opener ?? 'unknown'),
+      place: `${repo}|${isPull ? 'pulls' : 'issues'}`,
+      self: options.bot !== undefined && opener === options.bot,
+      kind: 'root',
+      thread,
+      external: thread,
+      text: `${item.title ?? ''}\n\n${item.body ?? ''}`.trim(),
+      labels: { kind: isPull ? 'pr' : 'issue', state: item.state === 'closed' ? (merged ? 'merged' : 'closed') : 'open', ref: thread },
+    }
+  }
   const mapping = (place: string) => {
     const [repo, kind] = place.split('|') as [string, 'issues' | 'pulls']
     const to = options.repos[repo]
@@ -55,6 +72,13 @@ export function github(options: GitHubOptions): Provider {
       if ((kind === 'issues' || kind === 'pull_request') && payload.action === 'opened') {
         return [{ ...base, kind: 'root', thread, external: thread, text: `${item.title}\n\n${item.body ?? ''}`.trim(), labels: { kind: isPull ? 'pr' : 'issue', state: 'open', ref: thread } }]
       }
+      // A comment or review on an issue the board never saw (opened before sync, or while the board was
+      // down) carries the issue, so its thread can start from it. A board that has the thread ignores it.
+      const withRoot = (events: Inbound[]): Inbound[] => {
+        if (!item) return events
+        const { author: opener, text, labels } = rootOf(repo, item, isPull, '')
+        return events.map((event) => ({ ...event, parent: { author: opener, text: text ?? '', labels: labels ?? {} } }))
+      }
       if ((kind === 'issues' || kind === 'pull_request') && (payload.action === 'closed' || payload.action === 'reopened')) {
         return [{ ...base, kind: 'labels', thread, external: `${delivery}`, labels: { state: payload.action === 'reopened' ? 'open' : item.merged ? 'merged' : 'closed' } }]
       }
@@ -62,12 +86,12 @@ export function github(options: GitHubOptions): Provider {
       if (kind === 'issue_comment' && payload.action === 'deleted') return [{ ...base, kind: 'delete', thread, external: `comment:${payload.comment.id}` }]
       if ((kind === 'issues' || kind === 'pull_request') && payload.action === 'edited') return [{ ...base, kind: 'edit', thread, external: thread, text: `${item.title}\n\n${item.body ?? ''}`.trim() }]
       if (kind === 'issue_comment' && payload.action === 'created') {
-        return [{ ...base, kind: 'reply', thread, external: `comment:${payload.comment.id}`, text: String(payload.comment.body ?? '') }]
+        return withRoot([{ ...base, kind: 'reply', thread, external: `comment:${payload.comment.id}`, text: String(payload.comment.body ?? '') }])
       }
       if (kind === 'pull_request_review' && payload.action === 'submitted') {
         const out: Inbound[] = [{ ...base, kind: 'labels', thread, external: delivery, labels: { review: String(payload.review.state).toLowerCase() } }]
         if (payload.review.body) out.push({ ...base, id: `${delivery}:body`, kind: 'reply', thread, external: `review:${payload.review.id}`, text: String(payload.review.body) })
-        return out
+        return withRoot(out)
       }
       if (kind === 'workflow_run' && payload.action === 'completed') {
         return ((payload.workflow_run.pull_requests ?? []) as { number: number }[]).map((pull, index) => ({
@@ -104,11 +128,23 @@ export function github(options: GitHubOptions): Provider {
       const out: Inbound[] = []
       const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
       for (const repo of Object.keys(options.repos)) {
+        // Issues and pull requests first, so a comment on one opened while the board was down lands in its thread.
+        const items = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues?state=all&sort=updated&direction=asc&since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
+        const parents = new Map<string, Inbound['parent']>()
+        for (const item of Array.isArray(items) ? items : []) {
+          const isPull = item.pull_request !== undefined
+          const root = rootOf(repo, item, isPull, `catchup:issue:${repo}#${item.number}`)
+          out.push(root)
+          parents.set(String(item.number), { author: root.author, text: root.text ?? '', labels: root.labels ?? {} })
+          // Its state now: a close or a merge missed while down. Importing it on a thread that already says so changes nothing.
+          out.push({ ...root, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
+        }
         const comments = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
         for (const comment of Array.isArray(comments) ? comments : []) {
           const number = String(comment.issue_url ?? '').split('/').pop()
           const isPull = String(comment.html_url ?? '').includes('/pull/')
-          out.push({ id: `catchup:comment:${comment.id}`, author: String(comment.user?.login ?? 'unknown'), place: `${repo}|${isPull ? 'pulls' : 'issues'}`, self: options.bot !== undefined && comment.user?.login === options.bot, kind: 'reply', thread: `${repo}#${number}`, external: `comment:${comment.id}`, text: String(comment.body ?? '') })
+          const parent = parents.get(number ?? '')
+          out.push({ id: `catchup:comment:${comment.id}`, author: String(comment.user?.login ?? 'unknown'), place: `${repo}|${isPull ? 'pulls' : 'issues'}`, self: options.bot !== undefined && comment.user?.login === options.bot, kind: 'reply', thread: `${repo}#${number}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), ...(parent ? { parent } : {}) })
         }
       }
       return out

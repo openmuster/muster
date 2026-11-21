@@ -49,6 +49,12 @@ Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with
   `source`. Before, it had none until the issue changed state, so
   `--label kind=issue` missed it and nothing said which issue it became.
   Found on the first run against a live GitHub repository.
+- An issue opened on GitHub while the board was down arrived with no title,
+  body or labels: its first comment became the thread's opening message and
+  a reply as well. Catch-up now reads issues and pull requests before their
+  comments, and a comment or review on an issue the board never saw starts
+  the thread from the issue. A close or merge missed while down now sets
+  `state`. Found on the same live run.
 
 ## 0.2.0-alpha.2
 
