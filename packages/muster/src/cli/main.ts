@@ -31,7 +31,7 @@ import { runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
-import { boardKey, mint } from '../serve/token.ts'
+import { boardKey } from '../serve/token.ts'
 import { profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -819,11 +819,19 @@ const commands: Record<string, Command> = {
         // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
         run.io.out('token  none printed: make one with mu token create')
       } else {
-        const token = mint(key, { sub: me.principal, profile: null, exp: Math.floor(Date.now() / 1000) + 30 * 86_400 })
-        run.io.out('')
-        run.io.out('    # a token for you, good for 30 days:')
-        run.io.out(`    export MUSTER_URL=${serving.url}`)
-        run.io.out(`    export MUSTER_TOKEN=${token}`)
+        // Made the way `mu token create` makes one, so the board has a record of it: it is in `mu token list`,
+        // and `mu token revoke` stops it if this output ends up somewhere it shouldn't.
+        try {
+          const made = await run.team.backend.tokens.create({ profile: null, can: {}, ttl: 30 * 86_400 })
+          run.io.out('')
+          run.io.out(`    # a token for you, good for 30 days (mu token revoke ${made.record.id} stops it):`)
+          run.io.out(`    export MUSTER_URL=${serving.url}`)
+          run.io.out(`    export MUSTER_TOKEN=${made.token}`)
+        } catch (error) {
+          // A board that already keeps as many tokens as it will is still served: it only prints no new one.
+          if (!(error instanceof Failure) || error.reason !== 'too_many_tokens') throw error
+          run.io.out(`token  none printed: ${error.message} Revoke some with mu token revoke.`)
+        }
       }
       let watchers: ReturnType<typeof loadDaemonConfig>['watchers'] = []
       let hooks: ReturnType<typeof armHooks> = []

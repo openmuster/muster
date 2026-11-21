@@ -314,6 +314,14 @@ describe('serve', () => {
     const second = await start()
     const again = await cli(dir, ['read', 'general', '--json'], { env: { MUSTER_URL: second.env.MUSTER_URL, MUSTER_TOKEN: first.env.MUSTER_TOKEN } })
     expect(JSON.parse(again.stdout).threads.map((thread: { message: { text: string } }) => thread.message.text).sort()).toEqual(['from the file', 'over http'])
+    // The printed token is one the board has a record of: it is listed, and its owner can stop it.
+    const id = /mu token revoke (\S+) stops it/.exec(first.serving.output())![1]!
+    const listed = JSON.parse((await cli(dir, ['token', 'list', '--json'])).stdout).tokens as { id: string; profile: string | null; can: unknown }[]
+    expect(listed.find((token) => token.id === id)).toMatchObject({ profile: null, can: null })
+    expect((await cli(dir, ['token', 'revoke', id])).stdout).toBe(`revoked  ${id}\n`)
+    const stopped = await cli(dir, ['read', 'general', '--json'], { env: { MUSTER_URL: second.env.MUSTER_URL, MUSTER_TOKEN: first.env.MUSTER_TOKEN } })
+    expect([stopped.code, JSON.parse(stopped.stderr).error.reason]).toEqual([1, 'unauthorized'])
+    expect((await cli(dir, ['read', 'general', '--json'], { env: second.env })).code).toBe(0)
     second.serving.child.kill('SIGTERM')
     await second.serving.done
   }, 30_000)
