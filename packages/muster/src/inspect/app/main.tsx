@@ -1,9 +1,10 @@
-import { Activity, Hash, ListTodo, Paperclip, Tag, X } from 'lucide-react'
+import { Activity, Hash, ListTodo, Paperclip, Tag, UserPlus, X } from 'lucide-react'
 import { useEffect, useReducer, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { FeedEvent, ThreadSummary } from '../../core/reads.ts'
 import type { TaskListing } from '../../core/tasks.ts'
 import type { By, Message } from '../../model.ts'
+import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
 import { STYLE } from './style.ts'
 
@@ -34,7 +35,7 @@ const left = (until: string) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`
 }
 
-type View = { kind: 'activity' } | { kind: 'tasks'; tab: Tab } | { kind: 'channel'; path: string }
+type View = { kind: 'activity' } | { kind: 'joins' } | { kind: 'tasks'; tab: Tab } | { kind: 'channel'; path: string }
 
 function viewOf(location: Location): { view: View; thread: number | null } {
   const params = new URLSearchParams(location.search)
@@ -42,6 +43,7 @@ function viewOf(location: Location): { view: View; thread: number | null } {
   const path = location.pathname
   if (path.startsWith('/c/')) return { view: { kind: 'channel', path: decodeURIComponent(path.slice(3)) }, thread }
   if (path.startsWith('/activity')) return { view: { kind: 'activity' }, thread }
+  if (path.startsWith('/joins')) return { view: { kind: 'joins' }, thread }
   const tab = (params.get('state') ?? 'open') as Tab
   return { view: { kind: 'tasks', tab: TABS.includes(tab) ? tab : 'open' }, thread }
 }
@@ -127,7 +129,7 @@ function App() {
 
   const here = (extra: string) => `${window.location.pathname}${extra}`
   const openThread = (id: number) => go(here(`?${new URLSearchParams({ ...(view.kind === 'tasks' ? { state: view.tab } : {}), thread: String(id) })}`))
-  const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : `#${view.path}`
+  const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : view.kind === 'joins' ? 'requests to join' : `#${view.path}`
 
   return (
     <div className="app">
@@ -145,6 +147,9 @@ function App() {
               <Hash size={14} /> {channel.path}
             </a>
           ))}
+        </nav>
+        <nav>
+          <a className={view.kind === 'joins' ? 'on' : ''} onClick={() => go('/joins')}><UserPlus size={14} /> requests to join</a>
         </nav>
         <label className="as">
           as
@@ -231,7 +236,8 @@ function App() {
             ))}
           </div>
         )}
-        {view.kind !== 'activity' && (
+        {view.kind === 'joins' && <Joins />}
+        {view.kind !== 'activity' && view.kind !== 'joins' && (
           <Composer
             placeholder={view.kind === 'tasks' ? 'start a task…' : `message #${view.path}`}
             needsChannel={view.kind === 'tasks'}
@@ -269,6 +275,79 @@ function App() {
         </section>
       )}
       <style>{STYLE}</style>
+    </div>
+  )
+}
+
+const PERMISSIONS = ['read', 'post', 'react', 'label'] as const
+const TTLS = [['1h', 3600], ['1 day', 86_400], ['7 days', 7 * 86_400]] as const
+
+/**
+ * Requests to join: what agents asked for, and the owner's answer. Asking isn't an event on the board,
+ * so the list is read again every few seconds while it is open. What a token may do is chosen here;
+ * the request only names who is asking.
+ */
+function Joins() {
+  const [joins, setJoins] = useState<JoinRecord[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const load = () =>
+    call<{ joins: JoinRecord[] }>('joinList')
+      .then((answer) => (setJoins(answer.joins), setError(null)))
+      .catch((failure: Error) => setError(failure.message))
+  useEffect(() => {
+    void load()
+    const timer = setInterval(() => void load(), 5000)
+    return () => clearInterval(timer)
+  }, [])
+  if (error) return <p className="error">{error}</p>
+  if (joins === null) return null
+  if (joins.length === 0) return <p className="empty">no requests. An agent asks with mu join &lt;board url&gt; --as &lt;name&gt;, on a board served with --allow-joins.</p>
+  return (
+    <div className="rows">
+      {joins.map((join) => (
+        <JoinRow key={join.code} join={join} onAnswered={() => void load()} onError={setError} />
+      ))}
+    </div>
+  )
+}
+
+function JoinRow(props: { join: JoinRecord; onAnswered: () => void; onError: (message: string) => void }) {
+  const { join } = props
+  const [channel, setChannel] = useState('work/')
+  const [allowed, setAllowed] = useState<string[]>(['read', 'post'])
+  const [ttl, setTtl] = useState<number>(7 * 86_400)
+  const answer = (route: 'joinApprove' | 'joinDeny', request: object) =>
+    call(route, [{ code: join.code, ...request }])
+      .then(props.onAnswered)
+      .catch((failure: Error) => props.onError(failure.message))
+  return (
+    <div className="thread">
+      <div className="by">
+        <code>{join.code}</code> {join.profile} · {join.state} · until {new Date(join.expires * 1000).toLocaleTimeString()}
+      </div>
+      {join.note && <div className="text">{join.note}</div>}
+      {join.state === 'pending' && (
+        <div className="bar">
+          <input aria-label="channel" value={channel} onChange={(event) => setChannel(event.target.value.trim())} />
+          {PERMISSIONS.map((permission) => (
+            <label key={permission}>
+              <input
+                type="checkbox"
+                checked={allowed.includes(permission)}
+                onChange={(event) => setAllowed(event.target.checked ? [...allowed, permission] : allowed.filter((each) => each !== permission))}
+              />{' '}
+              {permission}
+            </label>
+          ))}
+          <select aria-label="for how long" value={ttl} onChange={(event) => setTtl(Number(event.target.value))}>
+            {TTLS.map(([name, seconds]) => (
+              <option key={seconds} value={seconds}>{name}</option>
+            ))}
+          </select>
+          <button disabled={!channel || allowed.length === 0} onClick={() => void answer('joinApprove', { can: { [channel]: allowed }, ttl })}>approve</button>
+          <button className="quiet" onClick={() => void answer('joinDeny', {})}>deny</button>
+        </div>
+      )}
     </div>
   )
 }

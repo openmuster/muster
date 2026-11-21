@@ -152,6 +152,15 @@ state it is in: `task_waiting`, `task_blocked`, `task_ready`.
 | `board_not_reachable` | A sandbox can't reach that board: it needs an HTTPS address |
 | `invalid_session` | Not a session ID |
 | `platform_refused` | A platform didn't do what was asked |
+| `joins_closed` | The board wasn't served with `--allow-joins`: ask its owner for a token |
+| `too_many_joins` | 20 requests to join are waiting already: try again in a few minutes |
+| `unknown_join` | No request is waiting under that code, or the secret doesn't match. A request lasts 15 minutes |
+| `join_answered` | That request was already approved or refused |
+| `join_denied` | The board's owner refused the request |
+| `invalid_code` | Not a join code, which looks like `K7Q4-M2XD` |
+| `invalid_note` | A note to the owner is one line of plain text, at most 200 characters |
+| `invalid_join` | `mu join` needs a board's URL, or `list`, `approve` or `deny` |
+| `missing_profile` | Say the name to join under: `--as <name>` |
 
 ## The command line
 

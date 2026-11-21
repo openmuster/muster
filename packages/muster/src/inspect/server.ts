@@ -75,10 +75,18 @@ export function inspect(options: InspectOptions): Promise<{ url: string; token: 
         // Another site can't read the token, but check the origin too: writes come from this page or not at all.
         if (req.headers.origin !== origin) throw new Failure('forbidden', 'Writes come from the inspector page.')
         const route = url.pathname.slice('/board/'.length)
-        if (!ALLOWED.has(route)) throw new Failure('not_found', 'No such route.')
+        const answering = route === 'joinList' || route === 'joinApprove' || route === 'joinDeny'
+        if (!ALLOWED.has(route) && !answering) throw new Failure('not_found', 'No such route.')
         const chunks: Buffer[] = []
         for await (const chunk of req) chunks.push(chunk as Buffer)
         const body = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { args?: unknown[]; as?: string | null }) : {}
+        // Requests to join are answered as you, the board's owner, the way `mu join approve` would.
+        if (answering) {
+          const joins = options.backend.joins
+          const [request] = (body.args ?? []) as [never]
+          const result = route === 'joinList' ? await joins.list() : route === 'joinDeny' ? await joins.deny(request) : await joins.approve(request)
+          return send(res, 200, { ok: result })
+        }
         const caller: Caller = await options.backend.self(body.as ? profileName(body.as) : null)
         const result = await (options.backend[route as (typeof ROUTES)[number]] as (caller: Caller, ...rest: unknown[]) => Promise<unknown>)(caller, ...(body.args ?? []))
         return send(res, 200, { ok: result === undefined ? null : result })

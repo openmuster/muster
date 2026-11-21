@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 5
+export const STORE_VERSION = 6
 
 const DDL = `
 create table if not exists events (
@@ -179,6 +179,19 @@ create table if not exists tokens (
   exp integer not null,
   at integer not null,
   revoked integer not null default 0
+) without rowid;
+
+-- Requests to join a served board, for minutes: who asked, a hash of the secret only they hold, and
+-- once the owner approves, the token waiting for them to pick it up.
+create table if not exists joins (
+  code text primary key,
+  profile text not null,
+  note text,
+  secret blob not null,
+  at integer not null,
+  expires integer not null,
+  state text not null,
+  token text
 ) without rowid;
 `
 

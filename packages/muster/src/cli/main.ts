@@ -31,7 +31,7 @@ import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
 import { boardKey, mint } from '../serve/token.ts'
-import type { Permission } from '../model.ts'
+import { profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -706,8 +706,61 @@ const commands: Record<string, Command> = {
     },
   },
 
+  join: {
+    spec: { value: ['note', 'timeout', 'ttl'], many: ['can'], bool: ['no-sync'] },
+    async run(run, parsed) {
+      const verb = parsed.positionals[0]
+      const joins = run.team.backend.joins
+      const at = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16).replace('T', ' ')
+      if (verb === 'list') {
+        const listed = (await joins.list()).joins
+        return print(run, { joins: listed }, () =>
+          listed.length === 0 ? 'no requests' : listed.map((join) => `${join.code}  ${join.profile}  ${join.state}  until ${at(join.expires)}${join.note ? `  ${join.note}` : ''}`).join('\n'),
+        )
+      }
+      if (verb === 'approve' || verb === 'deny') {
+        const code = parsed.positionals[1]
+        if (!code) throw misuse('invalid_code', `Say which request: mu join ${verb} <code>. mu join list shows them.`)
+        if (verb === 'deny') {
+          const done = await joins.deny({ code })
+          return print(run, done, () => `denied  ${done.join.code}  ${done.join.profile}`)
+        }
+        const can: Record<string, string[]> = {}
+        for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
+        if (Object.keys(can).length === 0) throw misuse('invalid_token', `Say what the agent may do: mu join approve ${code} --can 'work/=read,post,react,label'.`)
+        const me = await run.team.whoami()
+        const ttl = duration(str(parsed.flags, 'ttl') ?? (me.mode === 'file' ? '7d' : '2h'), 'ttl')
+        const done = await joins.approve({ code, can, ttl, ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}) })
+        return print(run, done, () => `approved  ${done.join.code}  ${done.join.profile}  until ${at(done.record.exp)}`)
+      }
+      // Asking: `mu join <url> --as <name>`, with no token, on the board at that URL.
+      if (!verb) throw misuse('invalid_join', 'Use: mu join <board url> --as <name>, or mu join list | approve <code> | deny <code>.')
+      const profile = str(parsed.flags, 'as') ?? run.io.env.MUSTER_PROFILE
+      if (!profile) throw misuse('missing_profile', 'Say the name to join under: --as <name>.')
+      const asked = await joins.ask({ profile, ...(str(parsed.flags, 'note') !== undefined ? { note: str(parsed.flags, 'note')! } : {}) })
+      // The code is for the person who approves: it goes to stderr, so --json stays one document on stdout.
+      const say = run.json ? run.io.err : run.io.out
+      say(`code     ${asked.code}`)
+      say(`waiting  for the board's owner to run: mu join approve ${asked.code} --can <channel>=<permissions>`)
+      const timeout = duration(str(parsed.flags, 'timeout') ?? '10m', 'timeout') * 1000
+      const deadline = Date.now() + timeout
+      for (;;) {
+        const answer = await joins.poll({ code: asked.code, secret: asked.secret })
+        if (answer.state === 'approved') {
+          const url = run.team.backend.where
+          print(run, { url, profile, token: answer.token }, () => [`approved  as ${profileName(profile)}`, '', `    export MUSTER_URL=${url}`, `    export MUSTER_TOKEN=${answer.token}`].join('\n'))
+          return 0
+        }
+        if (answer.state === 'denied') throw new Failure('join_denied', `The board's owner refused the request ${asked.code}.`)
+        if (run.io.stop.aborted) return stopCode(run.io.stop)
+        if (Date.now() >= deadline) throw new Failure('timeout', `Nobody answered the request ${asked.code} within ${span(timeout)}.`, { hint: 'A request lasts 15 minutes: ask again.' })
+        await sleep(Math.min(2000, Math.max(0, deadline - Date.now())), run.io.stop)
+      }
+    },
+  },
+
   serve: {
-    spec: { value: ['port', 'host'], many: ['allow-host'], bool: ['no-token'] },
+    spec: { value: ['port', 'host'], many: ['allow-host'], bool: ['no-token', 'allow-joins'] },
     async run(run, parsed) {
       const me = await run.team.whoami()
       if (me.mode !== 'file') throw new Failure('forbidden', 'mu serve serves a board on this machine.')
@@ -720,10 +773,11 @@ const commands: Record<string, Command> = {
       // The MCP tool runs the CLI against this same server, with the caller's token: every request it makes
       // passes the token checks any other client's does.
       let self = ''
+      const allowJoins = on(parsed.flags, 'allow-joins') || run.io.env.MUSTER_ALLOW_JOINS === '1'
       const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
         answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
       try {
-        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp })
+        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp, allowJoins })
         self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
@@ -733,6 +787,7 @@ const commands: Record<string, Command> = {
       run.io.out(`url    ${serving.url}`)
       run.io.out(`mcp    ${serving.url}/mcp`)
       if (!isLoopback(host)) run.io.out(`listen ${host}  for ${allowed.join(', ')}`)
+      if (allowJoins) run.io.out(`joins  open: mu join <url> --as <name>, then mu join approve <code>`)
       if (on(parsed.flags, 'no-token')) {
         // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
         run.io.out('token  none printed: make one with mu token create')
@@ -1320,7 +1375,11 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     const dir = str(parsed.flags, 'dir') ?? io.env.MUSTER_DIR
     const boardName = str(parsed.flags, 'board') ?? io.env.MUSTER_BOARD
     const url = str(parsed.flags, 'url') ?? io.env.MUSTER_URL
-    if (url) {
+    // Asking to join a board at a URL is done with no token: that is what the asker is after.
+    const joining = name === 'join' && /^https?:\/\//.test(parsed.positionals[0] ?? '')
+    if (joining) {
+      team = board({ backend: http({ url: parsed.positionals[0]!, token: '' }), as: null })
+    } else if (url) {
       const token = io.env.MUSTER_TOKEN
       if (!token) throw new Failure('unauthorized', `The board at ${url} needs a token.`, { hint: 'Set MUSTER_TOKEN to one from mu token create.' })
       team = board({ backend: http({ url, token }), as: as ?? null })

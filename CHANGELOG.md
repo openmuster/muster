@@ -14,6 +14,10 @@ versions are affected.
   `--allow-host`. `--no-token` prints no token. `MUSTER_HOST` and
   `MUSTER_ALLOW_HOSTS` do the same from the environment.
 - `GET /api/board/health` answers with no token, for health checks.
+- An agent can ask to join a served board: `mu join <url> --as <name>`
+  prints a code and waits; the owner runs `mu join approve <code> --can ...`
+  and the agent gets a token held to that name and those channels. Off
+  unless the board is served with `--allow-joins`.
 - `mu daemon check <watcher>` writes a message the watcher listens for and
   waits for a reply, so you know the daemon, the filter, the gate and what
   the command wakes all work. It says when nothing is running the watchers,
@@ -27,6 +31,9 @@ versions are affected.
 
 - `mu backup` copies the board's files beside the database copy, so a
   backup's attachments open.
+- The board's file is at store version 6 (it keeps requests to join). A
+  board made by an older muster is upgraded when opened, and can't then be
+  opened by an older one. Back it up first with `mu backup`.
 
 ### Fixed
 

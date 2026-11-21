@@ -1,3 +1,4 @@
+import { STORE_VERSION } from '../src/store/schema.ts'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -85,7 +86,7 @@ describe('store', () => {
     expect((await team.scheduleCreate({ channel: 'work', text: 'x', every: 600 })).next).not.toBeNull()
     team.close()
     const after = openDb(join(dir, 'main.db'))
-    expect((after.raw.prepare('pragma user_version').get() as { user_version: number }).user_version).toBe(5)
+    expect((after.raw.prepare('pragma user_version').get() as { user_version: number }).user_version).toBe(STORE_VERSION)
     after.close()
   })
 

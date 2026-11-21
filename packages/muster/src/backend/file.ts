@@ -17,6 +17,7 @@ import { openDb, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, importPending, receive, type Sync } from '../sync/engine.ts'
 import { boardKey } from '../serve/token.ts'
 import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
+import { dbJoins } from '../serve/joins.ts'
 import type { Backend } from './types.ts'
 
 export type FileOptions = {
@@ -97,6 +98,21 @@ export function file(options: FileOptions = {}): Backend {
       return { principal, profile: profile === null ? null : profileName(profile) }
     },
     registry,
+    joinStore: () => dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()),
+    // On the board's own machine the caller is its owner: they answer requests to join.
+    joins: {
+      ask: async (request) => dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()).ask(request),
+      poll: async (request) => dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()).poll(request.code, request.secret),
+      list: async () => ({ joins: dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()).list() }),
+      approve: async (request) => {
+        const joins = dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime())
+        const join = joins.pending(request.code)
+        if (Object.keys(request.can ?? {}).length === 0) throw misuse('invalid_token', 'Say what the agent may do: --can <channel>=read,post.')
+        const made = mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, { profile: join.profile, can: request.can, ttl: request.ttl, ...(request.noSync ? { noSync: true } : {}) }, (options.now ?? (() => new Date()))().getTime())
+        return { join: joins.answer(join.code, made.token), record: made.record }
+      },
+      deny: async (request) => ({ join: dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()).answer(request.code, null) }),
+    },
     // On the board's own machine the caller is its owner, who may make any token.
     tokens: {
       create: async (request) => mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, request, (options.now ?? (() => new Date()))().getTime()),

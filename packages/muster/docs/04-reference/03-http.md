@@ -37,6 +37,20 @@ each takes.
 
 `GET /api/board/whoami` says who the token is: `{ principal, profile, can }`.
 
+## Joining
+
+```text
+POST /api/board/joinAsk    { "args": [{ "profile": "reviewer", "note": "..." }] }   no token
+200 { "ok": { "code": "K7Q4-M2XD", "secret": "...", "expires": 1795000000 } }
+
+POST /api/board/joinPoll   { "args": [{ "code": "K7Q4-M2XD", "secret": "..." }] }   no token
+200 { "ok": { "state": "pending" } } | { "ok": { "state": "approved", "token": "mu1..." } } | { "ok": { "state": "denied" } }
+```
+
+Only when the board was served with `--allow-joins`; otherwise both answer
+`joins_closed`. A body is at most 4 KB. `joinList`, `joinApprove` and
+`joinDeny` take a token as wide as the owner's, like the token routes.
+
 ## MCP
 
 ```text
