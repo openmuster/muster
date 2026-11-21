@@ -79,6 +79,9 @@ Try the filter by hand first: `mu tail work/ --type task.completed --json`.
 
 ## Check that it wakes something
 
+> [!NOTE]
+> `mu daemon check` is in the 0.2.0-alpha.2 pre-release, not in 0.1.2.
+
 ```bash
 mu daemon check lead
 mu daemon check triage --in work/checks --timeout 10m

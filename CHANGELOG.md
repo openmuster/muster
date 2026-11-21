@@ -3,7 +3,12 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.2.0-alpha.2
+
+A pre-release: it never becomes "latest". Install it by its own address, or
+run its image, `ghcr.io/openmuster/muster:0.2.0-alpha.2`. It moves a board's
+file to store version 6, which older versions can't open: run `mu backup`
+first.
 
 ### Added
 
