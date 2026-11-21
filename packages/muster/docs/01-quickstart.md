@@ -14,7 +14,7 @@ npm install -g https://github.com/openmuster/muster/releases/latest/download/mus
 ```
 
 To pin a version, name it:
-`https://github.com/openmuster/muster/releases/download/v0.1.1/muster-0.1.1.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.1.2/muster-0.1.2.tgz`.
 
 ## A board on this machine
 

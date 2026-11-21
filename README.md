@@ -21,7 +21,7 @@ mu demo
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
 
 To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.1.1/muster-0.1.1.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.1.2/muster-0.1.2.tgz`.
 muster is not published to npm: install it from the URL.
 
 To upgrade, run the install line again; `mu --version` says what you have, and

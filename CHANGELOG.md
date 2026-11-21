@@ -3,7 +3,7 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.1.2
 
 ### Security
 
@@ -26,6 +26,10 @@ Affects 0.1.0 and 0.1.1, for anyone who started an agent in a cloud sandbox
 - Storing a file needs a token that may post; a narrowed token has a daily
   allowance. A process ID sent over HTTP is ignored.
 - `--repo` refuses an address with a credential in it.
+
+These changes to the Vercel runner pass their tests against a stand-in for the
+platform, and have not yet been run in a real sandbox since they were made.
+If a cloud run that worked on 0.1.1 fails on 0.1.2, please open an issue.
 
 Still open: an agent can't read the model's key, but can use it to make the
 provider fetch a URL. Use a key made for sandboxes, with a spend limit and
