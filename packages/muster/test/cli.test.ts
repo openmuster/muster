@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -129,6 +130,31 @@ describe('cli', () => {
     expect((await cli(dir, ['tasks', 'renew', '1', '--as', 'worker', '--lease', '10m'])).stdout).toMatch(/^#1  yours for (10m|9m)\n$/)
     expect((await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'worker'])).stdout).toBe('completed  #1\n')
     expect(existsSync(join(folder, board, '1-worker.json'))).toBe(false)
+  })
+
+  it('MUSTER_CLAIM_TOKEN is the claim a run brings: taken on one machine, settled from another, never printed', async () => {
+    const dir = tempDir()
+    const token = createHmac('sha256', 'only the run has this').update('run-42').digest('base64url')
+    const here = { MUSTER_CLAIM_TOKEN: token, MUSTER_CONFIG: join(dir, 'instance-1') }
+    const there = { MUSTER_CLAIM_TOKEN: token, MUSTER_CONFIG: join(dir, 'instance-2') }
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    const claimed = await cli(dir, ['tasks', 'claim', '1', '--as', 'ci', '--json'], { env: here })
+    expect(claimed.code).toBe(0)
+    expect(claimed.stdout + claimed.stderr).not.toContain(token)
+    // Another instance has no claim kept, and the same token: claiming again answers the claim, and it settles.
+    expect((await cli(dir, ['tasks', 'claim', '1', '--as', 'ci'], { env: there })).code).toBe(0)
+    const without = await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'ci', '--json'], { env: { MUSTER_CONFIG: join(dir, 'instance-3') } })
+    expect(JSON.parse(without.stderr).error.reason).toBe('claim_lost')
+    expect((await cli(dir, ['tasks', 'renew', '1', '--as', 'ci'], { env: there })).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'complete', '1', 'done', '--as', 'ci'], { env: there })).stdout).toBe('completed  #1\n')
+    // A task made with its claim carries it, and a token that could be guessed is refused before anything is taken.
+    const made = await cli(dir, ['tasks', 'create', 'work', 'made held', '--claim', '--as', 'ci', '--json'], { env: here })
+    expect(made.stdout + made.stderr).not.toContain(token)
+    const held = String(JSON.parse(made.stdout).task.id)
+    expect((await cli(dir, ['tasks', 'complete', held, 'done', '--as', 'ci'], { env: there })).code).toBe(0)
+    const open = String(JSON.parse((await cli(dir, ['tasks', 'create', 'work', 'u', '--json'])).stdout).task.id)
+    const weak = await cli(dir, ['tasks', 'claim', open, '--json'], { env: { MUSTER_CLAIM_TOKEN: 'run-42' } })
+    expect([weak.code, JSON.parse(weak.stderr).error.reason]).toEqual([2, 'invalid_claim_token'])
   })
 
   it('completing a task names the tasks it readied', async () => {

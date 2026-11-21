@@ -99,7 +99,7 @@ the board stores only its hash. The CLI keeps it for you; code keeps its own.
 | --- | --- |
 | `taskCreate` | A message's fields, or `thread`; `needs?`, `for?`, `claim?` |
 | `taskPlan` | `channel`, `tasks: [{ key, text, labels?, needs?, for? }]`; a need is `{ key }`, `{ id }`, or either one bare |
-| `taskClaim` | `id`, or `ready` with `labels?` and `from?`; `lease?`, `pid?`, `pidStart?` |
+| `taskClaim` | `id`, or `ready` with `labels?` and `from?`; `lease?`, `pid?`, `pidStart?`, `token?` (a claim token you chose, in place of the board's) |
 | `taskRenew`, `taskRelease` | `id`, `token` |
 | `taskComplete`, `taskFail`, `taskBlock` | `id`, `token`, and `result`, `reason`, or `reason` and `kind` |
 | `taskUnblock`, `taskReopen`, `taskCancel` | `id` (`round?` on reopen) |

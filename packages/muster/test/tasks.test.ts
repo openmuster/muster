@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { memoryBoard, reason, HTTP } from './helpers.ts'
 
@@ -408,6 +409,55 @@ describe('tasks', () => {
     await team.taskBlock({ id: b.id, token: heldB.token, reason: '?' })
     const feed = await team.events({ after: start, filter: { channel: 'work', labels: ['board.task=completed|blocked|failed'], types: ['task.completed', 'task.blocked', 'task.failed'] } })
     expect(feed.events.map((event) => [event.type, event.task?.id])).toEqual([['task.completed', a.id], ['task.blocked', b.id]])
+  })
+
+  it('a claim can carry a token its caller chose, which settles it from anywhere and is never shown', async () => {
+    const { team, time } = memoryBoard()
+    // What a run derives again on every instance: an HMAC of its own ID, say.
+    const token = createHmac('sha256', 'a secret only the run has').update('run-42').digest('base64url')
+    const { task } = await team.taskCreate({ channel: 'work', text: 't' })
+    const first = await team.as('ci').taskClaim({ id: task.id, token, lease: 60 })
+    expect(first.token).toBe(token)
+    expect(first.task.claim).toMatchObject({ epoch: 1, by: { profile: 'ci' } })
+    // Claiming what it already holds answers the claim it has: a retry on another instance takes nothing twice.
+    const again = await team.as('ci').taskClaim({ id: task.id, token })
+    expect(again.task.claim).toEqual(first.task.claim)
+    // Not to another caller that knows no token, nor to one that guesses, nor to another profile with the token.
+    expect(await reason(team.as('ci').taskClaim({ id: task.id }))).toBe('task_claimed')
+    expect(await reason(team.as('ci').taskClaim({ id: task.id, token: token.replace(/.$/, (last) => (last === 'A' ? 'B' : 'A')) }))).toBe('task_claimed')
+    expect(await reason(team.as('other').taskClaim({ id: task.id, token }))).toBe('task_claimed')
+    expect((await team.as('ci').taskRenew({ id: task.id, token })).task.state).toBe('claimed')
+    // A lapsed claim is taken again under the same token, as a new claim.
+    time.advance(20 * MIN)
+    const later = await team.as('ci').taskClaim({ id: task.id, token })
+    expect(later.task.claim?.epoch).toBe(2)
+    expect((await team.as('ci').taskComplete({ id: task.id, token, result: 'done' })).task.state).toBe('completed')
+    const feed = JSON.stringify(await team.events({ after: 0 }))
+    expect(feed).not.toContain(token)
+    // A task made with its claim carries the token too, and --ready takes one under it.
+    const made = await team.as('ci').taskCreate({ channel: 'work', text: 'made claimed', claim: { token } })
+    expect(made.token).toBe(token)
+    // Two workers of one run share the token, so --ready gives each a task of its own, never the one already held.
+    const next = (await team.taskCreate({ channel: 'work', text: 'next' })).task.id
+    const after = (await team.taskCreate({ channel: 'work', text: 'after' })).task.id
+    const [one, two] = await Promise.all([team.as('ci').taskClaim({ ready: 'work', token }), team.as('ci').taskClaim({ ready: 'work', token })])
+    expect([one.task.id, two.task.id].sort((x, y) => x - y)).toEqual([next, after])
+    expect(await reason(team.as('ci').taskClaim({ ready: 'work', token }))).toBe('nothing_ready')
+    // The token is the claim's proof, and the claim is its holder's: in other hands it settles nothing.
+    expect(await reason(team.as('other').taskComplete({ id: next, token }))).toBe('claim_lost')
+    expect(await reason(team.as('other').taskRenew({ id: next, token }))).toBe('claim_lost')
+    expect((await team.task(next))!.state).toBe('claimed')
+  })
+
+  it('refuses a chosen claim token that could be guessed', async () => {
+    const { team } = memoryBoard()
+    const { task } = await team.taskCreate({ channel: 'work', text: 't' })
+    for (const token of ['', 'run-42', 'a'.repeat(31), 'has spaces in it and is long enough otherwise', 'x'.repeat(201), 'k'.repeat(43), 'abcabcabc'.repeat(5), 42 as never]) {
+      expect([token, await reason(team.taskClaim({ id: task.id, token }))]).toEqual([token, 'invalid_claim_token'])
+      expect([token, await reason(team.taskCreate({ channel: 'work', text: 'c', claim: { token } }))]).toEqual([token, 'invalid_claim_token'])
+    }
+    expect((await team.task(task.id))!.state).toBe('ready')
+    expect((await team.taskList({ state: 'all' })).tasks).toHaveLength(1)
   })
 
   it("a claim's secret never appears in the feed", async () => {

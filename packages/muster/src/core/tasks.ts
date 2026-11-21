@@ -163,13 +163,17 @@ function mustOwn(caller: Caller, row: TaskRow, root: Message) {
   throw new Failure('task_not_owned', `Task ${row.id} isn't yours to change.`, { hint: 'Its owner can, or the agent that holds it.' })
 }
 
+/** Whether a caller is the one a task is claimed by. */
+const holds = (caller: Caller, row: TaskRow) => row.claim_principal === caller.principal && row.claim_profile === (caller.profile ?? null)
+
 /**
  * The holder's proof: the task is still claimed under the token the board gave. A caller that sends a
  * token held a claim once, so whatever became of the task that claim is lost, and it must stop. One that
  * sends none never held it: it is told where the task stands, and what comes first.
  */
-function fence(ctx: Context, row: TaskRow, token: string | undefined) {
-  if (row.state === 'claimed' && token && row.claim_token && sameHash(token, row.claim_token)) return
+function fence(ctx: Context, caller: Caller, row: TaskRow, token: string | undefined) {
+  // The token proves the claim, and the claim is its holder's: a token that reached someone else settles nothing.
+  if (row.state === 'claimed' && token && row.claim_token && sameHash(token, row.claim_token) && holds(caller, row)) return
   const read = [`mu read ${row.id}`]
   if (token) {
     throw new Failure('claim_lost', `You no longer hold task ${row.id}.`, {
@@ -314,7 +318,7 @@ export function budgets(ctx: Context, caller: Caller): { budgets: { channel: str
 export type CreateRequest = (PostRequest | { thread: number; idempotencyKey?: string }) & {
   needs?: number[]
   for?: string
-  claim?: { lease?: number; pid?: number; pidStart?: string }
+  claim?: { lease?: number; pid?: number; pidStart?: string; token?: string }
 }
 
 function makeTask(
@@ -335,8 +339,22 @@ function makeTask(
   })
 }
 
-function claimNow(ctx: Context, caller: Caller, row: TaskRow, root: Message, claim: { lease?: number; pid?: number; pidStart?: string }, emit: Emit): string {
-  const token = randomBytes(16).toString('base64url')
+/**
+ * A token a caller brings instead of taking the board's: for a run that can't keep one between its
+ * processes and derives the same secret in each. It is a secret like the board's own, so it has to be
+ * as hard to guess: 32 to 200 characters of base64url, which an HMAC-SHA256 is.
+ */
+function chosenToken(token: unknown): string | undefined {
+  if (token === undefined) return undefined
+  // Long enough, and not a placeholder: a value of a few repeated characters is one somebody typed.
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,200}$/.test(token) || new Set(token).size < 8) {
+    throw misuse('invalid_claim_token', 'A claim token you choose is 32 to 200 characters of base64url.', 'Derive it from a secret, such as an HMAC-SHA256 of the run\'s ID. Leave it out and the board makes one.')
+  }
+  return token
+}
+
+function claimNow(ctx: Context, caller: Caller, row: TaskRow, root: Message, claim: { lease?: number; pid?: number; pidStart?: string; token?: string }, emit: Emit): string {
+  const token = chosenToken(claim.token) ?? randomBytes(16).toString('base64url')
   const until = new Date(ctx.now().getTime() + leaseMs(claim.lease)).toISOString()
   emit({
     type: 'task.claimed',
@@ -482,6 +500,8 @@ export type ClaimRequest = {
   lease?: number
   pid?: number
   pidStart?: string
+  /** A token the caller chose, in place of one the board makes. Claiming a task already held under it answers that claim. */
+  token?: string
 }
 
 export function claim(ctx: Context, caller: Caller, request: ClaimRequest): { task: Task; token: string } {
@@ -492,7 +512,11 @@ export function claim(ctx: Context, caller: Caller, request: ClaimRequest): { ta
   return outcome
 }
 
+/** Whether a caller already holds a task under the token it chose. */
+const heldUnder = (caller: Caller, row: TaskRow, chosen: string | undefined) => row.state === 'claimed' && chosen !== undefined && row.claim_token !== null && sameHash(chosen, row.claim_token) && holds(caller, row)
+
 function claimOrRefusal(ctx: Context, caller: Caller, request: ClaimRequest): { task: Task; token: string } | Failure {
+  const chosen = chosenToken(request.token)
   return once<{ task: Task; token: string } | Failure>(
     ctx,
     caller,
@@ -503,6 +527,8 @@ function claimOrRefusal(ctx: Context, caller: Caller, request: ClaimRequest): { 
         const found = taskFor(ctx, caller, request.id)
         authorize(caller, found.root.channel, 'label')
         const row = settleLapse(ctx, found.row, found.root, emit)
+        // A caller that claims what it already holds, under the token it chose, has the claim it asked for.
+        if (heldUnder(caller, row, chosen)) return { answer: { task: view(ctx, row.id), token: chosen! }, ref: null }
         if (row.state !== 'ready') {
           const finished = row.state === 'completed' || row.state === 'failed' || row.state === 'canceled'
           const refusal = new Failure(finished ? 'task_finished' : row.state === 'claimed' ? 'task_claimed' : `task_${row.state}`, `Task ${row.id} is ${row.state}.`, {
@@ -535,6 +561,8 @@ function claimOrRefusal(ctx: Context, caller: Caller, request: ClaimRequest): { 
         if (!root || root.deleted || !inScope(root.channel, scope) || !allowed(caller, root.channel, 'label')) continue
         if (!matchesLabels(root.labels, filters)) continue
         const row = settleLapse(ctx, candidate, root, emit)
+        // Not what it already holds under a token it chose: two workers of one run share that token, and
+        // each asks for a task of its own. Only a claim by ID is answered again.
         if (row.state !== 'ready') continue
         const broke = refuseOverBudget(ctx, root.channel)
         if (broke) {
@@ -572,7 +600,7 @@ function write<T>(ctx: Context, caller: Caller, run: (emit: Emit) => T): T {
 export function renew(ctx: Context, caller: Caller, request: Held & { lease?: number }): { task: Task } {
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(ctx, row, request.token)
+    fence(ctx, caller, row, request.token)
     const until = new Date(ctx.now().getTime() + leaseMs(request.lease)).toISOString()
     emit({ type: 'task.renewed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, until } })
     return { task: view(ctx, row.id) }
@@ -582,7 +610,7 @@ export function renew(ctx: Context, caller: Caller, request: Held & { lease?: nu
 export function release(ctx: Context, caller: Caller, request: Held): { task: Task } {
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(ctx, row, request.token)
+    fence(ctx, caller, row, request.token)
     emit({ type: 'task.released', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, from: 'claimed' } })
     return { task: view(ctx, row.id) }
   })
@@ -597,7 +625,7 @@ export function complete(ctx: Context, caller: Caller, request: Held & { result?
   const result = outcome(request.result, 'result')
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(ctx, row, request.token)
+    fence(ctx, caller, row, request.token)
     emit({ type: 'task.completed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, result, from: 'claimed' } })
     const before = new Set((ctx.db.raw.prepare("select id from tasks where state = 'ready'").all() as { id: number }[]).map((task) => task.id))
     readyDependents(ctx, row.id, emit)
@@ -610,7 +638,7 @@ export function fail(ctx: Context, caller: Caller, request: Held & { reason?: st
   const reason = outcome(request.reason, 'reason')
   return write(ctx, caller, (emit) => {
     const { row, root } = taskFor(ctx, caller, request.id)
-    fence(ctx, row, request.token)
+    fence(ctx, caller, row, request.token)
     emit({ type: 'task.failed', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: row.id, epoch: row.epoch, reason, counts: request.counts !== false, from: 'claimed' } })
     return { task: view(ctx, row.id) }
   })
@@ -624,7 +652,7 @@ export function block(ctx: Context, caller: Caller, request: Held & { reason?: s
   return write(ctx, caller, (emit) => {
     const found = taskFor(ctx, caller, request.id)
     const row = request.token ? found.row : settleLapse(ctx, found.row, found.root, emit)
-    if (row.state === 'claimed') fence(ctx, row, request.token)
+    if (row.state === 'claimed') fence(ctx, caller, row, request.token)
     else if (row.state === 'ready' || row.state === 'waiting') mustOwn(caller, row, found.root)
     else throw new Failure(`task_${row.state}`, `Task ${row.id} is ${row.state}.`)
     emit({ type: 'task.blocked', by: byOf(caller), channel: found.root.channel, thread: found.root.id, data: { id: row.id, kind, reason, from: row.state } })

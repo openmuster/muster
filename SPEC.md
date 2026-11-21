@@ -182,7 +182,12 @@ States: `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`,
   for this claim. Otherwise `claim_lost`, and nothing changes. A write that
   sends no token never held the task: unless someone else holds it, it is told
   where the task stands instead (`task_ready`, `task_waiting`, `task_blocked`
-  or `task_finished`), so what it does next is claim, not stop. A holder that is
+  or `task_finished`), so what it does next is claim, not stop. A caller may
+  bring the token instead of taking the board's, for a run that keeps nothing
+  between its processes: 32 to 200 characters of base64url, kept as a hash
+  like the board's own. Claiming a task by ID that is already held under it answers that
+  claim. Any token settles a task only for the principal and profile that
+  hold the claim. A holder that is
   late but whose task nobody has taken or looked at since still holds it: the
   token proves no one else does.
 - **Reclaim looks at the process when it can.** A local holder may record its
