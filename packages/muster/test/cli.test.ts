@@ -322,7 +322,43 @@ describe('cli', () => {
       expect([args, run.code, JSON.parse(run.stderr.startsWith('{') ? run.stderr : '{"error":{}}').error.reason ?? lines(run.stderr)[0]]).toEqual([args, 2, args[0] === '--json' ? 'unknown_command' : `error: Unknown command "${args[0]}".`])
     }
     for (const args of [['help', '--json'], ['help', 'help'], ['help', 'mcp'], ['--help', 'frob']]) expect([args, (await cli(dir, args)).code]).toEqual([args, 0])
-    expect((await cli(dir, ['tasks', '--help'])).stdout).toBe((await cli(dir, ['help'])).stdout)
+  })
+
+  it("a command's help is its own lines from the whole help, and ends with what every command takes", async () => {
+    const dir = tempDir()
+    const whole = lines((await cli(dir, ['help'])).stdout)
+    const read = await cli(dir, ['read', '--help'])
+    expect(read.code).toBe(0)
+    expect(lines(read.stdout)).toEqual([
+      'mu read',
+      '',
+      'read',
+      "  read <channel|id>              a channel's threads, or one thread",
+      '       [--after <cursor>] [--before <cursor>] [--limit n] [--label k=v]...',
+      '       [--text <words>] [--mentions <who>] [--cursor <name>]',
+      '',
+      'global: [--as <profile>] [--board <name>] [--dir <path>] [--url <board url>] [--json]',
+      'mu help lists every command.',
+    ])
+    expect((await cli(dir, ['help', 'read'])).stdout).toBe(read.stdout)
+    // Asked with arguments in place, as an agent does when a command was refused.
+    expect((await cli(dir, ['read', 'general', '--limit', '3', '--help'])).stdout).toBe(read.stdout)
+    // One form of a command that has several, and the command whole when the word after it isn't a form.
+    const claim = lines((await cli(dir, ['tasks', 'claim', '--help'])).stdout)
+    expect(claim.slice(0, 5)).toEqual(['mu tasks claim', '', 'tasks', '  tasks claim <id> | --ready <channel> [--label k=v]... [--from <owner>]...', '       [--wait 10m] [--lease 15m]'])
+    expect(claim.some((line) => line.includes('tasks complete'))).toBe(false)
+    const tasks = lines((await cli(dir, ['tasks', 'work/', '--help'])).stdout)
+    expect(tasks[0]).toBe('mu tasks')
+    expect(tasks.some((line) => line.includes('tasks complete'))).toBe(true)
+    // Every command the help names has a page, and a page says nothing the whole help doesn't.
+    const named = new Set(whole.flatMap((line) => /^  ([a-z]+)[ \n]?/.exec(line)?.[1] ?? []))
+    expect(named.size).toBeGreaterThan(20)
+    for (const name of named) {
+      const page = lines((await cli(dir, [name, '--help'])).stdout)
+      expect([name, page[0], page.at(-1)]).toEqual([name, `mu ${name}`, 'mu help lists every command.'])
+      expect([name, page.slice(1, -2).filter((line) => !whole.includes(line))]).toEqual([name, []])
+      expect([name, page.length < whole.length / 2]).toEqual([name, true])
+    }
   })
 
   it('leaves --help and --json after -- to the command it runs', async () => {

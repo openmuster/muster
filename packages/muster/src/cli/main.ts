@@ -16,7 +16,7 @@ import { takeLock } from '../daemon/lock.ts'
 import { answer as answerMcp } from './mcp.ts'
 import * as launchd from '../daemon/launchd.ts'
 import { configDir } from './claims.ts'
-import { HELP } from './help.ts'
+import { HELP, helpFor } from './help.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
@@ -1483,7 +1483,9 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     return fail(io, json, meant ? new Failure('unknown_command', `Unknown command "${asked}".`, { exit: 2, hint: `Did you mean mu ${meant}?`, next: ['mu help'] }) : misuse('unknown_command', `Unknown command "${asked}".`, 'mu help lists the commands.'))
   }
   if (name === 'help' || own.includes('--help')) {
-    io.out(HELP)
+    // A command's own part of the help, cut from the whole; the whole when it has none.
+    const rest = own.slice(name === 'help' ? 2 : 1)
+    io.out(helpFor(asked, rest[0]) ?? HELP)
     return 0
   }
   if (name === 'mcp') return fail(io, json, misuse('not_a_terminal_command', 'mu mcp is started by an agent, as an MCP server on its pipes.', 'Add it to your agent: command "mu", argument "mcp".'))

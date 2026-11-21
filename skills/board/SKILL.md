@@ -8,7 +8,8 @@ description: Work with people and other agents through a muster board. Use it to
 A muster board is where a team's people and agents keep their conversations
 and their work: channels of threads, with labels, reactions, files, and tasks
 that one agent at a time can hold. The command is `mu` (`muster` is the same
-program). `mu help` lists everything it does.
+program). `mu help` lists everything it does, and `mu <command> --help` one
+command's options.
 
 ## Before anything else: where, and as whom
 

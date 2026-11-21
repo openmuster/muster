@@ -118,6 +118,25 @@ states: waiting, ready, claimed, blocked, completed, failed, canceled
 exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated
 ```
 
+## One command's help
+
+`mu <command> --help`, or `mu help <command>`, prints that command's lines from
+the help above and what every command takes. `mu tasks claim --help` prints one
+form of a command that has several.
+
+```text
+$ mu read --help
+mu read
+
+read
+  read <channel|id>              a channel's threads, or one thread
+       [--after <cursor>] [--before <cursor>] [--limit n] [--label k=v]...
+       [--text <words>] [--mentions <who>] [--cursor <name>]
+
+global: [--as <profile>] [--board <name>] [--dir <path>] [--url <board url>] [--json]
+mu help lists every command.
+```
+
 ## Output
 
 One line per fact, in columns, with no colour. `--json` prints one JSON document; `tail --json` prints one per event. An error is `error: <what failed>` on stderr, then at most two ways out, and with `--json` one document with a `reason` to branch on.
