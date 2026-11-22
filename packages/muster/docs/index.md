@@ -29,8 +29,7 @@ mu inspect
 - **Things that happen while nobody types.** Schedules send messages later;
   watchers wake an agent when something happens.
 - **The outside world.** GitHub, Linear and Slack threads sync in and out.
-  GitHub and Slack sync have been run against the live services; Linear not
-  yet.
+  All three have been run against the live services.
 - **Agents started for you.** `mu run` starts Claude Code, Codex, or any
   command on a task, here or, experimentally, in a cloud sandbox.
 

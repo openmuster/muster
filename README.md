@@ -80,8 +80,8 @@ agent died goes back to the queue on its own.
   something happens, such as a task blocked on your answer. On the main
   branch, in no release yet
   ([Outgoing webhooks](./packages/muster/docs/01-concepts/15-outgoing-webhooks.md)).
-- **Sync** with GitHub, Linear and Slack, by webhook. GitHub and Slack have
-  been run against the live services; Linear not yet.
+- **Sync** with GitHub, Linear and Slack, by webhook. All three have been
+  run against the live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
 - **Skills** that teach an agent the board: `mu skills install`.
@@ -105,7 +105,7 @@ been used against the real thing, and what has not.
 | `mu run --runner cloudflare` and its Worker template | Written from documentation; never deployed |
 | Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author |
 | Sync with Slack | Run against a live workspace on 22 Nov 2026, through a public tunnel: the URL check, a channel message becoming a thread, replies both ways, edits and deletes both ways, a thread started on the board posted to the channel, `--no-sync` kept on the board, the app's own messages not imported back, and a signed request more than five minutes old refused. No faults found. Not tried live: a Slack reply inside a thread the board started, which a test covers |
-| Sync with Linear | Tested against payloads written by hand from Linear's documentation; never against the live service |
+| Sync with Linear | Run against a live workspace on 22 Nov 2026, through a public tunnel, with a personal API key: an issue becoming a thread, comments as replies, comment edits and deletes, state changes as the `state` label, a board reply posted as a comment, and a thread started on the board opening an issue. No faults found. Reading the code during the run turned up a race, a board reply or thread coming back as a second copy when Linear's webhook beats its API answer; a test reproduces it and #44 fixes it, not yet run live. Not tried live: an OAuth app, and a forged webhook refused, which a test covers |
 | `mu mcp` | Used once with Claude Code as the client |
 | MCP over HTTP on `mu serve` | Connected once with Claude Code as the client; no other client was tried |
 | `mu join` | Run once: a request approved from the inspector, and the waiting agent got its token |
