@@ -12,11 +12,6 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 > `templates/cloudflare-runner` have never been deployed. Treat both as
 > experimental.
 
-> [!NOTE]
-> `mu run` inside the sandbox and a token made for each run are in the
-> 0.2.0-alpha.1 pre-release. In 0.1.2 the sandbox runs the agent alone, and
-> you make its token and set `MUSTER_AGENT_TOKEN`.
-
 ## What a sandbox needs
 
 A sandbox can't open your board's file. It reaches the board over HTTP, so the

@@ -5,7 +5,7 @@ description: GitHub, Linear and Slack threads on the board, in both directions.
 
 > [!WARNING]
 > GitHub sync has been run against a live repository, and the two faults that
-> run found are fixed after 0.2.0-alpha.2. Linear and Slack have not been run
+> run found are fixed in 0.2.0. Linear and Slack have not been run
 > against the live services yet: their tests use signatures and payloads
 > written by hand from each platform's documentation. Expect faults on a first
 > real run.

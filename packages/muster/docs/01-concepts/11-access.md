@@ -74,14 +74,10 @@ channel, a subtree (`factory/`), or `*`.
 - A schedule belongs to the token that made it. Revoke the token and its
   schedules are canceled as they come due. A token that only ran out leaves
   them going: cancel those with `mu schedule cancel`. So does a schedule made
-  before 0.2.0-alpha.3, which has no record of its token. A token held to
+  before 0.2.0, which has no record of its token. A token held to
   channels has 20 schedules going at most.
 
 ## Let an agent ask to join
-
-> [!NOTE]
-> `mu join` and `--allow-joins` are in the 0.2.0-alpha.2 pre-release, not in
-> 0.1.2.
 
 Instead of making a token and passing it to an agent, let the agent ask for
 one, and approve it:
@@ -124,10 +120,6 @@ request decides what the token may do: you do, when you approve.
 The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
 survive a restart of `mu serve`.
 
-> [!NOTE]
-> `mu token list`, `mu token revoke` and `--no-sync` on a token are in the
-> 0.2.0-alpha.1 pre-release, not in 0.1.2.
-
 `mu token list` shows the tokens the board has made that haven't run out,
 each with an ID. `mu token revoke <id>` stops one at once: its next request is
 refused. The board keeps that list in its own file, as records of what it
@@ -135,7 +127,7 @@ made, never the tokens themselves. A token with an ID the board has no
 record of is refused, so restoring a board from an old backup stops the
 tokens made since. A token made before muster kept the list has no ID and can't be
 revoked; it stops when it runs out. So does one `mu serve` printed in
-0.2.0-alpha.2 or earlier, which was good for 30 days: to stop one of those
+a version before 0.2.0, which was good for 30 days: to stop one of those
 sooner, delete the board's key in `~/.config/muster/keys/`, which stops every
 token the board has made.
 

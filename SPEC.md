@@ -314,7 +314,7 @@ through a tunnel, and a probe that tried the board's allowed and refused
 routes and the model's host from inside. That run found three faults the
 stand-ins had passed. What has changed in the runner since (hosts closed after
 setup, the model's host held to its inference calls, nothing kept afterwards)
-has not been run for real yet. 0.1.2 was released with them on that basis.
+has not been run for real yet. They were released on that basis.
 
 Different from the plan:
 

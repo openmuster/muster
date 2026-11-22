@@ -8,7 +8,7 @@ RUN apt-get update \
 
 # One release, by its version: an image built twice is the same image, and "latest" is whatever was
 # published last. Check the tarball against that release's SHA256SUMS when you change this.
-ARG MUSTER_VERSION=0.1.2
+ARG MUSTER_VERSION=0.2.0
 RUN npm install --global https://github.com/openmuster/muster/releases/download/v${MUSTER_VERSION}/muster-${MUSTER_VERSION}.tgz
 
 # The agent you run, at a version you chose: `npm view @anthropic-ai/claude-code version` says the

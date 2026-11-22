@@ -5,6 +5,14 @@ versions are affected.
 
 ## Unreleased
 
+## 0.2.0
+
+The first release since 0.1.2 that the install line gives: everything that
+went out in the 0.2.0-alpha.1 and 0.2.0-alpha.2 pre-releases, and what is
+listed here. From now on there is one line of releases, and no 0.1.x: the
+older releases have been removed, because every one of them has the faults
+under Security below.
+
 ### Security
 
 Affects 0.1.0 to 0.2.0-alpha.2, for anyone who serves a board with

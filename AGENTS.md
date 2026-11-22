@@ -56,9 +56,11 @@ which npm installs from its URL (`src/version.ts` builds that URL).
    `CHANGELOG.md`, so write it before tagging: for people who use muster,
    and for a security fix, which versions it affects.
 
-Versions: `0.1.x` is for security fixes and for fixing claims that were
-wrong. Everything else goes out as a pre-release, `0.2.0-alpha.N`; a version
-with a `-` in it is marked as one and never becomes "latest".
+Versions: there is one line, `main`, and each release from it is the one the
+install line gives. Only the latest release gets fixes: a security fix is a
+new release, never a patch to an old one. A version with a `-` in it
+(`0.3.0-alpha.1`) is marked a pre-release and never becomes "latest"; use one
+only for something to be tried before it is what everyone installs.
 
 `.github/workflows/check.yml` runs `pnpm check` on every pull request and on
 `main`, on the oldest Node muster supports, on the current one, and on macOS.

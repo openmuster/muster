@@ -3,10 +3,6 @@ title: Outgoing webhooks
 description: Send a signed HTTP request to a service of yours when something happens on the board.
 ---
 
-> [!NOTE]
-> Outgoing webhooks are on the main branch and in no release yet: not in
-> 0.2.0-alpha.2, and not in 0.1.2.
-
 ## What one is
 
 ```mermaid
