@@ -95,6 +95,26 @@ describe('mu run in a cloud sandbox', () => {
     expect(again.at(-1).args[1]).not.toContain('--bypass-permissions')
   })
 
+  it('vercel: signs in with VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, which the SDK only takes when they are passed, and never puts them in the sandbox', async () => {
+    const dir = tempDir()
+    const log = join(dir, 'sdk.log')
+    mkdirSync(join(dir, 'sdk'))
+    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nexport const Sandbox = { async create(options) { appendFileSync(${JSON.stringify(log)}, JSON.stringify(options) + '\\n'); return { sandboxId: 'sbx_43', runCommand: async () => {}, update: async () => {}, stop: async () => {} } } }\n`)
+    const sdk = { MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') }
+    const vercelToken = 'vcp_not_a_real_token_0123456789'
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--json'], { env: { ...board, ...sdk, VERCEL_TOKEN: vercelToken, VERCEL_TEAM_ID: 'team_abc', VERCEL_PROJECT_ID: 'prj_def' } })
+    const { readFileSync } = await import('node:fs')
+    const [created] = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    expect(created).toMatchObject({ token: vercelToken, teamId: 'team_abc', projectId: 'prj_def' })
+    expect(JSON.stringify(created.env)).not.toContain(vercelToken)
+
+    // Only some of the three is a config error, said before a sandbox is made, not the SDK's OIDC message.
+    const partial = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--json'], { env: { ...board, ...sdk, VERCEL_TOKEN: vercelToken } })
+    expect(JSON.parse(partial.stderr).error).toMatchObject({ reason: 'runner_not_configured' })
+    expect(JSON.parse(partial.stderr).error.message).toMatch(/VERCEL_TEAM_ID.*VERCEL_PROJECT_ID/)
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(1)
+  })
+
   it('with --ready the sandbox is a worker that takes tasks itself until none is ready', async () => {
     const dir = tempDir()
     const log = join(dir, 'sdk.log')

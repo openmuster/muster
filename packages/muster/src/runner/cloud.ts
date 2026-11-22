@@ -30,9 +30,12 @@ export type CloudRunner = { name: string; start(request: CloudRequest): Promise<
 export type VercelRule = { match?: { path?: { regex: string }; method?: string[] }; transform: { headers: Record<string, string> }[] } | { response: { statusCode: number } }
 export type VercelPolicy = { allow: Record<string, VercelRule[]> }
 
+/** A Vercel access token with the team and project it is for. The SDK takes these only as arguments, never from the environment. */
+export type VercelCredentials = { token: string; teamId: string; projectId: string }
+
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
-  create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } }): Promise<{
+  create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>): Promise<{
     sandboxId?: string
     name?: string
     runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<unknown>
@@ -72,7 +75,7 @@ async function end(sandbox: Awaited<ReturnType<VercelSandbox['create']>>): Promi
  * `setupHosts` are open while the setup commands run, which are ours, and closed before the agent
  * starts. `allowHosts` stay open to the agent, so each one is a way out of the sandbox: add few.
  */
-export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string }): CloudRunner {
+export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string; credentials?: VercelCredentials }): CloudRunner {
   return {
     name: 'vercel',
     async start(request) {
@@ -94,6 +97,8 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const during: Record<string, VercelRule[]> = { ...allow }
       if (setup.length) for (const host of options.setupHosts ?? []) during[host] ??= []
       const sandbox = await options.Sandbox.create({
+        // Without these the SDK signs in with VERCEL_OIDC_TOKEN. They go to Vercel's API, never into the sandbox.
+        ...options.credentials,
         networkPolicy: { allow: during },
         image: options.image ?? VERCEL_IMAGE,
         // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.

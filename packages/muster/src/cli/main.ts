@@ -1393,7 +1393,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
       throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
     }
     // GitHub is open only while mu installs; the agent starts with it closed.
-    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS })
+    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env) })
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
@@ -1452,6 +1452,18 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200) } }).catch(() => {})
   print(run, { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }, () => `started  ${task ? `#${task}` : ready}  ${runner.name} ${started.id}`)
   return 0
+}
+
+/**
+ * A Vercel token, team and project from the environment. @vercel/sandbox takes them only as arguments, so
+ * they are read here. None of the three leaves it to the SDK's own sign-in, a linked project's VERCEL_OIDC_TOKEN.
+ */
+function vercelCredentials(env: NodeJS.ProcessEnv) {
+  const names = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'] as const
+  const missing = names.filter((name) => !env[name])
+  if (missing.length === names.length) return undefined
+  if (missing.length) throw new Failure('runner_not_configured', `The Vercel runner signs in with VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID together, and ${missing.join(' and ')} ${missing.length === 1 ? "isn't" : "aren't"} set.`, { hint: 'Set all three, or none and use a linked project\'s VERCEL_OIDC_TOKEN.' })
+  return { token: env.VERCEL_TOKEN!, teamId: env.VERCEL_TEAM_ID!, projectId: env.VERCEL_PROJECT_ID! }
 }
 
 function fail(io: Io, json: boolean, error: unknown): number {
