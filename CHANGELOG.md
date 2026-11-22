@@ -15,6 +15,15 @@ versions are affected.
   platform's token for a board token that lives 15 minutes unless the trust
   says otherwise, an hour at most. Off unless that file names a workload.
 
+### Fixed
+
+- Sync: a reply sent to a platform could come back as a second copy when the
+  platform's webhook for it arrived before its answer to the board did. With
+  no `bot` set, as with a Linear personal API key, nothing else stopped it.
+  Webhooks for a platform now wait while a delivery to it is out, and are
+  imported as soon as it is recorded. A platform that doesn't answer within
+  30 seconds counts as a failed try.
+
 ## 0.2.0
 
 The first release since 0.1.2 that the install line gives: everything that

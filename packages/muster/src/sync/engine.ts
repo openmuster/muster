@@ -12,6 +12,21 @@ export type Sync = Record<string, Provider>
 const board: By = { principal: 'board', profile: null }
 
 /**
+ * Platforms with a delivery out, per database. While the board waits for a platform to answer, it
+ * cannot know the ID of what it made there, so that thing's own webhook would look new: imports for
+ * the platform wait in the inbox until the answer is recorded.
+ */
+const sending = new WeakMap<object, Map<string, number>>()
+const isSending = (ctx: Context, key: string) => (sending.get(ctx.db)?.get(key) ?? 0) > 0
+function markSending(ctx: Context, key: string, by: 1 | -1) {
+  let keys = sending.get(ctx.db)
+  if (!keys) sending.set(ctx.db, (keys = new Map()))
+  const count = (keys.get(key) ?? 0) + by
+  if (count > 0) keys.set(key, count)
+  else keys.delete(key)
+}
+
+/**
  * Takes a platform's webhook: checks it is the platform's, stores what it carried, and only then
  * answers. A stored event is imported right away, and again by the ticker if that fails.
  */
@@ -55,7 +70,7 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
   for (const row of rows) {
     if (only !== undefined && row.key !== only) continue
     const provider = sync[row.key]
-    if (!provider) continue
+    if (!provider || isSending(ctx, row.key)) continue
     const event = JSON.parse(row.payload) as Inbound
     const lane = `${row.key}\n${event.thread}`
     if (stuck.has(lane)) continue
@@ -217,7 +232,13 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
-        const sent = await provider.deliver(message, { place, threadExternal }, fetcher)
+        markSending(ctx, key, 1)
+        let sent: Awaited<ReturnType<Provider['deliver']>>
+        try {
+          sent = await provider.deliver(message, { place, threadExternal }, fetcher)
+        } finally {
+          markSending(ctx, key, -1)
+        }
         ctx.db.write(() => {
           const at = ctx.now().toISOString()
           append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, at)
@@ -247,6 +268,8 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         cursor = event.seq
       }
     }
+    // What the platform sent while it was being written to waited; its answers are recorded now.
+    importPending(ctx, sync, key)
   }
   return { delivered, failed }
 }

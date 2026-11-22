@@ -268,6 +268,32 @@ describe('sync: Linear', () => {
     const { backend } = setup()
     expect((await backend.syncReceive('lin', { headers: { 'linear-signature': 'deadbeef' }, body: '{}' })).status).toBe(401)
   })
+
+  it("a board reply's own webhook, arriving before Linear has answered, does not come back as a second reply", async () => {
+    // With a personal API key the key's user is a person, so there is no bot to tell the board's own comments apart.
+    let backend: ReturnType<typeof file>
+    let delivery = 0
+    const send = (payload: unknown) => {
+      const body = JSON.stringify(payload)
+      return backend.syncReceive('lin', { headers: { 'linear-delivery': `l-${++delivery}`, 'linear-signature': sign(SECRET, body) }, body })
+    }
+    const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      // Linear's webhook for the new comment reaches the board before the API call returns.
+      await send({ type: 'Comment', action: 'create', data: { id: 'lc-1', body: body.variables.input.body, issueId: 'iss-1', userId: 'u-ada', issue: { team: { key: 'ENG' } } } })
+      // And someone else's comment, which must still come in.
+      await send({ type: 'Comment', action: 'create', data: { id: 'lc-2', body: 'thanks', issueId: 'iss-1', userId: 'u-nico', issue: { team: { key: 'ENG' } } } })
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: 'lc-1' } } } })
+    }) as typeof fetch
+    backend = file({ memory: true, principal: 'local:user:ada', now: clock().now, sync: { lin: linear({ secret: SECRET, token: 'lin_api_key', teams: { ENG: 'eng' } }) }, fetch: fetcher })
+    const team = board({ backend })
+    await backend.syncTick()
+    await send({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'flaky login', team: { key: 'ENG' }, creatorId: 'u-ada', state: { name: 'Todo' } } })
+    const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+    await team.reply({ to: root.id, text: 'looking' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1 })
+    expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['looking', 'thanks'])
+  })
 })
 
 describe('sync: Slack', () => {

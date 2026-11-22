@@ -8,8 +8,11 @@ const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(
 const bad = () => new Failure('unauthorized', 'bad signature')
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'run'
 
+/** How long a platform has to answer. A delivery out holds that platform's imports, so it can't hang. */
+const SEND_MS = 30_000
+
 async function send(fetcher: typeof fetch, url: string, init: RequestInit): Promise<any> {
-  const response = await fetcher(url, init)
+  const response = await fetcher(url, { signal: AbortSignal.timeout(SEND_MS), ...init })
   const body = (await response.json().catch(() => ({}))) as any
   if (!response.ok) throw new Failure(`platform_${response.status}`, `The platform answered ${response.status}.`)
   return body
