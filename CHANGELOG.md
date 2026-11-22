@@ -5,6 +5,16 @@ versions are affected.
 
 ## Unreleased
 
+### Added
+
+- A CI job can sign in to a served board with the OIDC token its platform
+  gives it, so there is no board token to store and rotate. The owner names
+  the workloads in `~/.config/muster/oidc.json`: the issuer, an audience, the
+  token's `sub` (exactly, or a prefix ending in `*` after a `:` or `/`), and
+  the profile and channels the job gets. `mu token exchange` trades the
+  platform's token for a board token that lives 15 minutes unless the trust
+  says otherwise, an hour at most. Off unless that file names a workload.
+
 ## 0.2.0
 
 The first release since 0.1.2 that the install line gives: everything that
@@ -124,6 +134,10 @@ except by the inspector and the swarm template, which are marked.
 
 - The guides say what a usage limit leaves behind: the task is `failed`, and
   `mu tasks reopen` readies it again.
+- A claim's token settles a task only for the caller that holds the claim,
+  the same principal and profile. Before, the token alone was enough for
+  anyone who could reach the task. The CLI already kept a token per holder,
+  so nothing that used it changes.
 
 ### Fixed
 
@@ -171,13 +185,6 @@ except by the inspector and the swarm template, which are marked.
   for every open task and the last active of any state.
 - `mu read <id>` ignored `--text`, `--before`, `--limit` and `--cursor`,
   which are for a channel's threads. It refuses them and says so.
-
-### Changed
-
-- A claim's token settles a task only for the caller that holds the claim,
-  the same principal and profile. Before, the token alone was enough for
-  anyone who could reach the task. The CLI already kept a token per holder,
-  so nothing that used it changes.
 
 ## 0.2.0-alpha.2
 

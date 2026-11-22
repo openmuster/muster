@@ -101,6 +101,8 @@ serve
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
        [--no-sync]
   token list | token revoke <id>
+  token exchange [-]             a CI job's own OIDC token for a board token:
+                                 on stdin with -, or in MUSTER_OIDC_TOKEN
   join <board url> --as <name>   ask a served board for a token, and wait
        [--note <text>] [--timeout 10m]
   join list | join deny <code>

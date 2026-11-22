@@ -28,6 +28,8 @@ export type Backend = {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
     list(): Promise<{ tokens: TokenRecord[] }>
     revoke(request: { id: string }): Promise<{ revoked: string }>
+    /** A workload's own token, signed by its platform, for a board token: on a served board whose owner trusts that workload. */
+    exchange(request: { token: string }): Promise<{ token: string; record: TokenRecord; trust: string }>
   }
   /** The board's own requests to join, where it keeps them: what `mu serve` answers them from. */
   joinStore?: () => Joins

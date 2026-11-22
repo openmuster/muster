@@ -1,3 +1,4 @@
+import { OIDC_LIVE_MAX, verifier, type Trust } from './oidc.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Backend } from '../backend/types.ts'
 import { VERSION } from '../version.ts'
@@ -74,6 +75,12 @@ export type ServeOptions = {
   mcp?: (message: unknown, as: { token: string; profile: string | null }) => Promise<object | null>
   /** Whether an agent with no token may ask to join. Off unless the owner says so. */
   allowJoins?: boolean
+  /** The workloads the owner trusts to sign in with their platform's token. None unless the owner names some. */
+  oidc?: readonly Trust[]
+  /** How the board reaches an issuer for its keys. Default: `fetch`. */
+  fetch?: typeof fetch
+  /** Where the board says what only its owner should read, such as why an issuer's keys couldn't be fetched. */
+  log?: (line: string) => void
 }
 
 /**
@@ -93,12 +100,16 @@ export function createHandler(options: ServeOptions) {
     if (claims.jti && tokens.revoked(claims.jti)) throw new Failure('unauthorized', 'That token was revoked.', { hint: 'Get a new one from whoever runs the board.' })
     return claims
   }
+  const workloads = options.oidc?.length ? verifier(options.oidc, { now, ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.log ? { log: options.log } : {}) }) : null
+  // When each workload's board tokens run out, so one job in a loop can't use up what the board keeps.
+  const live = new Map<string, number[]>()
+  // A workload's file allowance is its trust's, not one for each token it trades for: a job can't sign in again for more room.
   const callerOf = (req: IncomingMessage): Caller => {
     const claims = claimsOf(req)
     const asked = req.headers['x-muster-profile']
     // A token held to a profile writes as that profile, whatever the request asks for.
     const profile = claims.profile ?? (typeof asked === 'string' && asked.length > 0 ? profileName(asked) : null)
-    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.jti ?? claims.profile ?? '' } : {}), ...(claims.noSync ? { noSync: true as const } : {}), ...(claims.jti ? { token: claims.jti } : {}) }
+    return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.sub.startsWith('oidc:') ? '' : (claims.jti ?? claims.profile ?? '') } : {}), ...(claims.noSync ? { noSync: true as const } : {}), ...(claims.jti ? { token: claims.jti } : {}) }
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -140,6 +151,26 @@ export function createHandler(options: ServeOptions) {
         }
         if (typeof given.code !== 'string' || typeof given.secret !== 'string') throw misuse('invalid_code', 'Send the code and the secret the request answered with.')
         return send(res, 200, { ok: store.poll(given.code, given.secret) })
+      }
+      // A workload signs in with its platform's token, which is all it has: it is checked against the
+      // owner's trusts, and what it gets is a board token like any other, held to what the trust says.
+      if (route === 'tokenExchange') {
+        if (req.method !== 'POST') throw misuse('method_not_allowed', 'Board routes take POST.')
+        if (!workloads) throw new Failure('exchange_closed', "This board takes no workload's token.", { hint: 'Ask whoever runs it for a token, or to name your workload in its oidc.json.' })
+        const [request] = ((await bodyOf(req, 16 * 1024)) as { args?: unknown[] } | null)?.args ?? []
+        const { trust, release } = await workloads((request as { token?: unknown } | null)?.token)
+        try {
+          const at = Math.floor(now() / 1000)
+          const held = (live.get(trust.name) ?? []).filter((exp) => exp > at)
+          if (held.length >= OIDC_LIVE_MAX) throw new Failure('too_many_tokens', `"${trust.name}" holds ${OIDC_LIVE_MAX} tokens that still work, which is the most one workload has at once.`, { hint: 'They run out on their own. A job needs one, and can use it for every command.' })
+          const made = mintToken(options.key, tokens, { principal: `oidc:${trust.name}`, claims: null, workload: true }, { profile: trust.as, can: trust.can, ttl: trust.ttl, ...(trust.noSync ? { noSync: true } : {}) }, now())
+          live.set(trust.name, [...held, made.record.exp])
+          return send(res, 200, { ok: { token: made.token, record: made.record, trust: trust.name } })
+        } catch (error) {
+          // No board token came of it, so the job's token isn't spent.
+          release()
+          throw error
+        }
       }
       const caller = callerOf(req)
       if (route === 'whoami' && req.method === 'GET') return send(res, 200, { ok: { principal: caller.principal, profile: caller.profile, can: caller.can ?? null, exp: claimsOf(req).exp } })
