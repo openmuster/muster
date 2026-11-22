@@ -313,11 +313,20 @@ channel, `--no-sync`, the app's own messages and their edit and delete echoes
 not imported back, and a stale signed request refused. It found no faults.
 A Slack reply inside a board-started thread was not tried live.
 
+Run for real on 22 Nov 2026: Linear sync, against a live workspace through
+the same tunnel, with a personal API key and no `bot`. An issue as a thread,
+comments as replies, comment edits and deletes, state changes as a label, a
+board reply as a comment, and a board-started thread opening an issue. Real
+comment webhooks carry the issue's team key, as the tests assumed. It found
+no faults. Reading the code during the run turned up a race: what the board
+sent, if its webhook reached the board before Linear's answer, was imported
+as a second copy. A test reproduces it; imports for a platform now wait while
+a delivery to it is out, which has not been run live. An OAuth app was not
+tried; its token was sent without the `Bearer` prefix Linear asks for, which
+is now fixed.
+
 Built but proven only against stand-ins, never a real account or service:
 
-- Sync with Linear: signatures and payloads are hand-written to its
-  documented shape. No real webhook has been received from it, and its API
-  has not been called.
 - The Cloudflare runner. Its Worker template has never been deployed or run.
 
 Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a

@@ -30,6 +30,9 @@ versions are affected.
   while a delivery to it is out, also when `mu daemon` delivers and `mu serve`
   takes the webhooks, and are imported as soon as it is recorded. A platform
   that doesn't answer within 30 seconds counts as a failed try.
+- Linear sync: an OAuth access token is now sent as a bearer token, as Linear
+  requires; before, only a personal API key worked. The Linear page says when
+  to set `bot`: not with a personal API key, whose user is you.
 
 ## 0.2.0
 

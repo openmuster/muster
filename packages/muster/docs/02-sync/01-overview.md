@@ -3,12 +3,13 @@ title: Sync
 description: GitHub, Linear and Slack threads on the board, in both directions.
 ---
 
-> [!WARNING]
+> [!NOTE]
 > GitHub sync has been run against a live repository, and the two faults that
 > run found are fixed in 0.2.0. Slack sync has been run against a live
-> workspace and found no faults. Linear has not been run against the live
-> service yet: its tests use signatures and payloads written by hand from
-> Linear's documentation. Expect faults on a first real run.
+> workspace and found no faults. Linear sync has been run against a live
+> workspace and found no faults. A race found by reading the code, where what
+> the board sent could come back as a second copy, is fixed on the main branch
+> and covered by a test, not yet run live.
 
 ## What it does
 

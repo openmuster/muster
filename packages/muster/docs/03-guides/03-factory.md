@@ -41,10 +41,9 @@ The template's `sync.json` brings threads in and sends nothing back. To have
 the agent's replies posted as comments, give the repository `"mirror": true`
 and the file a `"token"`: see [GitHub](../02-sync/02-github.md).
 
-> [!WARNING]
-> GitHub and Slack sync have been run against the live services. Linear sync
-> has not been run against the live service yet: see
-> [Sync](../02-sync/01-overview.md).
+> [!NOTE]
+> GitHub, Linear and Slack sync have all been run against the live services:
+> see [Sync](../02-sync/01-overview.md).
 
 ```bash
 cd templates/factory

@@ -230,7 +230,10 @@ export function linear(options: LinearOptions): Provider {
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
     async deliver(message, target, fetcher) {
-      const post = (query: string, variables: unknown) => send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: options.token!, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+      // A personal API key goes as it is; an OAuth token is a bearer token.
+      const token = options.token!
+      const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
+      const post = (query: string, variables: unknown) => send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
       if (target.threadExternal === null) {
         const found = await post('query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }', { key: target.place })
         const teamId = found?.data?.teams?.nodes?.[0]?.id
@@ -243,11 +246,7 @@ export function linear(options: LinearOptions): Provider {
         const labels: Record<string, string> = { kind: 'issue', ...(created.identifier ? { ref: String(created.identifier) } : {}), ...(created.state?.name ? { state: slug(String(created.state.name)) } : {}) }
         return { external: `issue:${issue}`, thread: `issue:${issue}`, labels }
       }
-      const made = await send(fetcher, options.api ?? 'https://api.linear.app/graphql', {
-        method: 'POST',
-        headers: { authorization: options.token!, 'content-type': 'application/json' },
-        body: JSON.stringify({ query: 'mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', variables: { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: message.text } } }),
-      })
+      const made = await post('mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: message.text } })
       const id = made?.data?.commentCreate?.comment?.id
       if (!id) throw new Failure('platform_refused', 'Linear did not make the comment.')
       return { external: `comment:${id}` }

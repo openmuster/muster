@@ -29,7 +29,7 @@ function setup(options: { mirror?: boolean; fail?: () => boolean } = {}) {
   }) as typeof fetch
   const sync = {
     gh: github({ secret: SECRET, token: 'ghs_token', bot: 'muster[bot]', repos: { 'acme/web': { issues: 'web/issues', pulls: 'web/prs', mirror: options.mirror === true }, 'acme/api': 'api' } }),
-    lin: linear({ secret: SECRET, token: 'lin_token', bot: 'bot-user', teams: { ENG: 'eng' } }),
+    lin: linear({ secret: SECRET, token: 'lin_api_token', bot: 'bot-user', teams: { ENG: 'eng' } }),
     chat: slack({ secret: SECRET, token: 'xoxb', bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }),
   }
   const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
@@ -259,7 +259,7 @@ describe('sync: Linear', () => {
     expect(root).toMatchObject({ text: 'CVE-2026-1\n\nbump the parser', by: { principal: 'lin:user:u-nico' }, labels: { ref: 'ENG-42', state: 'in-progress' } })
     await team.as('fixer').reply({ to: root.id, text: 'all 3.x' })
     expect(await backend.syncTick()).toMatchObject({ delivered: 1 })
-    expect(sent[0]).toMatchObject({ url: 'https://api.linear.app/graphql', auth: 'lin_token', body: { variables: { input: { issueId: 'iss-1', body: 'all 3.x' } } } })
+    expect(sent[0]).toMatchObject({ url: 'https://api.linear.app/graphql', auth: 'lin_api_token', body: { variables: { input: { issueId: 'iss-1', body: 'all 3.x' } } } })
     await lin({ type: 'Comment', action: 'create', data: { id: 'lc-9001', body: 'all 3.x', issueId: 'iss-1', userId: 'bot-user', issue: { team: { key: 'ENG' } } } })
     expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['which versions?', 'all 3.x'])
   })
@@ -306,6 +306,18 @@ describe('sync: Linear', () => {
     expect((await texts(team, 'eng')).sort()).toEqual(['docs are stale', 'flaky login'])
     serve.close()
     daemon.close()
+  })
+
+  it('sends a personal API key as it is and an OAuth token as a bearer token', async () => {
+    const auth: (string | null)[] = []
+    const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      auth.push(new Headers(init?.headers).get('authorization'))
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${auth.length}` } } } })
+    }) as typeof fetch
+    const target = { place: 'ENG', threadExternal: 'issue:iss-1' }
+    const message = { text: 'hi' } as Parameters<ReturnType<typeof linear>['deliver']>[0]
+    for (const token of ['lin_api_key', 'lin_oauth_token', 'Bearer lin_oauth_token']) await linear({ secret: SECRET, token, teams: { ENG: 'eng' } }).deliver(message, target, fetcher)
+    expect(auth).toEqual(['lin_api_key', 'Bearer lin_oauth_token', 'Bearer lin_oauth_token'])
   })
 })
 
