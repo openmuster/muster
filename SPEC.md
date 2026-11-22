@@ -306,11 +306,18 @@ labels, and an issue opened while the board was down arrived with no title
 and its first comment twice. Both are fixed. Approving a pull request was not
 tried.
 
+Run for real on 22 Nov 2026: Slack sync, against a live workspace reached
+through the same tunnel. The URL check, a channel message as a thread, replies,
+edits and deletes in both directions, a board-started thread posted to the
+channel, `--no-sync`, the app's own messages and their edit and delete echoes
+not imported back, and a stale signed request refused. It found no faults.
+A Slack reply inside a board-started thread was not tried live.
+
 Built but proven only against stand-ins, never a real account or service:
 
-- Sync with Linear and Slack: signatures and payloads are hand-written to each
-  platform's documented shape. No real webhook has been received from either,
-  and neither's API has been called.
+- Sync with Linear: signatures and payloads are hand-written to its
+  documented shape. No real webhook has been received from it, and its API
+  has not been called.
 - The Cloudflare runner. Its Worker template has never been deployed or run.
 
 Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a

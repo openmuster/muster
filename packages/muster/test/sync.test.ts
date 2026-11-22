@@ -294,6 +294,40 @@ describe('sync: Slack', () => {
     expect((await chat({ type: 'event_callback', event_id: 'old', event: { type: 'message', channel: 'C123', user: 'U1', text: 'replayed', ts: '1' } }, -301)).status).toBe(401)
     expect((await chat({ type: 'event_callback', event_id: 'ok', event: { type: 'message', channel: 'C123', user: 'U1', text: 'fresh', ts: '2' } }, -10)).status).toBe(200)
   })
+
+  // The run against a live workspace on 22 Nov 2026, step by step, with the echoes Slack sends back.
+  it('a thread started on the board takes Slack replies; a board edit or delete reaches the Slack copy and its echo changes nothing; --no-sync stays on the board; another bot is imported', async () => {
+    const { team, chat, backend, sent } = setup()
+    await backend.syncTick()
+    const root = await team.post({ channel: 'general', text: 'new thread started on the board' })
+    await team.post({ channel: 'general', text: 'board-only note', noSync: true })
+    await backend.syncTick()
+    expect(sent.map((each) => each.body.text)).toEqual(['new thread started on the board'])
+    const rootTs = '1700000000.9001'
+    await chat({ type: 'event_callback', event_id: 'J1', event: { type: 'message', channel: 'C123', user: 'U1', text: 'reply from slack', ts: '1700000001.0001', thread_ts: rootTs } })
+    const mine = await team.reply({ to: root.id, text: 'reply on the board-started thread' })
+    await backend.syncTick()
+    expect(sent.at(-1)).toMatchObject({ url: 'https://slack.com/api/chat.postMessage', body: { channel: 'C123', thread_ts: rootTs, text: 'reply on the board-started thread' } })
+    const mineTs = '1700000000.9002'
+    // Slack tells the app about its own post, and about the edit to it.
+    await chat({ type: 'event_callback', event_id: 'J2', event: { type: 'message', channel: 'C123', bot_id: 'B0BOT', text: 'reply on the board-started thread', ts: mineTs, thread_ts: rootTs } })
+    await team.edit({ id: mine.id, text: 'edited on the board' })
+    await backend.syncTick()
+    expect(sent.at(-1)).toMatchObject({ url: 'https://slack.com/api/chat.update', body: { channel: 'C123', ts: mineTs, text: 'edited on the board' } })
+    await chat({ type: 'event_callback', event_id: 'J3', event: { type: 'message', subtype: 'message_changed', channel: 'C123', ts: '1700000002.0001', message: { bot_id: 'B0BOT', text: 'edited on the board', ts: mineTs, thread_ts: rootTs } } })
+    await team.remove({ id: mine.id })
+    await backend.syncTick()
+    expect(sent.at(-1)).toMatchObject({ url: 'https://slack.com/api/chat.delete', body: { channel: 'C123', ts: mineTs } })
+    const before = sent.length
+    expect((await chat({ type: 'event_callback', event_id: 'J4', event: { type: 'message', subtype: 'message_deleted', channel: 'C123', ts: '1700000003.0001', deleted_ts: mineTs, previous_message: { bot_id: 'B0BOT', ts: mineTs, thread_ts: rootTs } } })).status).toBe(200)
+    await chat({ type: 'event_callback', event_id: 'J5', event: { type: 'message', channel: 'C123', bot_id: 'B0OTHER', text: 'deploy finished', ts: '1700000004.0001' } })
+    await backend.syncTick()
+    expect(sent).toHaveLength(before)
+    expect((await team.readThread({ id: root.id })).replies.map((reply) => [reply.text, reply.by.principal])).toEqual([['reply from slack', 'chat:user:U1']])
+    const threads = (await team.readChannel({ channel: 'general' })).threads.map((thread) => [thread.message.text, thread.message.by.principal])
+    expect(threads).toContainEqual(['deploy finished', 'chat:user:B0OTHER'])
+    expect(threads.map(([text]) => text).sort()).toEqual(['board-only note', 'deploy finished', 'new thread started on the board'])
+  })
 })
 
 describe('sync: edits, deletes, filters and catching up', () => {
