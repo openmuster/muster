@@ -5,11 +5,20 @@ import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
 import type { By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
-import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, type Inbound, type Provider, type Received } from './types.ts'
+import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
 
 export type Sync = Record<string, Provider>
 
 const board: By = { principal: 'board', profile: null }
+
+/** A delivery older than this is from a process that died mid-send, and no longer holds imports. */
+const SENDING_STALE_MS = 2 * SEND_MS
+
+/** Whether a delivery to this platform is out, from this process or another on the same board. */
+function isSending(ctx: Context, key: string) {
+  const after = new Date(ctx.now().getTime() - SENDING_STALE_MS).toISOString()
+  return ctx.db.raw.prepare('select 1 from sending where key = ? and since > ?').get(key, after) !== undefined
+}
 
 /**
  * Takes a platform's webhook: checks it is the platform's, stores what it carried, and only then
@@ -55,7 +64,7 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
   for (const row of rows) {
     if (only !== undefined && row.key !== only) continue
     const provider = sync[row.key]
-    if (!provider) continue
+    if (!provider || isSending(ctx, row.key)) continue
     const event = JSON.parse(row.payload) as Inbound
     const lane = `${row.key}\n${event.thread}`
     if (stuck.has(lane)) continue
@@ -217,8 +226,11 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
+        ctx.db.write(() => ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString()))
         const sent = await provider.deliver(message, { place, threadExternal }, fetcher)
         ctx.db.write(() => {
+          // Recorded and released at once: a webhook for it, imported after this, finds the link.
+          ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
           const at = ctx.now().toISOString()
           append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, at)
           if (isRoot && sent.labels) {
@@ -233,6 +245,7 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         cursor = event.seq
         delivered++
       } catch (error) {
+        ctx.db.write(() => ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq))
         failed++
         const attempts = ((ctx.db.raw.prepare('select attempts from outbox_attempts where key = ? and seq = ?').get(key, event.seq) as { attempts: number } | undefined)?.attempts ?? 0) + 1
         if (attempts < DELIVERY_ATTEMPTS) {
@@ -247,6 +260,8 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         cursor = event.seq
       }
     }
+    // What the platform sent while it was being written to waited; its answers are recorded now.
+    importPending(ctx, sync, key)
   }
   return { delivered, failed }
 }

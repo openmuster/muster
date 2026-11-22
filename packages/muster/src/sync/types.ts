@@ -65,4 +65,8 @@ export type ProviderExtras = {
 }
 
 export const DELIVERY_ATTEMPTS = 5
+
+/** How long a platform has to answer. A delivery out holds that platform's imports, so it can't hang. */
+export const SEND_MS = 30_000
+
 export const IMPORT_ATTEMPTS = 10
