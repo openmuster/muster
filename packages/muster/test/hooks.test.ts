@@ -1,5 +1,5 @@
-import { createHmac } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import { HOOK_ATTEMPTS, HOOK_BATCH, armHooks, loadHooks, runHook, type ArmedHook
 import { cli, cliStart, memoryBoard, reason, tempDir } from './helpers.ts'
 
 const KEY = 'a-secret-of-thirty-two-characters'
-type Got = { delivery: string; signed: boolean; age: number; body: { hook: string; delivery: string; event: Record<string, any> } }
+type Got = { delivery: string; signed: boolean; age: number; raw: string; headers: Record<string, string>; body: { hook: string; delivery: string; event: Record<string, any> } }
 
 const open: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -31,7 +31,7 @@ async function receiver(key = KEY, now: () => number = () => Date.now()) {
       const delivery = String(request.headers['muster-delivery'])
       const timestamp = String(request.headers['muster-timestamp'])
       const expected = `v1=${createHmac('sha256', key).update(`${delivery}.${timestamp}.${raw}`).digest('hex')}`
-      got.push({ delivery, signed: request.headers['muster-signature'] === expected, age: Math.floor(now() / 1000) - Number(timestamp), body: JSON.parse(raw) })
+      got.push({ delivery, signed: request.headers['muster-signature'] === expected, age: Math.floor(now() / 1000) - Number(timestamp), raw, headers: request.headers as Record<string, string>, body: JSON.parse(raw) })
       if (state.answer === 'hang') return
       response.writeHead(state.answer, state.location ? { location: state.location } : {}).end()
     })
@@ -223,6 +223,77 @@ describe('outgoing webhooks', () => {
     expect(new Set(seqs).size).toBe(HOOK_BATCH + 3)
   })
 
+  it('a 4xx is a failure that waits and tries again, not a delivery', async () => {
+    const there = await receiver()
+    const { team, time, run } = setUp(there.url)
+    await run()
+    const root = await team.post({ channel: 'work/api', text: 'one' })
+    there.state.answer = 401
+    expect(await run()).toMatchObject({ sent: [], failed: [root.id], dropped: [], why: 'HTTP 401' })
+    time.advance(5000)
+    there.state.answer = 202
+    expect((await run()).sent).toEqual([root.id])
+  })
+
+  it('a restart picks up from the cursor on the board: nothing sent twice, nothing skipped', async () => {
+    const there = await receiver()
+    const { team, hook } = setUp(there.url)
+    const time = { now: () => Date.parse('2026-01-01T00:00:00.000Z') }
+    const deps = { now: time.now, fetch, timeout: 2000 }
+    const daemon = () => ({ attempts: 0, retryAt: -Infinity })
+    let state = daemon()
+    await runHook(team, hook, state, deps)
+    const first = await team.post({ channel: 'work/api', text: 'one' })
+    const second = await team.post({ channel: 'work/api', text: 'two' })
+    expect((await runHook(team, hook, state, deps)).sent).toEqual([first.id, second.id])
+    const third = await team.post({ channel: 'work/api', text: 'three' })
+    there.state.answer = 500
+    expect(await runHook(team, hook, state, deps)).toMatchObject({ failed: [third.id] })
+    // The daemon stops and starts again: its wait and its count are gone, the cursor is not.
+    state = daemon()
+    there.state.answer = 200
+    const fourth = await team.post({ channel: 'work/api', text: 'four' })
+    expect((await runHook(team, hook, state, deps)).sent).toEqual([third.id, fourth.id])
+    expect(there.got.map((each) => each.delivery)).toEqual([first, second, third, third, fourth].map((each) => `phone.${each.id}`))
+  })
+
+  it('an event with no thread that fails eight times is passed over without a note', async () => {
+    const there = await receiver()
+    const { team, time, run } = setUp(there.url, { tail: { types: ['schedule.created'] } })
+    await run()
+    const before = await team.head()
+    await team.scheduleCreate({ channel: 'work', text: 'standup', at: '2026-01-02T00:00:00.000Z' })
+    there.state.answer = 500
+    let last = await run()
+    for (let tries = 1; tries < HOOK_ATTEMPTS; tries++) {
+      time.advance(301_000)
+      last = await run()
+    }
+    expect(last.dropped).toHaveLength(1)
+    expect(there.got[0]!.body.event.thread).toBeNull()
+    // Nothing was written to the board for it: the only event since is the schedule itself.
+    expect((await team.events({ after: before, filter: {}, limit: 50 })).events.map((each) => each.type)).toEqual(['schedule.created'])
+    there.state.answer = 200
+    await team.scheduleCreate({ channel: 'work', text: 'retro', at: '2026-01-03T00:00:00.000Z' })
+    expect((await run()).sent).toHaveLength(1)
+  })
+
+  it('a hook whose receiver is down never holds up another hook in the same tick', async () => {
+    const up = await receiver()
+    const down = await receiver()
+    down.state.answer = 503
+    const { team, time, hook } = setUp(up.url)
+    const broken: ArmedHook = { ...hook, name: 'pager', url: down.url }
+    const hooks = { list: [broken, hook], states: new Map<string, HookState>(), deps: { now: () => time.now().getTime(), fetch } }
+    const deps = { now: () => time.now().getTime(), spawn: async () => ({ code: 0, stdout: '' }) }
+    await tickOnce(team, [], new Map(), deps, hooks)
+    const root = await team.post({ channel: 'work/api', text: 'one' })
+    const did = await tickOnce(team, [], new Map(), deps, hooks)
+    expect(did.hooked.pager).toMatchObject({ failed: [root.id], why: 'HTTP 503' })
+    expect(did.hooked.phone!.sent).toEqual([root.id])
+    expect(up.got).toHaveLength(1)
+  })
+
   it('a tick sends hooks after schedules and watchers', async () => {
     const there = await receiver()
     const { team, time, hook } = setUp(there.url, { tail: { channel: 'work', types: ['message.posted'] } })
@@ -234,6 +305,38 @@ describe('outgoing webhooks', () => {
     const did = await tickOnce(team, [], new Map(), deps, hooks)
     expect(did.hooked.phone!.sent).toHaveLength(1)
     expect(there.got.map((each) => each.body.event.type)).toEqual(['message.posted'])
+  })
+})
+
+describe('the receiver in the docs', () => {
+  /**
+   * The verify function exactly as the outgoing-webhooks page prints it, run with a clock of the test's
+   * choosing, so the page can't drift from what the daemon sends. The code is this repo's own docs.
+   */
+  const documented = (now = () => Date.now()) => {
+    const page = readFileSync(new URL('../docs/01-concepts/15-outgoing-webhooks.md', import.meta.url), 'utf8')
+    const code = /## Verify it[\s\S]*?```js\n([\s\S]*?)```/.exec(page)![1]!.replace(/^import .*\n/m, '')
+    return new Function('createHmac', 'timingSafeEqual', 'Date', `${code}\nreturn fromMuster`)(createHmac, timingSafeEqual, { now }) as (headers: Record<string, string>, raw: string, secret: string) => boolean
+  }
+
+  it('accepts what the daemon sends, and refuses it changed, under another secret, unsigned, or played back late', async () => {
+    const there = await receiver()
+    const { team, time, run } = setUp(there.url, { body: 'event' })
+    await run()
+    await team.post({ channel: 'work/api', text: 'the login redirect is wrong' })
+    await run()
+    const [got] = there.got
+    const fromMuster = documented(() => time.now().getTime())
+    expect(fromMuster(got!.headers, got!.raw, KEY)).toBe(true)
+    expect(fromMuster(got!.headers, got!.raw.replace('redirect', 'redirekt'), KEY)).toBe(false)
+    expect(fromMuster(got!.headers, got!.raw, 'another-secret-of-thirty-two-chars')).toBe(false)
+    expect(fromMuster({ ...got!.headers, 'muster-signature': '' }, got!.raw, KEY)).toBe(false)
+    expect(fromMuster({ ...got!.headers, 'muster-delivery': 'phone.999' }, got!.raw, KEY)).toBe(false)
+    // The docs say to check the bytes before parsing: the same object printed again is not the same bytes.
+    expect(fromMuster(got!.headers, JSON.stringify(JSON.parse(got!.raw), null, 1), KEY)).toBe(false)
+    const sentAt = Number(got!.headers['muster-timestamp']) * 1000
+    expect(documented(() => sentAt + 299_000)(got!.headers, got!.raw, KEY)).toBe(true)
+    expect(documented(() => sentAt + 301_000)(got!.headers, got!.raw, KEY)).toBe(false)
   })
 })
 

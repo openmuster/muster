@@ -113,7 +113,7 @@ been used against the real thing, and what has not.
 | `mu token exchange`, a CI job signing in with its OIDC token (unreleased) | Tested against an issuer on the test machine, with real RSA keys; never run against GitHub's or GitLab's |
 | The container image | Built, run and restarted in CI on every change; never run on a public address |
 | `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
-| Outgoing webhooks | Covered by tests against a receiver on the same machine that checks each signature; never sent to a real service |
+| Outgoing webhooks | Working, by tests against a real HTTP receiver on the same machine: deliveries checked with the verify code the docs print, a changed body, another secret and a late replay refused, retries after a 4xx, 5xx, timeout or refused connection, a restart resuming from the cursor, an event passed over after eight tries, redirects not followed, and one hook's dead receiver not holding up another. Not sent to a third-party service |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 
