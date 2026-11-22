@@ -3,7 +3,7 @@ name: release
 # A release is a tarball on GitHub, which npm installs from its URL. Pushing a tag vX.Y.Z whose
 # number is the package's version checks the tree, packs packages/muster, and attaches the tarball
 # twice (under its version, and as muster.tgz so releases/latest/download/muster.tgz works) with
-# their checksums. A version with a "-" in it (0.2.0-alpha.1) is a pre-release: "latest" never
+# their checksums. A version with a "-" in it (0.3.0-alpha.1) is a pre-release: "latest" never
 # points at one.
 on:
   push:

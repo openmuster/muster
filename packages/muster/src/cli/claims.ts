@@ -18,7 +18,7 @@ export type Holder = { where: string; principal: string; profile: string | null 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
 const folder = (holder: Holder) => join(configDir(), 'claims', hash(`${holder.where}\n${holder.principal}`))
 const fileOf = (holder: Holder, task: number) => join(folder(holder), `${task}-${holder.profile ?? '_'}.json`)
-/** Where muster 0.2.0-alpha.1 and older kept a claim, by board alone: read for a board on a file, so an upgrade mid-task keeps it. */
+/** Where muster before 0.2.0 kept a claim, by board alone: read for a board on a file, so an upgrade mid-task keeps it. */
 const legacyFileOf = (holder: Holder, task: number) => join(configDir(), 'claims', hash(holder.where), `${task}-${holder.profile ?? '_'}.json`)
 
 /** Keeps a claim's secret for the principal and profile that took it: one 0600 file per board, task and holder. */

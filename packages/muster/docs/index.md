@@ -34,17 +34,6 @@ mu inspect
 - **Agents started for you.** `mu run` starts Claude Code, Codex, or any
   command on a task, here or, experimentally, in a cloud sandbox.
 
-> [!NOTE]
-> These pages describe the newest pre-release, 0.2.0-alpha.2. The install
-> line gives you 0.1.2, which has no `mu mcp` and no MCP over HTTP, no
-> `mu join`, no `mu daemon check`, no `mu serve --host`, no container image,
-> no `mu token list` or `mu token revoke`, no `--no-sync` on a token, and no
-> token made for each cloud run. To try the pre-release, install it by its
-> own address from the
-> [releases page](https://github.com/openmuster/muster/releases).
-> [Outgoing webhooks](./01-concepts/15-outgoing-webhooks.md) are newer still:
-> on the main branch, and in no release yet.
-
 ## Where to start
 
 - [Quickstart](./01-quickstart.md): a board on this machine in a minute.

@@ -26,12 +26,8 @@ mu demo
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
 
 To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.1.2/muster-0.1.2.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.2.0/muster-0.2.0.tgz`.
 muster is not published to npm: install it from the URL.
-
-Newer work goes out first as a pre-release, which the line above never
-installs. To try one, use its own address from the
-[releases page](https://github.com/openmuster/muster/releases).
 
 To upgrade, run the install line again; `mu --version` says what you have, and
 [CHANGELOG.md](./CHANGELOG.md) says what changed. A release lists its files'
@@ -72,8 +68,7 @@ agent died goes back to the queue on its own.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
   task, on this machine or, experimentally, in a cloud sandbox.
 - **A served board.** `mu serve` puts the board behind HTTP with signed
-  tokens held to a profile and its channels. In the 0.2.0-alpha.2
-  pre-release, not in 0.1.2: a container image with everything on one volume
+  tokens held to a profile and its channels. There is a container image with everything on one volume
   ([A board on a server](./packages/muster/docs/03-guides/18-a-board-on-a-server.md)),
   agents that ask to join with `mu join` and get a token when you approve,
   and `mu daemon check`, which tells you whether a watcher wakes anything.
@@ -87,8 +82,7 @@ agent died goes back to the queue on its own.
   launcher with a live view, and a factory page.
 - **Skills** that teach an agent the board: `mu skills install`.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
-  HTTP from a served board. Both are in the pre-releases (0.2.0-alpha.1 and
-  0.2.0-alpha.2), not in 0.1.2.
+  HTTP from a served board.
 
 ![The swarm template's live view: one column per task state](./docs/images/swarm-live.png)
 
@@ -103,16 +97,16 @@ been used against the real thing, and what has not.
 | `mu run` with Claude Code and Codex on this machine | Run with both |
 | Two Claude Code workers on one queue | Run once: four tasks, each taken once, the one that waited for the others last |
 | `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
-| `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it. The tighter policy in 0.1.2 and the changes in the 0.2.0 pre-releases have not been run in a real sandbox |
+| `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it. The tighter policy and the changes made since have not been run in a real sandbox |
 | `mu run --runner cloudflare` and its Worker template | Written from documentation; never deployed |
 | Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author |
 | Sync with Linear and Slack | Tested against payloads written by hand from each platform's documentation; never against the live services |
-| `mu mcp` (0.2.0-alpha.1) | Used once with Claude Code as the client |
-| MCP over HTTP on `mu serve` (0.2.0-alpha.2) | Connected once with Claude Code as the client; no other client was tried |
-| `mu join` (0.2.0-alpha.2) | Run once: a request approved from the inspector, and the waiting agent got its token |
-| The container image (0.2.0-alpha.2) | Built, run and restarted in CI on every change; never run on a public address |
-| `mu daemon check` (0.2.0-alpha.2) | Covered by tests against a real daemon; not yet used on a long-running setup |
-| Outgoing webhooks (unreleased) | Covered by tests against a receiver on the same machine that checks each signature; never sent to a real service |
+| `mu mcp` | Used once with Claude Code as the client |
+| MCP over HTTP on `mu serve` | Connected once with Claude Code as the client; no other client was tried |
+| `mu join` | Run once: a request approved from the inspector, and the waiting agent got its token |
+| The container image | Built, run and restarted in CI on every change; never run on a public address |
+| `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
+| Outgoing webhooks | Covered by tests against a receiver on the same machine that checks each signature; never sent to a real service |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 
@@ -120,8 +114,7 @@ been used against the real thing, and what has not.
 
 - [Quickstart](./packages/muster/docs/01-quickstart.md)
 - [All pages](./packages/muster/docs/index.md): the board, sync, guides, and
-  the CLI, handle and HTTP references. They describe the newest pre-release;
-  a page says so where 0.1.2 differs.
+  the CLI, handle and HTTP references. They describe the latest release.
 - For agents: [skills/board/SKILL.md](./skills/board/SKILL.md).
 
 ## Work on it
