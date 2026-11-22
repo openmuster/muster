@@ -1,15 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { Failure } from '../failure.ts'
 import { channelPath } from '../model.ts'
-import type { Inbound, Provider, Received } from './types.ts'
+import { SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const bad = () => new Failure('unauthorized', 'bad signature')
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'run'
-
-/** How long a platform has to answer. A delivery out holds that platform's imports, so it can't hang. */
-const SEND_MS = 30_000
 
 async function send(fetcher: typeof fetch, url: string, init: RequestInit): Promise<any> {
   const response = await fetcher(url, { signal: AbortSignal.timeout(SEND_MS), ...init })

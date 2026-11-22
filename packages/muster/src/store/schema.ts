@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 6
+export const STORE_VERSION = 7
 
 const DDL = `
 create table if not exists events (
@@ -160,6 +160,15 @@ create table if not exists outbox_attempts (
   key text not null,
   seq integer not null,
   attempts integer not null default 0,
+  primary key (key, seq)
+) without rowid;
+
+-- Deliveries waiting on a platform's answer. Until it comes, the board doesn't know the ID of what it
+-- made there, so that thing's own webhook would look new: the platform's imports wait meanwhile.
+create table if not exists sending (
+  key text not null,
+  seq integer not null,
+  since text not null,
   primary key (key, seq)
 ) without rowid;
 

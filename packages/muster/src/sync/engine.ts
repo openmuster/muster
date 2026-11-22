@@ -5,25 +5,19 @@ import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
 import type { By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
-import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, type Inbound, type Provider, type Received } from './types.ts'
+import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
 
 export type Sync = Record<string, Provider>
 
 const board: By = { principal: 'board', profile: null }
 
-/**
- * Platforms with a delivery out, per database. While the board waits for a platform to answer, it
- * cannot know the ID of what it made there, so that thing's own webhook would look new: imports for
- * the platform wait in the inbox until the answer is recorded.
- */
-const sending = new WeakMap<object, Map<string, number>>()
-const isSending = (ctx: Context, key: string) => (sending.get(ctx.db)?.get(key) ?? 0) > 0
-function markSending(ctx: Context, key: string, by: 1 | -1) {
-  let keys = sending.get(ctx.db)
-  if (!keys) sending.set(ctx.db, (keys = new Map()))
-  const count = (keys.get(key) ?? 0) + by
-  if (count > 0) keys.set(key, count)
-  else keys.delete(key)
+/** A delivery older than this is from a process that died mid-send, and no longer holds imports. */
+const SENDING_STALE_MS = 2 * SEND_MS
+
+/** Whether a delivery to this platform is out, from this process or another on the same board. */
+function isSending(ctx: Context, key: string) {
+  const after = new Date(ctx.now().getTime() - SENDING_STALE_MS).toISOString()
+  return ctx.db.raw.prepare('select 1 from sending where key = ? and since > ?').get(key, after) !== undefined
 }
 
 /**
@@ -232,14 +226,11 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
-        markSending(ctx, key, 1)
-        let sent: Awaited<ReturnType<Provider['deliver']>>
-        try {
-          sent = await provider.deliver(message, { place, threadExternal }, fetcher)
-        } finally {
-          markSending(ctx, key, -1)
-        }
+        ctx.db.write(() => ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString()))
+        const sent = await provider.deliver(message, { place, threadExternal }, fetcher)
         ctx.db.write(() => {
+          // Recorded and released at once: a webhook for it, imported after this, finds the link.
+          ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
           const at = ctx.now().toISOString()
           append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, at)
           if (isRoot && sent.labels) {
@@ -254,6 +245,7 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         cursor = event.seq
         delivered++
       } catch (error) {
+        ctx.db.write(() => ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq))
         failed++
         const attempts = ((ctx.db.raw.prepare('select attempts from outbox_attempts where key = ? and seq = ?').get(key, event.seq) as { attempts: number } | undefined)?.attempts ?? 0) + 1
         if (attempts < DELIVERY_ATTEMPTS) {
