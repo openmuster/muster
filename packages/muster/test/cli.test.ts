@@ -371,7 +371,7 @@ describe('cli', () => {
     expect((await cli(dir, ['read', 'general', '--limit', '3', '--help'])).stdout).toBe(read.stdout)
     // One form of a command that has several, and the command whole when the word after it isn't a form.
     const claim = lines((await cli(dir, ['tasks', 'claim', '--help'])).stdout)
-    expect(claim.slice(0, 5)).toEqual(['mu tasks claim', '', 'tasks', '  tasks claim <id> | --ready <channel> [--label k=v]... [--from <owner>]...', '       [--wait 10m] [--lease 15m]'])
+    expect(claim.slice(0, 5)).toEqual(['mu tasks claim', '', 'tasks', '  tasks claim <id> | --ready <channel> [--label k=v]... [--from <owner>]...', '       [--by <actor>] [--wait 10m] [--lease 15m]'])
     expect(claim.some((line) => line.includes('tasks complete'))).toBe(false)
     const tasks = lines((await cli(dir, ['tasks', 'work/', '--help'])).stdout)
     expect(tasks[0]).toBe('mu tasks')
