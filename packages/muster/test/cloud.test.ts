@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyPolicy, board, boardPolicy, claude, cloudflare, file, http, listen, mint, vercel } from '../src/index.ts'
-import { INSTALL } from '../src/runner/cloud.ts'
+import { INSTALL, memoryBases } from '../src/runner/cloud.ts'
 import { SANDBOX_CLOSED, SANDBOX_ROUTES } from '../src/runner/policy.ts'
 import { ROUTES } from '../src/serve/server.ts'
 import { reason } from './helpers.ts'
@@ -291,7 +291,6 @@ describe('cloud runners', () => {
         if (!one) throw new Error('404')
         return { status: one.status, delete: async () => (calls.push(['delete', name]), kept.delete(name)) }
       },
-      list: async ({ namePrefix }: any) => [...kept.keys()].filter((name) => name.startsWith(namePrefix)).map((name) => ({ name })),
     }
     return { calls, kept, Sandbox }
   }
@@ -301,7 +300,8 @@ describe('cloud runners', () => {
     const runner = vercel({ Sandbox, setupHosts: ['github.com'], base: true })
     await runner.start(request)
     const [base] = [...kept.keys()]
-    expect(base).toMatch(/^muster-base-[0-9a-f]{12}$/)
+    // Named so nobody can guess it, and forked only because this runner wrote it down.
+    expect(base).toMatch(/^muster-base-[0-9a-f]{12}-[0-9a-f]{12}$/)
     // The base: kept, made under the setup's hosts alone and an empty environment, set up, marked, and stopped to save it.
     expect(calls[0]).toEqual(['create', base, true, ['github.com'], []])
     expect(calls.slice(1, 4)).toEqual([['run', base, 'npm install -g https://example.com/muster.tgz'], ['run', base, `touch /vercel/.muster-base-ready`], ['stop', base]])
@@ -320,6 +320,25 @@ describe('cloud runners', () => {
     expect([...kept.keys()]).toHaveLength(1)
     expect([...kept.keys()][0]).not.toBe(base)
     expect(calls).toContainEqual(['delete', base])
+  })
+
+  it('vercel: a kept sandbox this machine didn\'t make, or one that didn\'t stop cleanly, is never forked', async () => {
+    const { calls, kept, Sandbox } = keeping()
+    // Someone else's, named like a base and holding the mark.
+    kept.set('muster-base-000000000000-planted', { status: 'stopped', files: new Set(['/vercel/.muster-base-ready']), env: {} })
+    const bases = memoryBases()
+    const runner = vercel({ Sandbox, setupHosts: ['github.com'], base: true, bases })
+    await runner.start(request)
+    expect(calls.filter((call) => call[0] === 'fork').map((call) => call[1])).not.toContain('muster-base-000000000000-planted')
+    expect(kept.has('muster-base-000000000000-planted')).toBe(true)
+    const mine = bases.entries()[0]![1]
+    // One of ours that failed is not taken either: it is made again.
+    kept.get(mine!)!.status = 'failed'
+    calls.length = 0
+    await runner.start(request)
+    expect(calls.find((call) => call[0] === 'create')?.[2]).toBe(true)
+    expect(bases.entries()).toHaveLength(1)
+    expect(bases.entries()[0]![1]).not.toBe(mine)
   })
 
   it('vercel: a base whose making was cut short is removed, and the run is set up the long way', async () => {

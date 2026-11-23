@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { Agent, PermissionMode } from './agents.ts'
 import { Failure } from '../failure.ts'
 import { gitRules, githubRepo } from './github.ts'
@@ -120,8 +120,6 @@ export type VercelSandbox = {
   fork?(options: Omit<CreateOptions, 'source' | 'image' | 'name'> & { sourceSandbox: string }): Promise<Made>
   /** A sandbox by its name. */
   get?(options: { name: string } & Partial<VercelCredentials>): Promise<{ status?: string; delete?(): Promise<unknown> }>
-  /** Sandboxes whose names start with `namePrefix`. */
-  list?(options: { namePrefix: string } & Partial<VercelCredentials>): Promise<AsyncIterable<{ name?: string }> | Iterable<{ name?: string }>>
 }
 
 /**
@@ -150,51 +148,69 @@ const BASE_READY = '/vercel/.muster-base-ready'
 const BUILDING = new Set(['pending', 'running', 'snapshotting', 'stopping'])
 
 /**
- * The kept sandbox runs are forked from: the image with `setup` run in it, and nothing else, no
- * credential, repository or environment. Named by what goes in it, so it is made once per version of
- * muster, and a run that finds another making it waits. Making one removes the older ones. Null when
- * there is none to fork, and the run is set up the long way.
+ * Where the bases this machine made are written down: a name for each kind of base, by key. A base is
+ * forked only when it is in here, so a sandbox someone else made under a name like it is never trusted.
  */
-async function baseSandbox(options: { Sandbox: VercelSandbox; setupHosts?: string[]; image?: string; credentials?: VercelCredentials }, setup: string[][]): Promise<string | null> {
+export type BaseRecord = { get(key: string): string | undefined; set(key: string, name: string): void; entries(): [string, string][]; forget(name: string): void }
+
+/** A record kept in memory, for code that makes its runner itself: each process makes its own base. */
+export const memoryBases = (): BaseRecord => {
+  const kept = new Map<string, string>()
+  return { get: (key) => kept.get(key), set: (key, name) => void kept.set(key, name), entries: () => [...kept], forget: (name) => void [...kept].forEach(([key, value]) => value === name && kept.delete(key)) }
+}
+
+/**
+ * The kept sandbox runs are forked from: the image with `setup` run in it, and nothing else, no
+ * credential, repository or environment. Made once per version of muster by this machine, under a name
+ * nobody can guess and written down here, and forked only when it is the one written down and it stopped
+ * cleanly. Making one removes the older ones this machine made, and nothing else. Null when there is none
+ * to fork, and the run is set up the long way.
+ */
+async function baseSandbox(options: { Sandbox: VercelSandbox; setupHosts?: string[]; image?: string; credentials?: VercelCredentials; bases: BaseRecord }, setup: string[][]): Promise<string | null> {
   const S = options.Sandbox
   const image = options.image ?? VERCEL_IMAGE
-  const name = `muster-base-${createHash('sha256').update(image).update(JSON.stringify(setup)).digest('hex').slice(0, 12)}`
-  const status = async () => (S.get ? ((await S.get({ ...options.credentials, name }).catch(() => null))?.status ?? null) : null)
-  if ((await status()) === null) {
-    let made: Made | undefined
-    try {
-      made = await S.create({ ...options.credentials, name, image, persistent: true, timeout: 15 * 60_000, env: {}, networkPolicy: { allow: Object.fromEntries((options.setupHosts ?? []).map((host) => [host, []])) } })
-    } catch {
-      // Another run is making it, under the same name: wait for it below.
+  const hash = createHash('sha256').update(image).update(JSON.stringify(setup)).digest('hex').slice(0, 12)
+  const project = `${options.credentials?.teamId ?? 'oidc'}/${options.credentials?.projectId ?? 'oidc'}/`
+  const key = `${project}${hash}`
+  const statusOf = async (name: string) => (S.get ? ((await S.get({ ...options.credentials, name }).catch(() => null))?.status ?? null) : null)
+  const known = options.bases.get(key)
+  if (known) {
+    for (let waited = 0; waited < 8 * 60_000; waited += 5000) {
+      const now = await statusOf(known)
+      // Only one that stopped cleanly holds what it should: anything else is made again.
+      if (now === 'stopped') return known
+      if (now === null || !BUILDING.has(now)) break
+      await new Promise((resolve) => setTimeout(resolve, 5000))
     }
-    if (made) {
-      try {
-        for (const [cmd, ...args] of setup) {
-          const done = await made.runCommand({ cmd: cmd!, args })
-          if (done && typeof done.exitCode === 'number' && done.exitCode !== 0) throw new Error('setup failed')
-        }
-        await made.runCommand({ cmd: 'touch', args: [BASE_READY] })
-        // Stopping a kept sandbox saves it: that is what forks start from.
-        await made.stop()
-      } catch {
-        await (made.delete?.() ?? made.stop()).catch(() => {})
-        return null
-      }
-      if (S.list && S.get) {
-        for await (const other of await S.list({ ...options.credentials, namePrefix: 'muster-base-' }).catch(() => [] as { name?: string }[])) {
-          if (other.name && other.name !== name) await S.get({ ...options.credentials, name: other.name }).then((kept) => kept.delete?.()).catch(() => {})
-        }
-      }
-      return name
+    options.bases.forget(known)
+  }
+  const name = `muster-base-${hash}-${randomBytes(6).toString('hex')}`
+  let made: Made
+  try {
+    made = await S.create({ ...options.credentials, name, image, persistent: true, timeout: 15 * 60_000, env: {}, networkPolicy: { allow: Object.fromEntries((options.setupHosts ?? []).map((host) => [host, []])) } })
+  } catch {
+    return null
+  }
+  try {
+    for (const [cmd, ...args] of setup) {
+      const done = await made.runCommand({ cmd: cmd!, args })
+      if (done && typeof done.exitCode === 'number' && done.exitCode !== 0) throw new Error('setup failed')
     }
+    await made.runCommand({ cmd: 'touch', args: [BASE_READY] })
+    // Stopping a kept sandbox saves it: that is what forks start from.
+    await made.stop()
+  } catch {
+    await (made.delete?.() ?? made.stop()).catch(() => {})
+    return null
   }
-  for (let waited = 0; waited < 8 * 60_000; waited += 5000) {
-    const now = await status()
-    if (now === null) return null
-    if (!BUILDING.has(now)) return name
-    await new Promise((resolve) => setTimeout(resolve, 5000))
+  // The older bases this machine made in this project go: never one it didn't make, nor another project's.
+  const older = options.bases.entries().filter(([other]) => other.startsWith(project) && other !== key)
+  options.bases.set(key, name)
+  for (const [, other] of older) {
+    options.bases.forget(other)
+    await S.get?.({ ...options.credentials, name: other }).then((kept) => kept.delete?.()).catch(() => {})
   }
-  return null
+  return name
 }
 
 /** Where Vercel clones `source`: beside the sandbox's home, under the repository's own name. */
@@ -238,7 +254,8 @@ async function end(sandbox: Made): Promise<void> {
  * `setupHosts` are open while the setup commands run, which are ours, and closed before the agent
  * starts. `allowHosts` stay open to the agent, so each one is a way out of the sandbox: add few.
  */
-export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string; credentials?: VercelCredentials; base?: boolean }): CloudRunner {
+export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string; credentials?: VercelCredentials; base?: boolean; bases?: BaseRecord }): CloudRunner {
+  const bases = options.bases ?? memoryBases()
   return {
     name: 'vercel',
     async start(request) {
@@ -276,7 +293,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       if (options.base && options.Sandbox.fork && setup.length > 0) {
         // Forked from a kept sandbox that holds what setup installs and nothing else, so setup runs once per
         // version of it. The repository is then cloned here, under the same policy Vercel's clone would have.
-        const base = await baseSandbox(options, setup).catch(() => null)
+        const base = await baseSandbox({ ...options, bases }, setup).catch(() => null)
         if (base) {
           sandbox = await options.Sandbox.fork({ ...options.credentials, sourceSandbox: base, networkPolicy: { allow: first }, persistent: false, env: sandboxEnv, ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}) })
           const ready = await sandbox.runCommand({ cmd: 'test', args: ['-f', BASE_READY] })
@@ -284,6 +301,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
             // A base whose making was cut short: it goes, and this run is set up the long way.
             await end(sandbox)
             await options.Sandbox.get?.({ ...options.credentials, name: base }).then((kept) => kept.delete?.()).catch(() => {})
+            bases.forget(base)
             sandbox = undefined
           } else {
             setup = []
