@@ -334,6 +334,17 @@ describe('the daemon starts a requested workflow', () => {
     expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
   })
 
+  it("copies the asking thread's first message into a step with {thread.text}, as it is stored, whichever reply asked", async () => {
+    const quoting: Workflow = { ...release, steps: [{ key: 'a', text: 'Asked for:\n{thread.text}\nin {run}' }] }
+    const { team, rec } = await ready([quoting])
+    const root = await team.post({ channel: 'work/app', text: 'Fix checkout\nIt times out under {run} and {args.x}' })
+    const on = await team.reply({ to: root.id, text: 'please' })
+    const { seq } = await team.workflowRequest({ name: 'release', on: on.id })
+    expect((await runWorkflows(team, [quoting], rec.deps)).started).toEqual([seq])
+    const run = `work/app/release-${seq}`
+    expect((await tasksIn(team, run))[0]!.text).toBe(`Asked for:\nFix checkout\nIt times out under {run} and {args.x}\nin ${run}`)
+  })
+
   it('refuses a name it has not got, someone not in who, and a channel it does not run in, and creates nothing', async () => {
     const { team, as, root, rec } = await ready()
     const elsewhere = await team.post({ channel: 'random', text: 'ship' })

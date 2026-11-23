@@ -67,13 +67,15 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
 }
 
 /**
- * Fills a step's text, in one pass, by plain replacement: `{thread}`, `{channel}`, `{run}` and
- * `{args.<k>}`. A placeholder it doesn't know, or an argument nobody gave, is left as written, and what
- * a value says is never read again as a placeholder.
+ * Fills a step's text, in one pass, by plain replacement: `{thread}`, `{thread.text}` (the asking
+ * thread's first message, as it is stored), `{channel}`, `{run}` and `{args.<k>}`. A placeholder it
+ * doesn't know, or an argument nobody gave, is left as written, and what a value says is never read again
+ * as a placeholder.
  */
-export function fillStep(text: string, values: { thread: number; channel: string; run: string; args: Record<string, string> }): string {
-  return text.replace(/\{(thread|channel|run|args\.([a-z][a-z0-9_]*))\}/g, (whole, name: string, arg: string | undefined) => {
+export function fillStep(text: string, values: { thread: number; threadText?: string; channel: string; run: string; args: Record<string, string> }): string {
+  return text.replace(/\{(thread\.text|thread|channel|run|args\.([a-z][a-z0-9_]*))\}/g, (whole, name: string, arg: string | undefined) => {
     if (arg !== undefined) return Object.hasOwn(values.args, arg) ? values.args[arg]! : whole
+    if (name === 'thread.text') return values.threadText ?? whole
     return name === 'thread' ? String(values.thread) : name === 'channel' ? values.channel : values.run
   })
 }
@@ -340,9 +342,11 @@ const isChannel = (entry: string) => {
 async function start(team: Board, writer: Board, workflow: Workflow, on: Request, owner: string, deps: RunDeps): Promise<{ text: string; failed?: string }> {
   const run = `${on.channel}/${workflow.name}-${on.seq}`
   const labels = { workflow: workflow.name, request: String(on.seq) }
+  // A worker's token reaches the run's channel alone, so what it needs of the asking thread is copied in.
+  const threadText = workflow.steps.some((step) => step.text.includes('{thread.text}')) ? (await team.readThread({ id: on.thread })).message.text : undefined
   const tasks: PlanTask[] = workflow.steps.map((step) => ({
     key: step.key,
-    text: fillStep(step.text, { thread: on.thread, channel: on.channel, run, args: on.args }),
+    text: fillStep(step.text, { thread: on.thread, ...(threadText !== undefined ? { threadText } : {}), channel: on.channel, run, args: on.args }),
     labels: { ...step.labels, ...labels },
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),

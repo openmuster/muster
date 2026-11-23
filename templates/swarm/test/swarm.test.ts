@@ -150,6 +150,10 @@ describe('workflows.json', () => {
     expect(implement.workers.count).toBe(2)
     // Workers take only the daemon's own tasks, so no step may ask an agent to make more.
     for (const workflow of workflows) for (const step of workflow.steps) expect(step.text).not.toMatch(/tasks create/)
+    // A worker's token reaches only the run's channel, so no step sends it to read the asking thread: the
+    // thread's text comes in with {thread.text}.
+    for (const workflow of workflows) for (const step of workflow.steps) expect(step.text).not.toMatch(/mu read \{thread\}|read thread/i)
+    expect(workflows.flatMap((workflow) => workflow.steps).filter((step) => step.text.includes('{thread.text}')).map((step) => step.key)).toEqual(['plan', 'review'])
     // A command a step shows must be one mu has: `tasks list` isn't, it would list a channel named "list".
     const verbs = ['create', 'claim', 'run', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'cancel', 'assign', 'needs']
     for (const [, next] of [...workflows.flatMap((workflow) => workflow.steps.map((step) => step.text)).join('\n').matchAll(/mu tasks (\S+)/g)]) {

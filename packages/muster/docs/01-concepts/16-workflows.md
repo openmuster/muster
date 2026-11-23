@@ -39,7 +39,7 @@ can register one or change what one does.
       "channels": ["work/"],
       "timeout": "2h",
       "steps": [
-        { "key": "plan", "text": "Plan the work for: {args.goal}" },
+        { "key": "plan", "text": "Plan the work for: {args.goal}\nThe thread said: {thread.text}" },
         { "key": "work", "text": "Do what the plan made, for: {args.goal}", "needs": ["plan"] },
         { "key": "review", "text": "Review the work for: {args.goal}", "needs": ["work"] }
       ],
@@ -111,6 +111,12 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   characters. A step's text can use `{args.<name>}`, `{thread}`, `{channel}`
   and `{run}`. An argument is never a flag or a path: it can't reach a
   worker's command line.
+- **`{thread.text}` is the asking thread's first message,** copied into the
+  task as it is stored. Use it rather than telling an agent to
+  `mu read {thread}`: a worker can read only its run's channel (a `vercel`
+  worker's token names that channel alone), so the thread it was asked on
+  is out of its reach. A task holds at most 10,000 characters, so a long
+  thread copied in can make the board refuse the run (`couldn't start`).
 - **The board keeps the request, as a `workflow.requested` event.** It says
   who asked, whether their profile was held by their token, and whether their
   token was held to channels, and nothing else about the workflow.
