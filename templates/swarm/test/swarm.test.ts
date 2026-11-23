@@ -39,16 +39,23 @@ describe('launch', () => {
   })
 
   it('in a cloud sandbox each agent is a worker that takes tasks itself, and the board must be at a URL', async () => {
-    expect(workerArgv({ ...request, runner: 'vercel', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git'])
+    // On Vercel each agent is a worker here that gives every task a sandbox and a pull request of its own.
+    expect(workerArgv({ ...request, runner: 'vercel', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--push'])
+    expect(workerArgv({ ...request, runner: 'vercel', repo: 'https://github.com/acme/web.git', push: false }, 'swarm')).not.toContain('--push')
+    expect(workerArgv({ ...request, runner: 'cloudflare', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--runner', 'cloudflare', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git'])
     const before = process.env.MUSTER_URL
     delete process.env.MUSTER_URL
     await expect(launch(fresh(), 'swarm', { ...request, runner: 'cloudflare' }, () => {})).rejects.toThrow(/reaches the board by URL/)
     await expect(launch(fresh(), 'swarm', { ...request, runner: 'vercel', agent: './mine' }, () => {})).rejects.toThrow(/claude or codex/)
-    // With the board at a URL, a launch still needs a token made for the agents: the app's own is never handed on.
+    // With the board at a URL, a Cloudflare launch still needs a token made for the agents: the app's own is never handed on.
+    // A Vercel worker makes each task's agent one of its own.
     const agentToken = process.env.MUSTER_AGENT_TOKEN
     delete process.env.MUSTER_AGENT_TOKEN
     process.env.MUSTER_URL = 'https://board.example.com/api/board'
-    await expect(launch(fresh(), 'swarm', { ...request, runner: 'vercel' }, () => {})).rejects.toThrow(/token made for its agents/)
+    await expect(launch(fresh(), 'swarm', { ...request, runner: 'cloudflare' }, () => {})).rejects.toThrow(/token made for its agents/)
+    const spawned: string[][] = []
+    await launch(fresh(), 'swarm', { ...request, runner: 'vercel', agents: 2 }, (worker) => void spawned.push(worker.argv))
+    expect(spawned.map((argv) => argv.slice(-2))).toEqual([['--as', 'agent-1'], ['--as', 'agent-2']])
     if (agentToken !== undefined) process.env.MUSTER_AGENT_TOKEN = agentToken
     if (before !== undefined) process.env.MUSTER_URL = before
     else delete process.env.MUSTER_URL

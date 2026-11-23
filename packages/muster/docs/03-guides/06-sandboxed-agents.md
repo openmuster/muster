@@ -54,6 +54,28 @@ A `--ready` worker's sandbox lives two hours when you pass no `--timeout`,
 and ends as soon as the worker finds no task. The agent's token lasts ten
 minutes past the sandbox, and an attached run revokes it as soon as it ends.
 
+### A sandbox per task
+
+```bash
+mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo https://github.com/acme/web.git --push
+```
+
+On Vercel, `--ready` with `--loop` is a worker that stays on this machine.
+It claims the next ready task as `worker-1`, under a claim token made for
+that task, and runs it as above in a sandbox of its own, which takes the same
+claim: no other worker can have it, and each task gets its own clone, its own
+token and, with `--push`, its own pull request. Then the next, until nothing
+is ready for `--wait` (ten minutes by default). Start as many as you want
+running at once; the swarm template starts one per agent. The sandbox holds
+the claim token for its one task.
+
+Without `--loop`, `--ready` is one sandbox that takes task after task itself,
+as on Cloudflare, sharing one checkout, so it can't `--push`.
+
+`MUSTER_SANDBOX_URL` is the board's address for sandboxes, when this machine
+has the board itself: `mu run` then reads and claims on the board here, and
+the sandboxes reach it at that address, a tunnel's, say.
+
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never
 passed on. Name the agent with `--as` and `mu run` has the board make one for
@@ -92,6 +114,50 @@ The agent needs `mu` and its own CLI where it runs.
 - **Cloudflare.** A run's container has no internet and installs nothing. `mu`
   and the agent's CLI are in the image you build: the template's `Dockerfile`
   installs both.
+
+### Push what it changed
+
+```bash
+export GITHUB_APP_ID=123456                     # your GitHub App, installed on the repository
+export GITHUB_APP_KEY_FILE=~/.config/muster/app.pem
+mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git --push
+```
+
+`--push` takes a GitHub App, not a personal token: install it on the
+repository with Contents and Pull requests, read and write. For each run,
+`mu run` makes the App's tokens on this machine, each for this repository
+alone and gone within the hour: one to read, for the clone, and one to
+write, made when the push is. The App's key never leaves this machine.
+`GITHUB_APP_PRIVATE_KEY` can hold the key itself instead of a path.
+
+With `--push`, once the agent is done, `mu run` closes the sandbox to every
+host, commits what the agent changed on top of where the checkout started,
+and reads it out as a git bundle. It pushes that from this machine to
+`mu/task-12`, and opens a pull request into the branch the repository was
+cloned from. The pull request's address is on the task as a `pr` label and a
+reply. Nothing changed, no pull request.
+
+- **No token is ever where the agent has been.** The read token is in the
+  sandbox's policy only while Vercel clones the repository, before anything of the
+  repository's runs, and only on its git fetch routes. The push is made here,
+  from a repository made for it, and its branch is the one `mu run` names,
+  so nothing the agent left behind, a hook, a process, a changed `git`, can
+  use the token or pick what it writes.
+- **What the agent left is data.** Git runs in the sandbox with no hooks, no
+  fsmonitor and no global config, under a policy that reaches nothing, and
+  all that comes out is the bundle, which becomes the branch.
+- **The pull request is opened from your machine,** so GitHub's API is never
+  reachable from the sandbox.
+- **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
+  whose tasks would share one checkout. Only the Vercel runner pushes, and
+  it needs `git` on this machine.
+- Without `--push`, a GitHub App that is set is used to clone a private
+  repository, the same way, and nothing is pushed. A public repository the
+  App isn't installed on is cloned without it.
+
+The write token can write any branch of the repository for its hour, though
+only this machine holds it, and `mu run` only ever pushes `mu/task-<id>`:
+protect the branches that matter on GitHub all the same.
 
 ### Setting up holds no credential
 

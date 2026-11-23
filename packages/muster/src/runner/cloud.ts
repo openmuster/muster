@@ -1,5 +1,6 @@
 import type { Agent, PermissionMode } from './agents.ts'
 import { Failure } from '../failure.ts'
+import { gitRules, githubRepo } from './github.ts'
 import { PLACEHOLDER, boardPolicy } from './policy.ts'
 
 /** What a cloud runner needs to start an agent on a task somewhere that isn't this machine. */
@@ -20,6 +21,8 @@ export type CloudRequest = {
   setup?: string[][]
   /** Install the repository's dependencies from its lockfile, with no install scripts, before the agent starts. */
   install?: boolean
+  /** A GitHub token for the repository: added to its git routes while it is cloned, before anything of it runs, and never after. */
+  github?: { token: string }
   timeoutMs?: number
 }
 
@@ -34,6 +37,14 @@ export type CloudRun = {
   wait?(): Promise<{ exitCode: number | null }>
   /** How the repository's dependencies were installed, when asked: `pnpm`, `npm`, `yarn` or `bun`, `none` without a lockfile, or `failed (exit n)`. */
   installed?: string
+  /** Where the repository's checkout started: its commit and branch. */
+  checkout?: { sha: string; branch: string }
+  /** Runs one command in the sandbox, in the checkout when there is one, and waits for it. */
+  exec?(command: { cmd: string; args: string[]; env?: Record<string, string> }): Promise<{ exitCode: number | null; stdout: string }>
+  /** A file in the sandbox, read no further than `max` bytes: null when there is none, or it is bigger. */
+  readFile?(path: string, max: number): Promise<Buffer | null>
+  /** Replaces the sandbox's network policy: these hosts' rules, or none reached at all. */
+  setPolicy?(rules: Record<string, VercelRule[]> | 'deny-all'): Promise<void>
 }
 
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
@@ -46,13 +57,50 @@ export type VercelPolicy = { allow: Record<string, VercelRule[]> }
 /** A Vercel access token with the team and project it is for. The SDK takes these only as arguments, never from the environment. */
 export type VercelCredentials = { token: string; teamId: string; projectId: string }
 
+/** A command as the SDK hands it back: finished, with its output to read, or detached, to wait on. */
+type Finished = {
+  exitCode?: number | null
+  stdout?(): Promise<string>
+  logs?(): AsyncIterable<{ stream: string; data: string }> & { close?(): void }
+  wait?(): Promise<{ exitCode: number | null }>
+}
+
+/** The most of a command's output this side reads: what runs in a sandbox decides how much it prints. */
+const OUTPUT_MAX = 64 * 1024
+
+/** A finished command's stdout, read no further than `OUTPUT_MAX`. */
+async function stdoutOf(done: Finished | void): Promise<string> {
+  if (!done) return ''
+  if (typeof done.logs === 'function') {
+    const lines = done.logs()
+    let out = ''
+    try {
+      for await (const line of lines) {
+        if (line.stream !== 'stdout') continue
+        out += line.data
+        if (out.length >= OUTPUT_MAX) break
+      }
+    } finally {
+      lines.close?.()
+    }
+    return out.slice(0, OUTPUT_MAX)
+  }
+  return typeof done.stdout === 'function' ? String(await done.stdout()).slice(0, OUTPUT_MAX) : ''
+}
+
+/** A commit's full ID and a branch's name, as git would never read them as an option. */
+const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
+
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
   create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>): Promise<{
     sandboxId?: string
     name?: string
     /** A finished command has its `exitCode`; a detached one can be waited on. Older stand-ins return nothing. */
-    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; cwd?: string }): Promise<{ exitCode?: number | null; stdout?(): Promise<string>; wait?(): Promise<{ exitCode: number | null }> } | void>
+    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; cwd?: string }): Promise<Finished | void>
+    /** A file in the sandbox, as a stream, or null when there is none. */
+    readFile?(file: { path: string }): Promise<NodeJS.ReadableStream | null>
     /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
     update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
     stop(): Promise<unknown>
@@ -148,11 +196,16 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       // none of them, and the agent's replaces it before the agent starts. Installing a repository's
       // dependencies needs whatever registries it names, so then every host is open, for the setup alone.
       const preparing = setup.length > 0 || Boolean(dir)
-      const during: Record<string, VercelRule[]> = install ? { '*': [] } : Object.fromEntries([...(options.setupHosts ?? []), ...(dir ? CLONE_HOSTS : [])].map((host) => [host, []]))
+      const hosts = (names: string[]) => Object.fromEntries(names.map((host) => [host, [] as VercelRule[]]))
+      // GitHub's token, when there is one, is in the policy only while Vercel clones the repository, before
+      // anything of the repository's runs, and then only for that repository's git routes, to read.
+      const github = dir && request.github ? githubRepo(request.repo!) : null
+      const cloning: Record<string, VercelRule[]> | null = github ? { ...hosts(options.setupHosts ?? []), 'codeload.github.com': [], ...gitRules(github, request.github!.token) } : null
+      const during: Record<string, VercelRule[]> = install ? { '*': [] } : hosts([...(options.setupHosts ?? []), ...(dir ? CLONE_HOSTS : [])])
       const sandbox = await options.Sandbox.create({
         // Without these the SDK signs in with VERCEL_OIDC_TOKEN. They go to Vercel's API, never into the sandbox.
         ...options.credentials,
-        networkPolicy: { allow: preparing ? during : allow },
+        networkPolicy: { allow: cloning ?? (preparing ? during : allow) },
         image: options.image ?? VERCEL_IMAGE,
         // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
         persistent: false,
@@ -164,6 +217,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         await end(sandbox)
         throw new Failure('runner_too_old', "This @vercel/sandbox can't change a running sandbox's network policy, so the setup's hosts would stay open to the agent.", { hint: 'npm i @vercel/sandbox@latest' })
       }
+      if (cloning) await sandbox.update!({ networkPolicy: { allow: during } })
       for (const [cmd, ...args] of setup) {
         const done = await sandbox.runCommand({ cmd: cmd!, args })
         // What it printed stays in the sandbox: an install's output can name private packages and registries.
@@ -176,16 +230,53 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       let installed: string | undefined
       if (install) {
         const done = await sandbox.runCommand({ cmd: 'sh', args: ['-c', INSTALL], cwd: dir })
-        const said = done && typeof done.stdout === 'function' ? String(await done.stdout()).trim().split('\n').pop() ?? '' : ''
+        const said = (await stdoutOf(done)).trim().split('\n').pop() ?? ''
         installed = done && typeof done.exitCode === 'number' && done.exitCode !== 0 ? `failed (exit ${done.exitCode})` : /^installed \w+$/.test(said) ? said.slice('installed '.length) : 'none'
       }
       // What the setup needed is closed before anything the agent decides runs.
+      // Where the checkout started, so what the agent changed can be told from what was there.
+      let checkout: { sha: string; branch: string } | undefined
+      if (dir) {
+        const head = await sandbox.runCommand({ cmd: 'sh', args: ['-c', 'git rev-parse HEAD && git rev-parse --abbrev-ref HEAD'], cwd: dir })
+        // Read after the repository's install ran, so it is checked as anything from the sandbox is.
+        const [sha, branch] = (await stdoutOf(head)).trim().split('\n')
+        if (sha && branch && SHA.test(sha) && BRANCH.test(branch)) checkout = { sha, branch }
+      }
       if (preparing) await sandbox.update!({ networkPolicy: { allow } })
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag. The agent starts in the repository.
       const agent = await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true, ...(dir ? { cwd: dir } : {}) })
       const wait = agent && typeof agent.wait === 'function' ? agent.wait.bind(agent) : undefined
-      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox), ...(installed ? { installed } : {}), ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
+      const exec = async (command: { cmd: string; args: string[]; env?: Record<string, string> }) => {
+        const done = await sandbox.runCommand({ ...command, ...(dir ? { cwd: dir } : {}) })
+        return { exitCode: done && typeof done.exitCode === 'number' ? done.exitCode : null, stdout: await stdoutOf(done) }
+      }
+      // Read no further than `max` bytes, whatever the file says it is: null when there is none, or it is bigger.
+      const readFile = async (path: string, max: number): Promise<Buffer | null> => {
+        const stream = await sandbox.readFile!({ path })
+        if (!stream) return null
+        const chunks: Buffer[] = []
+        let size = 0
+        for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+          const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+          size += buffer.length
+          if (size > max) {
+            ;(stream as { destroy?(): void }).destroy?.()
+            return null
+          }
+          chunks.push(buffer)
+        }
+        return Buffer.concat(chunks)
+      }
+      return {
+        id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox',
+        stop: () => end(sandbox),
+        exec,
+        ...(sandbox.readFile ? { readFile } : {}),
+        ...(sandbox.update ? { setPolicy: async (rules: Record<string, VercelRule[]> | 'deny-all') => void (await sandbox.update!({ networkPolicy: rules === 'deny-all' ? rules : { allow: rules } })) } : {}),
+        ...(checkout ? { checkout } : {}),
+        ...(installed ? { installed } : {}),
+        ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
     },
   }
 }

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
 import { readFileSync } from 'node:fs'
@@ -20,7 +21,9 @@ import { HELP, helpFor } from './help.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
-import { SANDBOX_ENV, cloudflare, vercel, type CloudRunner } from '../runner/cloud.ts'
+import { SANDBOX_ENV, cloudflare, vercel, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
+import { BUNDLE, BUNDLE_MAX, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
+import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
@@ -633,10 +636,12 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
+      // A Vercel worker keeps its own loop here, a sandbox per task.
+      if (str(parsed.flags, 'runner') === 'vercel') return runAgent(run, parsed, () => {}, () => {})
       // A worker: one task after another until the queue has nothing for it.
       let done = 0
       let stopped = ''
@@ -1413,11 +1418,62 @@ export function repoUrl(value: string): string {
  * itself, through the board at MUSTER_URL, which the sandbox must be able to reach.
  */
 async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
+  if (where === 'vercel' && str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, agent)
+  return cloudTask(run, parsed, where, agent)
+}
+
+/**
+ * A worker that stays here and gives each task a sandbox of its own, as a swarm wants: it claims the
+ * next ready task, as the agent, under a claim token made for it, and runs that one task in a new sandbox
+ * with the token, so `mu run` there holds the same claim and no other worker can take it. Each task gets
+ * its own checkout, so --push makes one pull request per task. It ends when nothing is ready for --wait.
+ */
+async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[string]): Promise<number> {
+  const ready = str(parsed.flags, 'ready')!
+  const profile = str(parsed.flags, 'as') ?? run.io.env.MUSTER_PROFILE
+  if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
+  if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
+  const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
+  const { ready: _, loop: __, wait: ___, ...flags } = parsed.flags
+  let quietSince = Date.now()
+  let failed = 0
+  let worked = 0
+  while (!run.io.stop.aborted) {
+    // One token per task: what the sandbox holds settles that task and no other.
+    const claimToken = randomBytes(32).toString('base64url')
+    let claimed: number | undefined
+    try {
+      claimed = (await run.team.as(profile).taskClaim({ ready, token: claimToken })).task.id
+    } catch (error) {
+      if (!(error instanceof Failure && error.reason === 'nothing_ready')) throw error
+    }
+    if (claimed === undefined) {
+      if (Date.now() - quietSince >= idle) break
+      await sleep(Math.min(5000, idle), run.io.stop)
+      continue
+    }
+    const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile } }, 'vercel', agent, { claimToken }).catch((error: unknown) => {
+      run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
+      return 1
+    })
+    worked += 1
+    if (code !== 0) failed += 1
+    quietSince = Date.now()
+  }
+  if (run.io.stop.aborted) return stopCode(run.io.stop)
+  if (!run.json) run.io.out(`nothing more is ready: worked ${worked} ${worked === 1 ? 'task' : 'tasks'}${failed ? `, ${failed} of them not cleanly` : ''}`)
+  return failed ? 1 : 0
+}
+
+async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string], held: { claimToken?: string } = {}): Promise<number> {
   const env = run.io.env
-  const url = env.MUSTER_URL
-  // A token made for the agent, held to its profile and channels, is better than your own.
-  const given = env.MUSTER_AGENT_TOKEN
-  if (!url) throw new Failure('board_not_reachable', 'A cloud runner needs the board at a URL: set MUSTER_URL.', { hint: 'Serve the board with mu serve behind a public HTTPS name.' })
+  // Where the sandbox reaches the board. MUSTER_SANDBOX_URL is for a machine that has the board itself and
+  // serves it to sandboxes at another address, such as a tunnel's.
+  const url = env.MUSTER_SANDBOX_URL ?? env.MUSTER_URL
+  // A token made for the agent, held to its profile and channels, is better than your own. A worker's task
+  // has one made for it, since the claim it brings is the profile's, and a token handed in may be another's.
+  const given = held.claimToken ? undefined : env.MUSTER_AGENT_TOKEN
+  if (!url) throw new Failure('board_not_reachable', 'A cloud runner needs the board at a URL: set MUSTER_URL, or MUSTER_SANDBOX_URL where this machine has the board itself.', { hint: 'Serve the board with mu serve behind a public HTTPS name.' })
   const named = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE
   // Either you hand over a token made for the agent, or you name the agent and one is made for this run.
   if (given !== undefined) agentToken(given)
@@ -1425,6 +1481,27 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   // Checked before anything is started or loaded: a bad address should cost nothing.
   const asked = str(parsed.flags, 'repo')
   const repo = asked === undefined ? undefined : repoUrl(asked)
+  const gh = repo ? githubRepo(repo) : null
+  const push = on(parsed.flags, 'push')
+  if (push) {
+    if (where !== 'vercel') throw misuse('push_unsupported', '--push works with the Vercel runner only.')
+    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
+    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
+    if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
+  }
+  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
+  const app = gh ? githubApp(env) : undefined
+  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
+  // To clone: read only, and only while Vercel clones. A public repository the App isn't on is cloned without one.
+  let cloneToken: string | undefined
+  if (app && gh) {
+    try {
+      cloneToken = (await installationToken(app, gh, { contents: 'read' }, githubApi)).token
+    } catch (error) {
+      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) throw error
+    }
+  }
   let runner: CloudRunner
   if (where === 'cloudflare') {
     if (!env.MUSTER_CF_WORKER || !env.MUSTER_CF_SECRET) throw new Failure('runner_not_configured', 'The Cloudflare runner needs MUSTER_CF_WORKER (your Worker\'s URL) and MUSTER_CF_SECRET.', { hint: 'Deploy templates/cloudflare-runner first.' })
@@ -1490,10 +1567,13 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     task,
     agent: { ...agent, command: () => ({ bin: 'mu', args: inner }) },
     prompt: '',
-    env: { MUSTER_AGENT_ENV: passed.join(',') },
+    // A claim made for it here is the one it takes there: the claim's token, for this task alone.
+    env: { MUSTER_AGENT_ENV: passed.join(','), ...(held.claimToken ? { MUSTER_CLAIM_TOKEN: held.claimToken } : {}) },
     board: { url, token },
     ...(modelKey ? { model: { key: modelKey } } : {}),
     ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),
+    // Only for cloning, and only for this repository's git routes: never in the agent's policy.
+    ...(cloneToken ? { github: { token: cloneToken } } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
     permissionMode: safe ? 'safe' : 'bypass',
@@ -1518,8 +1598,10 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   if (!run.json) run.io.out(`started  ${line}`)
   const deadline = Date.now() + (lifetime ?? 30 * 60) * 1000 + 60_000
   let exitCode: number | null = null
+  let pr: string | null = null
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
+    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -1530,8 +1612,44 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     return stopCode(run.io.stop)
   }
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
-  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}`)
+  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? '\npr       none: nothing changed' : ''}`)
   return exitCode === 0 ? 0 : 1
+}
+
+/**
+ * What the agent changed, as a pull request. The sandbox is first closed to every host: whatever the
+ * agent left running there reaches nothing. Its changes are committed there and read out as a git bundle,
+ * then pushed to `mu/task-<id>` from this machine, from a repository that never ran anything of the
+ * agent's, and the pull request opened from here. No sandbox the agent ran in ever holds the token. Null
+ * when nothing changed.
+ */
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; api?: string; remote?: string }): Promise<string | null> {
+  if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'npm i @vercel/sandbox@latest' })
+  if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
+  const thread = await run.team.readThread({ id: options.task }).catch(() => null)
+  const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
+  const branch = `mu/task-${options.task}`
+  await started.setPolicy('deny-all')
+  const out = `/tmp/mu-task-${options.task}.bundle`
+  const made = await started.exec({
+    cmd: 'sh',
+    args: ['-c', BUNDLE],
+    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_OUT: out, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
+  })
+  const said = made.stdout.trim().split('\n').pop()
+  if (made.exitCode !== 0 || !said) throw new Failure('push_failed', `Reading the agent's changes out of the sandbox failed (exit ${made.exitCode}).`)
+  if (said === 'unchanged') return null
+  if (said !== 'bundle') throw new Failure('push_failed', "The sandbox didn't hand back the agent's changes.")
+  // Read with this side's limit: what the sandbox says about its size is not taken on trust.
+  const bundle = await started.readFile(out, BUNDLE_MAX)
+  if (!bundle) throw new Failure('push_failed', `The agent's changes are missing, or over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
+  // Made now, on this machine, for this repository, to write its contents and open the pull request.
+  const { token } = await installationToken(options.app, options.repo, { contents: 'write', pull_requests: 'write' }, options.api ? { api: options.api } : {})
+  await pushBundle({ repo: options.repo, token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
+  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
+  await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
+  await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
+  return url
 }
 
 /** How long a cloud agent may work when no --timeout says, and how much longer its sandbox lives to set up and settle the task. */

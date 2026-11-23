@@ -111,10 +111,12 @@ describe('cloud runners', () => {
     expect(created.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git' })
     expect(JSON.stringify(created.env)).not.toContain('mu1.secret')
     expect(calls[1][1]).toEqual({ cmd: 'npm', args: ['install', '-g', 'https://example.com/muster.tgz'] })
-    expect(calls[2][0]).toBe('update')
+    // Where the checkout started is read, then the agent's policy replaces the setup's.
+    expect(calls[2][1]).toMatchObject({ cmd: 'sh', cwd: '/vercel/web', args: ['-c', expect.stringContaining('git rev-parse HEAD')] })
+    expect(calls[3][0]).toBe('update')
     // The agent starts in the repository, where Vercel cloned it.
-    expect(calls[3][1]).toMatchObject({ cmd: 'sh', detached: true, cwd: '/vercel/web' })
-    expect(calls[3][1].args[1]).toBe(`printf %s 'it'\\''s a prompt with '\\''quotes'\\''' | 'claude' '--print' '--output-format' 'stream-json' '--verbose' '--strict-mcp-config' '--disable-slash-commands' '--tools' 'Bash,Read,Edit,Write,Grep,Glob'`)
+    expect(calls[4][1]).toMatchObject({ cmd: 'sh', detached: true, cwd: '/vercel/web' })
+    expect(calls[4][1].args[1]).toBe(`printf %s 'it'\\''s a prompt with '\\''quotes'\\''' | 'claude' '--print' '--output-format' 'stream-json' '--verbose' '--strict-mcp-config' '--disable-slash-commands' '--tools' 'Bash,Read,Edit,Write,Grep,Glob'`)
     await run.stop()
     expect(calls.at(-1)).toEqual(['stop'])
   })
@@ -188,7 +190,7 @@ describe('cloud runners', () => {
     const made = { name: 'sbx-4', runCommand: async (command: any) => void calls.push(['run', command.cmd]), update: async (options: any) => void calls.push(['update', options.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(options.networkPolicy.allow)]), stop: async () => void calls.push(['stop']) }
     const Sandbox = { create: async (options: any) => (calls.push(['create', Object.keys(options.networkPolicy.allow).sort()]), made) }
     await vercel({ Sandbox, setupHosts: ['objects.githubusercontent.com'] }).start(request)
-    expect(calls).toEqual([['create', ['codeload.github.com', 'github.com', 'objects.githubusercontent.com']], ['run', 'npm'], ['update', ['board.example.com']], ['run', 'sh']])
+    expect(calls).toEqual([['create', ['codeload.github.com', 'github.com', 'objects.githubusercontent.com']], ['run', 'npm'], ['run', 'sh'], ['update', ['board.example.com']], ['run', 'sh']])
     // A sandbox that can't be closed again is stopped before anything runs in it.
     calls.length = 0
     const { update: _, ...old } = made

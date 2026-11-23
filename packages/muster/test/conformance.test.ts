@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -118,7 +119,7 @@ describe('mu run in a cloud sandbox', () => {
   })
 
   /** A stand-in for @vercel/sandbox that logs every call, and whose agent command exits with `exit` after `after` ms. */
-  const fakeSdk = (dir: string, opts: { exit?: number; after?: number } = {}) => {
+  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; checkout?: string; bundled?: string; file?: string } = {}) => {
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'), { recursive: true })
     writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'
@@ -129,10 +130,15 @@ export const Sandbox = { async create(options) {
     sandboxId: 'sbx_44',
     async runCommand(c) {
       log({ run: c })
-      if (!c.detached) return { exitCode: 0 }
+      if (!c.detached) {
+        const script = c.args?.[1] ?? ''
+        const out = script.includes('git rev-parse HEAD &&') ? ${JSON.stringify(opts.checkout ?? 'abc123\nmain')} : script.includes('bundle create') ? ${JSON.stringify(opts.bundled ?? 'unchanged')} : ''
+        return { exitCode: 0, stdout: async () => out }
+      }
       return { wait: () => new Promise((resolve) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), resolve({ exitCode: ${opts.exit ?? 0} })), ${opts.after ?? 50})) }
     },
-    update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow) }),
+    readFile: async ({ path }) => (log({ read: path }), ${JSON.stringify(opts.file ?? null)} === null ? null : (await import('node:stream')).Readable.from([Buffer.from(${JSON.stringify(opts.file ?? '')}, 'base64')])),
+    update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow), policy: o.networkPolicy }),
     delete: async () => log({ deleted: true }),
     stop: async () => log({ stopped: true }),
   }
@@ -201,6 +207,118 @@ export const Sandbox = { async create(options) {
     lines = (await sdk.read()).slice(lines.length)
     expect(Object.keys(lines[0].create.networkPolicy.allow).sort()).toEqual(['codeload.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
     expect(lines.some((e) => e.run?.args?.[1]?.includes('--ignore-scripts'))).toBe(false)
+  })
+
+  /** A GitHub App as `mu run` reads it from the environment: an ID, and a key in a file. */
+  const appEnv = () => {
+    const file = join(tempDir(), 'app.pem')
+    writeFileSync(file, generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString())
+    return { GITHUB_APP_ID: '123', GITHUB_APP_KEY_FILE: file }
+  }
+
+  it('vercel: --push is refused where it can\'t work, before anything starts', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const repo = ['--repo', 'https://github.com/acme/web.git']
+    const reasonOf = async (args: string[], env: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
+    expect(await reasonOf(['--runner', 'cloudflare', ...repo])).toBe('push_unsupported')
+    expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
+    expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
+    expect(await reasonOf(['--runner', 'vercel', ...repo, '--detach'])).toBe('push_unsupported')
+    expect(await reasonOf(['--runner', 'vercel', ...repo], {})).toBe('runner_not_configured')
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(dir, 'sdk.log'))).toBe(false)
+  })
+
+  it('vercel: --push reads the agent\'s changes out of a sandbox closed to every host, pushes them from here to mu/task-<id>, and opens the pull request', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    // GitHub, standing in: a bare repository with one commit on main.
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    // What the agent left in the sandbox, as the sandbox hands it back: a bundle on top of base.
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(work, 'mu.bundle')).toString('base64')
+
+    // GitHub's API, standing in: the App is installed on acme/web, and each token is named for what it may do.
+    const got: any[] = []
+    const api = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const parsed = body ? JSON.parse(body) : null
+        got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: parsed })
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        json(201, { html_url: 'https://github.com/acme/web/pull/7' })
+      })
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
+    const env = { ...board, ...sdk.env, ...appEnv(), MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
+    // The branch is on GitHub, with the agent's change, under the name this machine chose.
+    expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:README.md'], { encoding: 'utf8' })).toBe('hello, fixed\n')
+    // A read token to clone, a write token made only for the push, and the pull request opened with it.
+    const tokens = got.filter((each) => each.url.endsWith('/access_tokens'))
+    expect(tokens.map((each) => each.body)).toEqual([{ repositories: ['web'], permissions: { contents: 'read' } }, { repositories: ['web'], permissions: { contents: 'write', pull_requests: 'write' } }])
+    expect(got.at(-1)).toEqual({ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghs_write', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) })
+    const lines = await sdk.read()
+    const exited = lines.findIndex((e) => e.exited !== undefined)
+    // After the agent the sandbox reaches nothing, and no policy of the sandbox's ever holds the token after it was cloned.
+    expect(lines[exited + 1]).toEqual({ update: 'deny-all', policy: 'deny-all' })
+    const bundled = lines.findIndex((e) => e.run?.args?.[1]?.includes('bundle create'))
+    expect(bundled).toBeGreaterThan(exited + 1)
+    expect(lines[bundled].run.env).toMatchObject({ MU_BASE: base, MU_NAME: 'fixer' })
+    // The read token is in the policy it was made with, to clone; nothing after it holds a token, and the write token never reaches the sandbox.
+    expect(JSON.stringify(lines[0])).toContain(Buffer.from('x-access-token:ghs_read').toString('base64'))
+    expect(lines.slice(1).filter((e) => e.update).some((e) => JSON.stringify(e).includes('x-access-token') || JSON.stringify(e).includes(Buffer.from('x-access-token:ghs_read').toString('base64')))).toBe(false)
+    expect((await import('node:fs')).readFileSync(join(dir, 'sdk.log'), 'utf8')).not.toContain(Buffer.from('x-access-token:ghs_write').toString('base64'))
+    expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(bundled)
+
+    // Nothing changed: no push, no pull request.
+    const quiet = fakeSdk(tempDir(), { checkout: `${base}\nmain`, bundled: 'unchanged' })
+    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env } })
+    api.close()
+    expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
+  })
+
+  it('vercel: a --ready --loop worker stays here and gives each task a sandbox of its own, under a claim made for it', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    // This machine has the board; sandboxes reach it at another address.
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1'], { env: local })
+    expect(run.code).toBe(0)
+    const lines = await sdk.read()
+    const created = lines.filter((e) => e.create)
+    expect(created).toHaveLength(2)
+    // Each sandbox runs one task, by ID, with the token of the claim made for it here: no two alike.
+    const started = lines.filter((e) => e.run?.detached)
+    expect(started.map((e) => /'run' '(\d+)'/.exec(e.run.args[1])?.[1]).map(Number)).toEqual(ids)
+    const tokens = created.map((e) => e.create.env.MUSTER_CLAIM_TOKEN)
+    expect(tokens.every((token: string) => /^[\w-]{43}$/.test(token))).toBe(true)
+    expect(new Set(tokens).size).toBe(2)
+    expect(lines.filter((e) => e.deleted)).toHaveLength(2)
+    // The claims are the agent's, so mu run in each sandbox, as that agent, holds them.
+    for (const id of ids) expect(JSON.parse((await cli(dir, ['read', String(id), '--json'])).stdout).task.claim.by.profile).toBe('agent-1')
+    // --push with --ready needs the worker: a sandbox per task.
+    const refused = await cli(dir, ['run', '--ready', 'swarm/web', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--repo', 'https://github.com/acme/web.git', '--push', '--json'], { env: local })
+    expect(JSON.parse(refused.stderr).error.reason).toBe('push_unsupported')
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {

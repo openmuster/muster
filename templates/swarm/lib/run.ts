@@ -15,6 +15,8 @@ export type Launch = {
   runner?: 'local' | 'vercel' | 'cloudflare'
   /** The repository a cloud sandbox clones. */
   repo?: string
+  /** In a Vercel sandbox with a repository, open a pull request for each task's changes. Default on; it needs a GitHub App. */
+  push?: boolean
   /**
    * Lets `agent` be any command. Off unless code of yours says so: a launch that takes its fields from a
    * request, as the page does, must never start whatever command the request names.
@@ -33,6 +35,11 @@ export type Spawner = (worker: { name: string; argv: string[]; cwd: string }) =>
 
 /** The command line of a worker: take the run's next ready task, start the agent on it, and again, until nothing is ready for ten minutes. */
 export function workerArgv(launch: Launch, swarm: string): string[] {
+  if (launch.runner === 'vercel') {
+    // A worker on this machine that gives each task a sandbox of its own, and with a repository, a pull request of its own.
+    const repo = launch.repo ? ['--repo', launch.repo, ...(launch.push === false ? [] : ['--push'])] : []
+    return ['run', '--ready', `${swarm}/${launch.slug}`, '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', launch.agent, ...repo]
+  }
   if (launch.runner && launch.runner !== 'local') {
     // A sandbox is its own worker: it takes tasks from the queue itself, through the board's URL.
     return ['run', '--ready', `${swarm}/${launch.slug}`, '--runner', launch.runner, '--agent', launch.agent, ...(launch.repo ? ['--repo', launch.repo] : [])]
@@ -53,8 +60,9 @@ export async function launch(team: Board, swarm: string, request: Launch, spawn:
   if (!KNOWN.includes(request.agent) && !request.allowCommand) throw new Error('A run starts claude or codex. Another command is started only by code that passes allowCommand.')
   if (request.runner && request.runner !== 'local') {
     if (request.agent !== 'claude' && request.agent !== 'codex') throw new Error('A cloud sandbox runs claude or codex.')
-    if (!process.env.MUSTER_URL) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set.')
-    if (!process.env.MUSTER_AGENT_TOKEN) throw new Error('A cloud sandbox needs a token made for its agents: set MUSTER_AGENT_TOKEN to one held to a profile and to this swarm\'s channels (mu token create).')
+    if (!process.env.MUSTER_URL && !(request.runner === 'vercel' && process.env.MUSTER_SANDBOX_URL)) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set, or MUSTER_SANDBOX_URL where this machine has the board.')
+    // A Vercel worker makes each task's agent a token of its own, held to that task's channel. A Cloudflare one is handed one.
+    if (request.runner === 'cloudflare' && !process.env.MUSTER_AGENT_TOKEN) throw new Error('A cloud sandbox needs a token made for its agents: set MUSTER_AGENT_TOKEN to one held to a profile and to this swarm\'s channels (mu token create).')
   }
   if (!Number.isInteger(request.agents) || request.agents < 1 || request.agents > AGENTS_MAX) throw new Error(`A run has 1 to ${AGENTS_MAX} agents.`)
   const channel = `${swarm}/${request.slug}`
