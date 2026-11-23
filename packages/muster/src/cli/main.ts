@@ -190,7 +190,7 @@ const filterOf = (parsed: Parsed, channelAt: number): Filter => {
   if (re !== undefined) filter.re = id(re)
   const labels = list(parsed.flags, 'label')
   if (labels.length) filter.labels = labels
-  for (const key of ['by', 'mentions', 'text'] as const) {
+  for (const key of ['by', 'mentions', 'text', 'for'] as const) {
     const value = str(parsed.flags, key)
     if (value !== undefined) filter[key] = value
   }
@@ -199,7 +199,7 @@ const filterOf = (parsed: Parsed, channelAt: number): Filter => {
   return filter
 }
 
-const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'after', 'timeout', 'last'], many: ['label', 'type'] }
+const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'for', 'after', 'timeout', 'last'], many: ['label', 'type'] }
 
 type Command = { spec: Spec; run: (run: Run, parsed: Parsed) => Promise<number | void> }
 
@@ -297,6 +297,47 @@ const commands: Record<string, Command> = {
         if (page.older !== null) lines.push('', `(older not shown: mu read ${target} --before ${page.older})`)
         return lines.join('\n')
       })
+    },
+  },
+
+  inbox: {
+    spec: { value: ['limit', 'wait'], bool: ['peek'] },
+    async run(run, parsed) {
+      const profile = str(parsed.flags, 'as') ?? (run.io.env.MUSTER_PROFILE || undefined)
+      // A bare profile name is the caller's own; with no profile the inbox is the principal's.
+      const mine = profile ?? (await run.team.backend.self(null)).principal
+      const limit = str(parsed.flags, 'limit')
+      const wait = str(parsed.flags, 'wait')
+      const peek = on(parsed.flags, 'peek')
+      const deadline = wait === undefined ? 0 : Date.now() + duration(wait, 'wait') * 1000
+      const stored = await run.team.cursorGet('inbox')
+      let after = stored ?? 0
+      let pause = 100
+      for (;;) {
+        const page = await run.team.events({ after, filter: { for: mine }, limit: limit === undefined ? 50 : Number(limit) })
+        after = page.cursor
+        if (page.events.length > 0 || Date.now() >= deadline || run.io.stop.aborted) {
+          if (!peek) await run.team.cursorSet('inbox', page.cursor)
+          const items = page.events.map((event) => ({ kind: event.for, event }))
+          if (run.json) return print(run, { items, cursor: page.cursor }, () => '')
+          if (page.events.length === 0) return run.io.stop.aborted ? stopCode(run.io.stop) : 0
+          const rows: string[] = []
+          for (const event of page.events) {
+            const data = event.data as Record<string, any>
+            let text = event.message?.text ?? (typeof data.text === 'string' ? data.text : '')
+            const thread = event.thread ?? event.message?.id ?? event.task?.id ?? event.seq
+            // A task assigned later has its words on the thread's first message.
+            if (text === '' && event.for === 'assigned') text = await run.team.readThread({ id: thread }).then((found) => found.message.text, () => '')
+            const head = `${String(event.for).padEnd(8)}  #${thread}  ${event.channel ?? ''}  ${event.by.profile ?? who(event.by)}:`
+            const first = text.split('\n', 1)[0] ?? ''
+            rows.push(first ? `${head} ${first.length > 70 ? first.slice(0, 69) + '…' : first}` : head)
+          }
+          run.io.out(rows.join('\n'))
+          return 0
+        }
+        await sleep(Math.min(pause, Math.max(0, deadline - Date.now())), run.io.stop)
+        pause = Math.min(pause * 2, 1000)
+      }
     },
   },
 

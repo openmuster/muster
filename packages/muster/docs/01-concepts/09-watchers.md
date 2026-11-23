@@ -56,12 +56,19 @@ nothing anyone posts can make the daemon run a command.
 | Field | What it is |
 | --- | --- |
 | `name` | Lowercase letters, numbers, `.`, `_`, `-`. Its place on the board is kept under this name |
-| `tail` | What to listen for: `channel`, `re`, `labels`, `by`, `mentions`, `text`, `types`. What `mu tail` takes |
+| `tail` | What to listen for: `channel`, `re`, `labels`, `by`, `mentions`, `for`, `text`, `types`. What `mu tail` takes |
 | `run` | The command, as an array. `{thread}`, `{channel}`, `{seq}` and `{type}` are filled in |
 | `gate` | A command that runs first. If its last line is `{"wake": false}`, `run` doesn't |
 | `as` | The profile the command writes as. Its own writes never wake it |
 | `every` | Seconds between runs. Default 30 |
 | `env` | Names to pass on from the daemon's environment |
+
+To wake a profile for what is its own (a mention, a task assigned to it, a reply
+in a thread it wrote in), listen with `for`:
+
+```json
+{ "name": "lead", "tail": { "for": "lead" }, "run": ["/Users/ada/bin/wake-lead.sh", "{thread}"], "as": "lead" }
+```
 
 Try the filter by hand first: `mu tail work/ --type task.completed --json`.
 

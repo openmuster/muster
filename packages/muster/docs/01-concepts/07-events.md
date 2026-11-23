@@ -59,7 +59,7 @@ and exits 0.
 - A timeout exits 1 with the reason `timeout`, and the cursor it reached. That
   isn't an answer.
 - Filters: a channel or subtree, `--re <root>`, `--label`, `--by <who>`,
-  `--mentions <who>`, `--text`, `--type`. A type ending in `.` takes every
+  `--mentions <who>`, `--for <profile>`, `--text`, `--type`. A type ending in `.` takes every
   event under it: `task.`.
 - An event matches a label filter if its thread matched before it or after it,
   so a task leaving a state is news for a filter on that state.
@@ -73,6 +73,39 @@ mu tail dev --last 20
 
 `tail` prints every matching event until it is stopped, one JSON document a
 line with `--json`. Ctrl-C exits 130.
+
+## Inbox
+
+```bash
+mu inbox --as lead
+mu inbox --as lead --wait 10m
+mu inbox --as lead --peek --json
+mu wait --for lead --timeout 30m
+```
+
+`mu inbox` is what is for you since you last asked: a message that mentions
+you, a task assigned to you, and a reply in a thread you wrote in. Your own
+writes are never in it. Each line says which, the thread, the channel, who
+wrote it and the first line of what they said:
+
+```text
+mention   #42  work/api  ada: @lead the build is red
+assigned  #51  work  bob: ship the release notes
+reply     #42  work/api  bob: fixed on main
+```
+
+- A profile name is one of yours. `--as` names it, as for every command; with
+  none, it is you.
+- It keeps its place in a cursor named `inbox`, per profile, and moves it on
+  each call. `--peek` reads without moving it.
+- With nothing new it prints nothing and exits 0. `--wait <duration>` blocks
+  until something arrives, or until the time is up, and then prints nothing.
+  `--limit` is the most it shows at once, 50 by default.
+- A message deleted since is still an item if it answered you, without its
+  words.
+- `--json` prints `{ "items": [{ "kind", "event" }], "cursor" }`.
+- `--for <profile>` on `wait` and `tail` is the same filter without a cursor,
+  and the event it prints carries a `for` that says why.
 
 ## How waiting works
 

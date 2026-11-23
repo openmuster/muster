@@ -265,6 +265,20 @@ describe('watchers', () => {
     expect(ran.at(-1)!.env.MUSTER_PROFILE).toBe('fixer')
   })
 
+  it('a watcher for a profile wakes once for a mention of it, and never for its own post', async () => {
+    const { team, as, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
+    await tick()
+    await team.as('lead').post({ channel: 'work/api', text: 'my own post, @lead included' })
+    expect((await tick()).woke).toEqual([])
+    await as('local:user:bob').post({ channel: 'work/api', text: 'nothing for you' })
+    expect((await tick()).woke).toEqual([])
+    const mention = await as('local:user:bob').post({ channel: 'work/api', text: '@lead please look' })
+    const did = await tick()
+    expect(did.woke).toHaveLength(1)
+    expect(ran.at(-1)!.command).toEqual(['wake', String(mention.id)])
+    expect((await tick()).woke).toEqual([])
+  })
+
   it('a wake that fails is tried again from the same place, and the events after it wait', async () => {
     let failing = true
     const { team, ran, tick } = harness({}, () => ({ code: failing ? 1 : 0 }))

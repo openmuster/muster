@@ -12,8 +12,12 @@ read
        [--text <words>] [--mentions <who>] [--cursor <name>]
   search <words> [--in <channel>]
   download <id> [--to <dir>]     the files a message carries
+  inbox [--peek] [--wait 10m] [--limit n]
+                                 what is for you since last asked: mentions,
+                                 tasks assigned to you, replies to you
   wait [<channel>] [--re <id>] [--label k=v]... [--by <who>] [--mentions <who>]
-       [--text <words>] [--type <event>]... [--after <cursor>] [--timeout 30m]
+       [--for <profile>] [--text <words>] [--type <event>]... [--after <cursor>]
+       [--timeout 30m]
   tail [<channel>] [same filters] [--last n]
 
 write
