@@ -21,10 +21,10 @@ import { HELP, helpFor } from './help.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
-import { SANDBOX_ENV, cloudflare, vercel, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
+import { SANDBOX_ENV, cloudflare, vercel, type BaseRecord, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
 import { BUNDLE, BUNDLE_MAX, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
 import { inspect } from '../inspect/server.ts'
@@ -39,7 +39,7 @@ import { loadOidc } from '../serve/oidc.ts'
 import { actorId, profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export type Io = {
   out: (text: string) => void
@@ -1514,7 +1514,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
       throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
     }
     // GitHub is open only while mu installs; the agent starts with it closed.
-    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env) })
+    // A kept base with muster installed is forked for each run, unless MUSTER_VERCEL_BASE=off.
+    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env), base: env.MUSTER_VERCEL_BASE !== 'off', bases: fileBases(join(configDir(), 'vercel-bases.json')) })
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
@@ -1673,6 +1674,29 @@ async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: Ab
     pause = Math.min(pause * 2, 30_000)
   }
   return null
+}
+
+/** The Vercel bases this machine made, written down in its config folder: the only ones its runs fork. */
+function fileBases(path: string): BaseRecord {
+  const read = (): Record<string, string> => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {}
+    } catch {
+      return {}
+    }
+  }
+  const write = (bases: Record<string, string>) => {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(`${path}.tmp`, JSON.stringify(bases, null, 2), { mode: 0o600 })
+    renameSync(`${path}.tmp`, path)
+  }
+  return {
+    get: (key) => read()[key],
+    set: (key, name) => write({ ...read(), [key]: name }),
+    entries: () => Object.entries(read()),
+    forget: (name) => write(Object.fromEntries(Object.entries(read()).filter(([, value]) => value !== name))),
+  }
 }
 
 /**
