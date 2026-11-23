@@ -16,7 +16,15 @@ export type Caller = {
   privates?: readonly string[]
   /** What this caller writes never leaves the board for a synced platform. Set by its token, not by a request. */
   noSync?: true
+  /** Its profile is the one its token is held to, not one the request named. Set by the server, never by a request. */
+  profileHeld?: true
 }
+
+/**
+ * The profile the daemon writes a workflow's runs as. Only the board itself may write as it: a caller held
+ * to channels can't, whether its token or its request names it, so nobody can forge a run's marks.
+ */
+export const WORKFLOWS_PROFILE = 'workflows'
 
 export type Permission = 'read' | 'post' | 'react' | 'label' | 'manage'
 

@@ -1,4 +1,5 @@
-import { board } from 'muster'
+import { join } from 'node:path'
+import { board, loadWorkflows } from 'muster'
 import { describe, expect, it } from 'vitest'
 import { launch, workerArgv } from '../lib/run.ts'
 import { snapshot } from '../lib/swarm.ts'
@@ -136,5 +137,28 @@ describe('snapshot', () => {
     expect(shown.tasks.ready.map((task) => task.id)).toEqual([fresh2])
     // The newest finished, newest first: the two the last-active list had room for beside the one just queued.
     expect(shown.tasks.completed.map((task) => task.id)).toEqual([done[3], done[2]])
+  })
+})
+
+describe('workflows.json', () => {
+  it('is a valid set of registered workflows: implement plans, works and reviews in order, and review has one step', () => {
+    const workflows = loadWorkflows(join(import.meta.dirname, '..', 'workflows.json'))
+    expect(workflows.map((workflow) => workflow.name)).toEqual(['implement', 'review'])
+    const implement = workflows[0]!
+    expect(implement.steps.map((step) => [step.key, step.needs ?? []])).toEqual([['plan', []], ['work', ['plan']], ['review', ['work']]])
+    expect(implement.workers).toMatchObject({ runner: 'vercel', push: true })
+    expect(implement.workers.count).toBe(2)
+    // Workers take only the daemon's own tasks, so no step may ask an agent to make more.
+    for (const workflow of workflows) for (const step of workflow.steps) expect(step.text).not.toMatch(/tasks create/)
+    // A worker's token reaches only the run's channel, so no step sends it to read the asking thread: the
+    // thread's text comes in with {thread.text}.
+    for (const workflow of workflows) for (const step of workflow.steps) expect(step.text).not.toMatch(/mu read \{thread\}|read thread/i)
+    expect(workflows.flatMap((workflow) => workflow.steps).filter((step) => step.text.includes('{thread.text}')).map((step) => step.key)).toEqual(['plan', 'review'])
+    // A command a step shows must be one mu has: `tasks list` isn't, it would list a channel named "list".
+    const verbs = ['create', 'claim', 'run', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'cancel', 'assign', 'needs']
+    for (const [, next] of [...workflows.flatMap((workflow) => workflow.steps.map((step) => step.text)).join('\n').matchAll(/mu tasks (\S+)/g)]) {
+      expect(next === '{run}' || next!.startsWith('<') || verbs.includes(next!), `mu tasks ${next}`).toBe(true)
+    }
+    expect(workflows[1]!.steps).toHaveLength(1)
   })
 })

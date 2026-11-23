@@ -11,6 +11,7 @@ import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Par
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
@@ -416,6 +417,29 @@ const commands: Record<string, Command> = {
     },
   },
 
+  workflow: {
+    spec: { value: ['on'], many: ['arg'] },
+    async run(run, parsed) {
+      const verb = parsed.positionals[0]
+      if (verb === 'list') {
+        const workflows = loadWorkflows()
+        return print(run, { workflows }, () =>
+          workflows.length === 0
+            ? `no workflows in ${workflowsPath()}`
+            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}`).join('\n'),
+        )
+      }
+      if (verb === 'run') {
+        const name = parsed.positionals[1]
+        if (name === undefined) throw misuse('invalid_workflow', 'Name the workflow: mu workflow run release --on 812.')
+        const target = id(str(parsed.flags, 'on'), 'the thread to run it on (--on <id>)')
+        const sent = await run.team.workflowRequest({ name, on: target, args: pairs(list(parsed.flags, 'arg'), 'arg') })
+        return print(run, sent, () => `requested  ${name}  on #${target}  (seq ${sent.seq})`)
+      }
+      throw misuse('invalid_workflow', 'Use: mu workflow list, or mu workflow run <name> --on <id> [--arg k=v]...')
+    },
+  },
+
   label: {
     spec: { many: ['unset', 'if', 'if-unset'], value: ['idempotency-key'] },
     async run(run, parsed) {
@@ -636,7 +660,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -919,13 +943,22 @@ const commands: Record<string, Command> = {
         run.io.err(`error: ${(error as Error).message}`)
         run.io.err('  No outgoing webhooks are sent until that is fixed and the server restarted.')
       }
-      // A server's output is its address and its token. What a hook couldn't deliver is the one thing worth adding.
+      // On their own too. A workflows file that is wrong means requests aren't read at all: they wait, and
+      // are answered once it is fixed and the server restarted, never refused for a typo.
+      let workflows: ReturnType<typeof loadWorkflows> | undefined
+      try {
+        workflows = loadWorkflows()
+      } catch (error) {
+        run.io.err(`error: ${(error as Error).message}`)
+        run.io.err('  No workflow requests are read until that is fixed and the server restarted.')
+      }
+      // A server's output is its address and its token. What a hook couldn't deliver, or a workflow couldn't start, is worth adding.
       const log = (line: string) => {
-        if (/^(failed|dropped) {2,}hook /.test(line)) run.io.err(line)
+        if (/^(failed|dropped) {2,}(hook|workflow) /.test(line)) run.io.err(line)
       }
       try {
         // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, stop: run.io.stop, log })
+        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, ...(workflows ? { workflows } : {}), stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.
@@ -946,10 +979,12 @@ const commands: Record<string, Command> = {
       if (verb === 'run') {
         let watchers
         let hooks
+        let workflows
         try {
           const config = loadDaemonConfig(run.io.env)
           watchers = config.watchers
           hooks = config.arm()
+          workflows = config.workflows
         } catch (error) {
           // A config a restart can't fix: say so and exit cleanly, so the service manager leaves it stopped.
           run.io.err(`error: ${(error as Error).message}`)
@@ -960,7 +995,8 @@ const commands: Record<string, Command> = {
         run.io.out(`board     ${me.where}`)
         run.io.out(`watchers  ${watchers.length}`)
         if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
-        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, stop: run.io.stop, log: run.io.out })
+        if (workflows.length) run.io.out(`workflows ${workflows.length}`)
+        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
       }
@@ -1000,7 +1036,7 @@ const commands: Record<string, Command> = {
 
   tasks: {
     spec: {
-      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key'],
+      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key', 'by'],
       many: ['label', 'needs', 'from'],
       bool: ['claim', 'no-sync', 'round', 'pool', 'none', 'no-count', 'latest'],
     },
@@ -1037,10 +1073,12 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
   const from = list(parsed.flags, 'from')
+  const by = str(parsed.flags, 'by')
   const request = {
     ...(ready !== undefined ? { ready } : { id: id(target, 'a task') }),
     ...(labels.length ? { labels } : {}),
     ...(from.length ? { from } : {}),
+    ...(by !== undefined ? { by } : {}),
     ...lease(parsed.flags),
     ...(pid !== undefined ? { pid, pidStart: processStart(pid) ?? undefined } : {}),
     ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}),
@@ -1434,6 +1472,9 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
   if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
+  // As a worker here would: --label narrows which ready tasks it takes, and --by to whose.
+  const labels = list(parsed.flags, 'label')
+  const by = str(parsed.flags, 'by')
   const { ready: _, loop: __, wait: ___, ...flags } = parsed.flags
   let quietSince = Date.now()
   let failed = 0
@@ -1443,7 +1484,7 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
     const claimToken = randomBytes(32).toString('base64url')
     let claimed: number | undefined
     try {
-      claimed = (await run.team.as(profile).taskClaim({ ready, token: claimToken })).task.id
+      claimed = (await run.team.as(profile).taskClaim({ ready, ...(labels.length ? { labels } : {}), ...(by !== undefined ? { by } : {}), token: claimToken })).task.id
     } catch (error) {
       if (!(error instanceof Failure && error.reason === 'nothing_ready')) throw error
     }

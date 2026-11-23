@@ -22,7 +22,7 @@ export type Board = { [K in keyof Methods]: Bound<Methods[K]> } & {
 }
 
 const METHODS = [
-  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel',
+  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
   'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head', 'cursorGet', 'cursorSet',
   'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
   'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',

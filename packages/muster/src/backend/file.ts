@@ -9,6 +9,7 @@ import * as messages from '../core/messages.ts'
 import * as reads from '../core/reads.ts'
 import * as schedules from '../core/schedules.ts'
 import * as tasks from '../core/tasks.ts'
+import * as workflows from '../core/workflows.ts'
 import { Failure, misuse } from '../failure.ts'
 import { profileName, type Caller } from '../model.ts'
 import { sameProcess } from '../process.ts'
@@ -132,6 +133,7 @@ export function file(options: FileOptions = {}): Backend {
     label: op(messages.label),
     react: op(messages.react),
     createChannel: op(messages.createChannel),
+    workflowRequest: op(workflows.request),
     readChannel: op(reads.readChannel),
     readThread: op(reads.readThread),
     events: op(reads.events),

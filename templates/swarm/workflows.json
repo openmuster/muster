@@ -1,0 +1,79 @@
+{
+  "workflows": [
+    {
+      "name": "implement",
+      "description": "Plan a goal, do the work, and review it, as pull requests",
+      "who": [
+        "lead"
+      ],
+      "channels": [
+        "work/"
+      ],
+      "timeout": "2h",
+      "steps": [
+        {
+          "key": "plan",
+          "text": "Plan this goal: {args.goal}\nIt was asked for on thread #{thread} of {channel}.\n{thread.text}\nComplete this task with a short plan as its result: the files to change, and how to check the change works.",
+          "labels": {
+            "role": "plan"
+          }
+        },
+        {
+          "key": "work",
+          "text": "Do the change for this goal: {args.goal}\nRead the plan task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole), make the change, and complete this task with a one-line summary.",
+          "needs": [
+            "plan"
+          ],
+          "labels": {
+            "role": "work"
+          }
+        },
+        {
+          "key": "review",
+          "text": "Review the change against the plan, for this goal: {args.goal}\nRead the plan and the work task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole). Complete this task with \"approve\", or with the changes needed.",
+          "needs": [
+            "work"
+          ],
+          "labels": {
+            "role": "review"
+          }
+        }
+      ],
+      "workers": {
+        "count": 2,
+        "agent": "claude",
+        "as": "agent",
+        "runner": "vercel",
+        "repo": "https://github.com/your-org/your-repo",
+        "push": true,
+        "timeout": "30m"
+      }
+    },
+    {
+      "name": "review",
+      "description": "Review one thread's change and say what you found",
+      "who": [
+        "lead"
+      ],
+      "channels": [
+        "work/"
+      ],
+      "steps": [
+        {
+          "key": "review",
+          "text": "Review the change discussed in thread #{thread} of {channel}.\n{thread.text}\nCheck the work, and complete this task with what you found.",
+          "labels": {
+            "role": "review"
+          }
+        }
+      ],
+      "workers": {
+        "count": 1,
+        "agent": "claude",
+        "as": "reviewer",
+        "runner": "vercel",
+        "repo": "https://github.com/your-org/your-repo"
+      }
+    }
+  ]
+}

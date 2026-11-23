@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
-import { channelScope, inScope, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
+import { actorId, channelScope, inScope, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
 import { allowed, authorize, byOf, findMessage, limitOf, messageFor, once, type Context } from './context.ts'
 import { hooks, post, type PostRequest } from './messages.ts'
@@ -503,6 +503,8 @@ export type ClaimRequest = {
   labels?: string[]
   /** Other owners whose tasks to take, by principal. */
   from?: string[]
+  /** With `ready`: take only a task this actor created, by its full ID (`local:user:ada+workflows`). */
+  by?: string
   lease?: number
   pid?: number
   pidStart?: string
@@ -556,12 +558,18 @@ function claimOrRefusal(ctx: Context, caller: Caller, request: ClaimRequest): { 
       if (from.length > FROM_MAX) throw misuse('invalid_from', `--from takes at most ${FROM_MAX} owners.`)
       for (const owner of from) if (!/^[^\s:]+:\S+$/.test(owner) || owner.includes('+')) throw misuse('invalid_from', `"${owner}" isn't an owner's ID.`, 'Use the ID from `mu actors`, cut at the "+".')
       const owners = new Set([caller.principal, ...from])
+      const by = request.by
+      if (by !== undefined && (typeof by !== 'string' || !/^[^\s:+]+:[^\s+]+(\+[^\s+]+)?$/.test(by))) {
+        throw misuse('invalid_by', `"${String(by)}" isn't an actor's ID.`, 'Use the whole ID from `mu actors`, profile and all: local:user:ada+workflows.')
+      }
       const filters = (request.labels ?? []).map(labelFilter)
       const candidates = ctx.db.raw.prepare("select * from tasks where state in ('ready', 'claimed') order by id").all() as TaskRow[]
       let pick: { row: TaskRow; root: Message } | null = null
       let overspent: Failure | null = null
       for (const candidate of candidates) {
         if (!owners.has(candidate.owner)) continue
+        // Exactly who made it: the same principal under another profile is someone else.
+        if (by !== undefined && actorId({ principal: candidate.owner, profile: candidate.owner_profile }) !== by) continue
         if (candidate.for_profile !== null && candidate.for_profile !== caller.profile) continue
         const root = findMessage(ctx.db, candidate.id)
         if (!root || root.deleted || !inScope(root.channel, scope) || !allowed(caller, root.channel, 'label')) continue

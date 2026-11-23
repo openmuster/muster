@@ -20,8 +20,10 @@ export const SANDBOX_ROUTES = [
 /**
  * What stays closed, and why: schedules and schemas change what the board does later, a budget is the
  * owner's to set, and a stored cursor is how a watcher knows where it is, so moving one silences it.
+ * A workflow request starts work beyond the sandbox: workers on the daemon's machine, which a steered
+ * agent in a sandbox must not be able to set going.
  */
-export const SANDBOX_CLOSED = ['scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'budgetSet', 'cursorGet', 'cursorSet'] as const satisfies readonly (typeof ROUTES)[number][]
+export const SANDBOX_CLOSED = ['scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'budgetSet', 'cursorGet', 'cursorSet', 'workflowRequest'] as const satisfies readonly (typeof ROUTES)[number][]
 
 export const PLACEHOLDER = 'set-by-the-network-policy'
 

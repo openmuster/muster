@@ -137,6 +137,11 @@ mu tasks complete 812 "fixed in a1b2c3" --as ci
 `+profile`. A task's text is instructions an agent is about to follow, so
 taking a stranger's is always explicit.
 
+`--by <actor id>` narrows that to the tasks one actor created, by its whole
+ID, profile and all: `--by local:user:ada+workflows` takes nothing
+`local:user:ada+lead` made. A [workflow](./16-workflows.md)'s workers use it
+to take only what the daemon made for them.
+
 `--for <profile>` at creation, or `tasks assign`, gives a task to one profile.
 Only that profile may claim it, and its `--ready` takes assigned tasks first.
 

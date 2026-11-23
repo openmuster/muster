@@ -46,6 +46,8 @@ claimed answers `task_ready`, with the claim to run first.
 | `too_many_labels` | Over 64 labels on a message, or over 64 unset in one change |
 | `nothing_to_label` | No label to set or unset |
 | `invalid_emoji` | Not an emoji name |
+| `invalid_workflow` | Not a workflow name: lowercase letters, numbers, `.`, `_` and `-` |
+| `invalid_args` | A workflow request's arguments: at most 10, named in lowercase and `_`, each value text up to 500 characters |
 | `label_conflict` | `--if` or `--if-unset` didn't hold. `data.labels` has them as they are |
 | `revision_conflict` | `--if-revision` named an old revision |
 | `newer_message` | Something landed after the `--after` message |
@@ -75,6 +77,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_claim_token` | A claim token you choose is 32 to 200 characters of base64url |
 | `invalid_needs` | Not a task, canceled, too many, or it would wait for itself |
 | `invalid_from` | Not an owner's ID |
+| `invalid_by` | Not an actor's whole ID |
 | `invalid_kind` | Not a hold kind |
 | `reserved_kind` | A kind only the board uses: `edited`, `failing` |
 | `invalid_state` | Not a task state |
