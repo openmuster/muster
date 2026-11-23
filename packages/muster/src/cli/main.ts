@@ -20,7 +20,8 @@ import { HELP, helpFor } from './help.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
-import { SANDBOX_ENV, cloudflare, vercel, type CloudRunner } from '../runner/cloud.ts'
+import { SANDBOX_ENV, cloudflare, vercel, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
+import { gitRules, githubRepo, openPullRequest } from '../runner/github.ts'
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
@@ -633,7 +634,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -1425,6 +1426,15 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   // Checked before anything is started or loaded: a bad address should cost nothing.
   const asked = str(parsed.flags, 'repo')
   const repo = asked === undefined ? undefined : repoUrl(asked)
+  const gh = repo ? githubRepo(repo) : null
+  const push = on(parsed.flags, 'push')
+  if (push) {
+    if (where !== 'vercel') throw misuse('push_unsupported', '--push works with the Vercel runner only.')
+    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
+    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
+    if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push takes one task: a worker\'s tasks would share one checkout.')
+    if (!env.GITHUB_TOKEN) throw new Failure('runner_not_configured', '--push needs GITHUB_TOKEN: a token that may write contents and pull requests on the repository.', { hint: 'A fine-grained token for that one repository is best: it goes on the push, never into the sandbox.' })
+  }
   let runner: CloudRunner
   if (where === 'cloudflare') {
     if (!env.MUSTER_CF_WORKER || !env.MUSTER_CF_SECRET) throw new Failure('runner_not_configured', 'The Cloudflare runner needs MUSTER_CF_WORKER (your Worker\'s URL) and MUSTER_CF_SECRET.', { hint: 'Deploy templates/cloudflare-runner first.' })
@@ -1494,6 +1504,8 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     board: { url, token },
     ...(modelKey ? { model: { key: modelKey } } : {}),
     ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),
+    // Only for cloning, and only for this repository's git routes: never in the agent's policy.
+    ...(gh && env.GITHUB_TOKEN ? { github: { token: env.GITHUB_TOKEN } } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
     permissionMode: safe ? 'safe' : 'bypass',
@@ -1518,8 +1530,10 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   if (!run.json) run.io.out(`started  ${line}`)
   const deadline = Date.now() + (lifetime ?? 30 * 60) * 1000 + 60_000
   let exitCode: number | null = null
+  let pr: string | null = null
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
+    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, token: env.GITHUB_TOKEN!, profile: profile ?? 'agent', api: env.MUSTER_GITHUB_API })
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -1530,9 +1544,43 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     return stopCode(run.io.stop)
   }
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
-  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}`)
+  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? '\npr       none: nothing changed' : ''}`)
   return exitCode === 0 ? 0 : 1
 }
+
+/**
+ * What the agent changed, as a pull request. The sandbox's policy is first made GitHub's alone, for this
+ * repository's git routes, with the token: the board's token and the model's key are out of it, and so
+ * is everything else. Its changes are committed on `mu/task-<id>` and pushed from the sandbox, and the
+ * pull request is opened from here, so the sandbox never reaches GitHub's API. Null when nothing changed.
+ */
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string }; token: string; profile: string; api?: string }): Promise<string | null> {
+  if (!started.exec || !started.setPolicy || !started.checkout) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy or run a command in it.", { hint: 'npm i @vercel/sandbox@latest' })
+  const thread = await run.team.readThread({ id: options.task }).catch(() => null)
+  const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
+  const branch = `mu/task-${options.task}`
+  await started.setPolicy(gitRules(options.repo, options.token, { push: true }))
+  const pushed = await started.exec({
+    cmd: 'sh',
+    args: ['-c', PUSH],
+    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_BRANCH: branch, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
+  })
+  const said = pushed.stdout.trim().split('\n').pop()
+  if (pushed.exitCode !== 0 || (said !== 'pushed' && said !== 'unchanged')) throw new Failure('push_failed', `Pushing ${branch} from the sandbox failed (exit ${pushed.exitCode}).`, { hint: 'The token needs Contents: write on the repository.' })
+  if (said === 'unchanged') return null
+  const url = await openPullRequest({ repo: options.repo, token: options.token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
+  await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
+  await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
+  return url
+}
+
+/** Commits what the agent left on top of where the checkout started, and pushes it. Its last line says what it did. */
+const PUSH = `set -e
+git add -A
+if ! git diff --cached --quiet; then git -c user.name="$MU_NAME" -c user.email="$MU_EMAIL" commit -q -m "$MU_TITLE" -m "$MU_BODY"; fi
+if [ "$(git rev-parse HEAD)" = "$MU_BASE" ]; then echo unchanged; exit 0; fi
+git push -q -f origin "HEAD:refs/heads/$MU_BRANCH"
+echo pushed`
 
 /** How long a cloud agent may work when no --timeout says, and how much longer its sandbox lives to set up and settle the task. */
 const DEFAULT_CLOUD_TIMEOUT = '30m'

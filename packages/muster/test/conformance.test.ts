@@ -118,7 +118,7 @@ describe('mu run in a cloud sandbox', () => {
   })
 
   /** A stand-in for @vercel/sandbox that logs every call, and whose agent command exits with `exit` after `after` ms. */
-  const fakeSdk = (dir: string, opts: { exit?: number; after?: number } = {}) => {
+  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; pushed?: string } = {}) => {
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'), { recursive: true })
     writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'
@@ -129,10 +129,14 @@ export const Sandbox = { async create(options) {
     sandboxId: 'sbx_44',
     async runCommand(c) {
       log({ run: c })
-      if (!c.detached) return { exitCode: 0 }
+      if (!c.detached) {
+        const script = c.args?.[1] ?? ''
+        const out = script.includes('git rev-parse HEAD &&') ? 'abc123\\nmain' : script.includes('git push') ? ${JSON.stringify(opts.pushed ?? 'pushed')} : ''
+        return { exitCode: 0, stdout: async () => out }
+      }
       return { wait: () => new Promise((resolve) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), resolve({ exitCode: ${opts.exit ?? 0} })), ${opts.after ?? 50})) }
     },
-    update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow) }),
+    update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow), policy: o.networkPolicy }),
     delete: async () => log({ deleted: true }),
     stop: async () => log({ stopped: true }),
   }
@@ -201,6 +205,58 @@ export const Sandbox = { async create(options) {
     lines = (await sdk.read()).slice(lines.length)
     expect(Object.keys(lines[0].create.networkPolicy.allow).sort()).toEqual(['codeload.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
     expect(lines.some((e) => e.run?.args?.[1]?.includes('--ignore-scripts'))).toBe(false)
+  })
+
+  it('vercel: --push is refused where it can\'t work, before anything starts', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const repo = ['--repo', 'https://github.com/acme/web.git']
+    const reasonOf = async (args: string[], env: Record<string, string> = { GITHUB_TOKEN: 'ghp_secret' }) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
+    expect(await reasonOf(['--runner', 'cloudflare', ...repo])).toBe('push_unsupported')
+    expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
+    expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
+    expect(await reasonOf(['--runner', 'vercel', ...repo, '--detach'])).toBe('push_unsupported')
+    expect(await reasonOf(['--runner', 'vercel', ...repo], {})).toBe('runner_not_configured')
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(dir, 'sdk.log'))).toBe(false)
+  })
+
+  it('vercel: --push pushes what the agent changed from the sandbox, under GitHub\'s policy alone, and opens the pull request from here', async () => {
+    const got: any[] = []
+    const api = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: body ? JSON.parse(body) : null })
+        res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ html_url: 'https://github.com/acme/web/pull/7' }))
+      })
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], {
+      env: { ...board, ...sdk.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}` },
+    })
+    api.close()
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
+    const lines = await sdk.read()
+    const exited = lines.findIndex((e) => e.exited !== undefined)
+    // After the agent: the policy is GitHub's alone, with the token on this repository's git routes, then the push.
+    const github = lines.findIndex((e, at) => at > exited && Array.isArray(e.update))
+    expect(lines[github].update).toEqual(['github.com'])
+    expect(JSON.stringify(lines[github].policy)).not.toMatch(/mu1\.|board\.example\.com/)
+    const pushed = lines.findIndex((e) => e.run?.args?.[1]?.includes('git push'))
+    expect(pushed).toBeGreaterThan(github)
+    expect(lines[pushed].run.env).toMatchObject({ MU_BRANCH: 'mu/task-12', MU_BASE: 'abc123', MU_NAME: 'fixer' })
+    expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(pushed)
+    // The agent's own policy never held the token.
+    const agentPolicy = lines.find((e) => Array.isArray(e.update) && e.update.includes('board.example.com'))
+    expect(JSON.stringify(agentPolicy.policy)).not.toContain(Buffer.from('x-access-token:ghp_secret').toString('base64'))
+    expect(got).toEqual([{ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghp_secret', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) }])
+    // Nothing changed: no pull request.
+    const quiet = fakeSdk(tempDir(), { pushed: 'unchanged' })
+    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...board, ...quiet.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: 'http://127.0.0.1:1' } })
+    expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {

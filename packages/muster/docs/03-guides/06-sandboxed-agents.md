@@ -93,6 +93,33 @@ The agent needs `mu` and its own CLI where it runs.
   and the agent's CLI are in the image you build: the template's `Dockerfile`
   installs both.
 
+### Push what it changed
+
+```bash
+export GITHUB_TOKEN=github_pat_...   # a fine-grained token: this repository, contents and pull requests, write
+mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git --push
+```
+
+With `--push`, once the agent is done, `mu run` commits what it changed on
+top of where the checkout started, pushes it to `mu/task-12`, and opens a
+pull request into the branch it was cloned from. The pull request's address
+is on the task as a `pr` label and a reply. Nothing changed, no pull request.
+
+- **The token never meets the agent.** It is in the sandbox's policy while
+  Vercel clones the repository, before anything of the repository's runs,
+  and again for the push, after the agent has exited, with the board's
+  token and the model's key taken out. Both times only on the repository's
+  own git routes: no other repository, nothing else on GitHub.
+- **The pull request is opened from your machine,** so GitHub's API is never
+  reachable from the sandbox.
+- **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
+  whose tasks would share one checkout. Only the Vercel runner pushes.
+- Without `--push`, `GITHUB_TOKEN` is used to clone a private repository,
+  the same way, and nothing is pushed.
+
+A token can push to any branch of the repository. Protect the branches that
+matter on GitHub.
+
 ### Setting up holds no credential
 
 A Vercel sandbox is made under a policy of its own for setting up, with
