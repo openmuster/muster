@@ -17,8 +17,9 @@ export type Filter = {
   text?: string
   types?: string[]
   /**
-   * What is for one actor: events that mention it, tasks assigned to it, and replies in threads it wrote in,
-   * never its own. A profile name is one of the caller's own; a value with `:` or `+` is a whole actor ID.
+   * What is for one actor: messages posted that mention it, tasks assigned to it, and replies in threads it
+   * wrote in, never its own writes except a message it scheduled. A profile name is one of the caller's own; a
+   * value with `:` or `+` is a whole actor ID, with no `+profile` the principal alone.
    */
   for?: string
 }
@@ -117,8 +118,15 @@ type Compiled = {
   for: { id: string; principal: string; profile: string | null } | null
 }
 
+/** Who a `for` filter is for. A bare name is one of the caller's profiles; anything else is a whole actor ID, with or without a profile. */
+function forTarget(value: string, caller: Caller): NonNullable<Compiled['for']> {
+  if (!/[:+]/.test(value)) return { id: `${caller.principal}+${profileName(value)}`, principal: caller.principal, profile: value }
+  const plus = value.indexOf('+')
+  if (plus === -1) return { id: value, principal: value, profile: null }
+  return { id: value, principal: value.slice(0, plus), profile: profileName(value.slice(plus + 1)) }
+}
+
 function compile(filter: Filter, caller: Caller): Compiled {
-  const id = filter.for === undefined ? null : /[:+]/.test(filter.for) ? filter.for : `${caller.principal}+${filter.for}`
   return {
     scope: filter.channel === undefined ? null : channelScope(filter.channel),
     re: filter.re ?? null,
@@ -127,16 +135,21 @@ function compile(filter: Filter, caller: Caller): Compiled {
     mentions: filter.mentions ?? null,
     text: filter.text?.toLowerCase() ?? null,
     types: filter.types ?? null,
-    for: id === null ? null : { id, principal: id.split('+')[0]!, profile: id.includes('+') ? id.slice(id.indexOf('+') + 1) : null },
+    for: filter.for === undefined ? null : forTarget(filter.for, caller),
   }
 }
 
-/** Why an event is for an actor, by the first rule that says so: it mentions them, assigns a task to them, or answers them in a thread they wrote in. */
-function forReason(event: BoardEvent, target: NonNullable<Compiled['for']>, wrote: (thread: number, before: number) => boolean): FeedEvent['for'] | null {
-  if (actorId(event.by) === target.id) return null
+/**
+ * Why an event is for an actor, by the first rule that says so: it mentions them, assigns a task to them, or
+ * answers them in a thread they wrote in. Never their own writes, except a message they scheduled: that is how
+ * they ask to be woken later. A deleted message is for no one, and an edit is not a new mention.
+ */
+function forReason(event: BoardEvent, target: NonNullable<Compiled['for']>, wrote: (thread: number, before: number) => boolean, gone: (id: number) => boolean): FeedEvent['for'] | null {
   const data = event.data as Record<string, any>
-  if (((data.mentions ?? []) as string[]).includes(target.id)) return 'mention'
-  if ((event.type === 'task.assigned' || event.type === 'task.created') && target.profile !== null && data.for === target.profile) return 'assigned'
+  if (event.type === 'message.posted' && gone(event.seq)) return null
+  if (actorId(event.by) === target.id) return event.type === 'message.posted' && data.schedule ? 'reply' : null
+  if (event.type === 'message.posted' && ((data.mentions ?? []) as string[]).includes(target.id)) return 'mention'
+  if ((event.type === 'task.assigned' || event.type === 'task.created') && target.profile !== null && data.for === target.profile && typeof data.id === 'number' && !gone(data.id)) return 'assigned'
   if (event.type === 'message.posted' && event.thread !== null && event.thread !== event.seq && wrote(event.thread, event.seq)) return 'reply'
   return null
 }
@@ -209,8 +222,9 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
       // find what a delete took away.
       const event = { ...toEvent(row) }
       event.data = shown(ctx, event, gone)
-      const why = filter.for ? forReason(event, filter.for, wrote) : null
-      if (matches(ctx, caller, event, filter, roots) && (filter.for === null || why !== null)) {
+      // The cheap gate first: who may read the event, and the other filters. Only then the `for` rules, one of which asks the store.
+      const why = matches(ctx, caller, event, filter, roots) ? (filter.for ? forReason(event, filter.for, wrote, (id) => isGone(ctx, id, gone)) : undefined) : null
+      if (why !== null) {
         const data = event.data as Record<string, any>
         const feed: FeedEvent = { ...event }
         if (why) feed.for = why
@@ -233,6 +247,16 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
   return { events: out, cursor }
 }
 
+/** Whether a message has been deleted, asked once per read. */
+function isGone(ctx: Context, id: number, gone: Map<number, boolean>): boolean {
+  let deleted = gone.get(id)
+  if (deleted === undefined) {
+    deleted = (ctx.db.raw.prepare('select deleted from messages where id = ?').get(id) as { deleted: number } | undefined)?.deleted === 1
+    gone.set(id, deleted)
+  }
+  return deleted
+}
+
 /**
  * An event as readers see it. A claim's secret never leaves the store. And the log keeps every event as
  * it was written, so what a deleted message said is dropped here, on the way out: its text, its labels
@@ -243,12 +267,7 @@ function shown(ctx: Context, event: BoardEvent, gone: Map<number, boolean>): Rec
   const carries = event.type === 'message.posted' || event.type === 'message.edited' || event.type === 'labels.changed'
   const id = event.type === 'message.posted' ? event.seq : rest.id
   if (!carries || typeof id !== 'number') return rest
-  let deleted = gone.get(id)
-  if (deleted === undefined) {
-    deleted = (ctx.db.raw.prepare('select deleted from messages where id = ?').get(id) as { deleted: number } | undefined)?.deleted === 1
-    gone.set(id, deleted)
-  }
-  if (!deleted) return rest
+  if (!isGone(ctx, id, gone)) return rest
   const blank: Record<string, unknown> = { text: '', labels: {}, attachments: [], mentions: [], set: {}, unset: [], before: {} }
   for (const key of Object.keys(rest)) if (key in blank) rest[key] = blank[key]
   return rest

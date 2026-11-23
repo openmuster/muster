@@ -279,6 +279,16 @@ describe('watchers', () => {
     expect((await tick()).woke).toEqual([])
   })
 
+  it('a watcher for a profile wakes for a reminder the profile scheduled in a channel', async () => {
+    const { team, time, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
+    await tick()
+    await team.as('lead').scheduleCreate({ channel: 'work/api', text: 'check back', at: new Date(time.now().getTime() + 1000).toISOString() })
+    const did = await tick()
+    expect(did.woke).toHaveLength(1)
+    const sent = (await team.readChannel({ channel: 'work/api' })).threads[0]!.message
+    expect([sent.text, ran.at(-1)!.command]).toEqual(['check back', ['wake', String(sent.id)]])
+  })
+
   it('a wake that fails is tried again from the same place, and the events after it wait', async () => {
     let failing = true
     const { team, ran, tick } = harness({}, () => ({ code: failing ? 1 : 0 }))
@@ -463,6 +473,20 @@ describe('checking a watcher', () => {
     })
     expect(checkWrite(watcher({ re: 12, by: 'ci' }))).toMatchObject({ kind: 'reply', to: 12, as: 'ci' })
     expect(checkWrite(watcher({ channel: 'work/', types: ['message.'] }), { in: 'work/checks' })).toMatchObject({ kind: 'post', channel: 'work/checks' })
+  })
+
+  it('writes a message a watcher for a profile matches, on a board where that profile never wrote', async () => {
+    const { team } = memoryBoard()
+    const forLead = watcher({ channel: 'work', for: 'lead' }, { as: 'lead' })
+    const write = checkWrite(forLead, { principal: 'local:user:ada' })
+    expect(write).toMatchObject({ kind: 'post', channel: 'work', text: expect.stringContaining('@[local:user:ada+lead]') })
+    // A whole actor ID is mentioned as it is.
+    expect(checkWrite(watcher({ channel: 'work', for: 'local:user:bob+lead' }), { principal: 'local:user:ada' }).text).toContain('@[local:user:bob+lead]')
+    if (write.kind !== 'post') throw new Error('expected a post')
+    const head = await team.head()
+    await team.post({ channel: write.channel, text: write.text, labels: write.labels })
+    const got = await team.as('lead').events({ after: head, filter: forLead.tail })
+    expect(got.events.map((event) => event.for)).toEqual(['mention'])
   })
 
   it("refuses what a message can't trigger, and asks where to write for a subtree", async () => {

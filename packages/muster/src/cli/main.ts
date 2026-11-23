@@ -33,7 +33,7 @@ import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
 import { boardKey } from '../serve/token.ts'
 import { loadOidc } from '../serve/oidc.ts'
-import { profileName, type Permission } from '../model.ts'
+import { actorId, profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -87,7 +87,7 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
   }
   const watcher = config.watchers.find((each) => each.name === wanted)
   if (!watcher) throw new Failure('unknown_watcher', `No watcher or outgoing webhook is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${watchersPath()}, outgoing webhooks in ${hooksPath()}.` })
-  const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}) })
+  const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}), principal: (await run.team.backend.self(null)).principal })
   const timeout = duration(str(parsed.flags, 'timeout') ?? '5m', 'timeout') * 1000
   // Nothing runs watchers unless a ticker holds the board's lock: say so now, not after the timeout.
   if (mode === 'file') {
@@ -304,8 +304,8 @@ const commands: Record<string, Command> = {
     spec: { value: ['limit', 'wait'], bool: ['peek'] },
     async run(run, parsed) {
       const profile = str(parsed.flags, 'as') ?? (run.io.env.MUSTER_PROFILE || undefined)
-      // A bare profile name is the caller's own; with no profile the inbox is the principal's.
-      const mine = profile ?? (await run.team.backend.self(null)).principal
+      // The inbox is whoever the caller writes as: the profile asked for, or the one a token is bound to, or the principal.
+      const mine = actorId(await run.team.backend.self(profile ?? null))
       const limit = str(parsed.flags, 'limit')
       const wait = str(parsed.flags, 'wait')
       const peek = on(parsed.flags, 'peek')
