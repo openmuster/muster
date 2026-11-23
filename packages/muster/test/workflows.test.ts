@@ -1,11 +1,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadDaemonConfig } from '../src/daemon/daemon.ts'
-import { loadWorkflows } from '../src/daemon/workflows.ts'
+import { loadDaemonConfig, tickOnce } from '../src/daemon/daemon.ts'
+import { runWorkflows, type Spawner } from '../src/daemon/runs.ts'
+import { loadWorkflows, type Workflow } from '../src/daemon/workflows.ts'
 import { randomBytes } from 'node:crypto'
 import { applyPolicy, board, boardPolicy, file, http, listen, mint } from '../src/index.ts'
-import { cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
+import { cli, cliStart, clock, memoryBoard, reason, tempDir, type Board } from './helpers.ts'
 
 const good = {
   name: 'release',
@@ -218,4 +219,154 @@ describe('mu workflow', () => {
     const events = (await board({ dir: join(dir, 'board'), principal: 'local:user:ada' }).events({ after: 0, filter: { types: ['workflow.requested'] } })).events
     expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' } }])
   }, 20_000)
+})
+
+describe('the daemon starts a requested workflow', () => {
+  const OWNER = 'local:user:ada'
+  const release: Workflow = {
+    name: 'release',
+    description: 'Ship a release',
+    who: [OWNER, 'releaser'],
+    channels: ['work/'],
+    steps: [
+      { key: 'plan', text: 'Plan {args.version} for #{thread} in {channel}, work in {run}. {args.nope} {nope} {args.constructor}', labels: { role: 'plan', workflow: 'forged' } },
+      { key: 'build', text: 'Build {args.version}', needs: ['plan'], for: 'builder' },
+    ],
+    workers: { count: 2, agent: 'claude', as: 'worker', cwd: '/srv/app' },
+  }
+  const recorder = (fail?: () => boolean) => {
+    const spawned: Parameters<Spawner>[0][] = []
+    const spawn: Spawner = (worker) => {
+      if (fail?.()) throw new Error('spawn failed')
+      spawned.push(worker)
+    }
+    return { spawned, deps: { spawn, now: () => Date.now() } }
+  }
+  const argvFor = (run: string, workers: Workflow['workers'], i: number) => [
+    'run', '--ready', run, '--loop', '--wait', '10m',
+    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd ?? process.cwd()]),
+    '--agent', workers.agent, '--as', `${workers.as}-${i}`,
+    ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
+  ]
+  const tasksIn = async (team: Board, channel: string) => (await team.taskList({ channel, state: 'all' })).tasks
+  const allTasks = async (team: Board) => (await team.taskList({ state: 'all' })).tasks
+  const repliesOn = async (team: Board, thread: number) => (await team.readThread({ id: thread })).replies
+  /** A board whose daemon has already ticked once, so its cursor is set and what comes next is new. */
+  const ready = async (workflows: Workflow[] = [release]) => {
+    const made = memoryBoard()
+    const root = await made.team.post({ channel: 'work/app', text: 'ship 1.2' })
+    const rec = recorder()
+    expect(await runWorkflows(made.team, workflows, rec.deps)).toEqual({ started: [], refused: [] })
+    return { ...made, root, rec }
+  }
+
+  it('creates the steps as tasks, starts the workers, labels the run and says so on the thread', async () => {
+    const { team, root, rec } = await ready()
+    const on = await team.reply({ to: root.id, text: 'go' })
+    const { seq } = await team.workflowRequest({ name: 'release', on: on.id, args: { version: '1.2.0' } })
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [seq], refused: [] })
+    const run = `work/app/release-${seq}`
+    const tasks = await tasksIn(team, run)
+    expect(tasks.map((task) => task.text)).toEqual([`Plan 1.2.0 for #${root.id} in work/app, work in ${run}. {args.nope} {nope} {args.constructor}`, 'Build 1.2.0'])
+    expect(tasks[1]!.needs).toEqual([tasks[0]!.id])
+    expect(tasks[1]!.for).toBe('builder')
+    expect(tasks[0]!.labels).toMatchObject({ role: 'plan', workflow: 'release', request: String(seq) })
+    expect(tasks[1]!.labels).toMatchObject({ workflow: 'release', request: String(seq) })
+    // The run's first message, not a task, says where it came from.
+    const opening = (await team.readChannel({ channel: run })).threads.filter((each) => each.task === null)
+    expect(opening.map((each) => each.message.text)).toEqual([`release, asked for by ${OWNER} on #${root.id}`])
+    expect(opening[0]!.message.labels).toMatchObject({ workflow: 'release', request: String(seq), thread: String(root.id) })
+    expect(opening[0]!.message.id).toBeLessThan(tasks[0]!.id)
+    expect(rec.spawned).toEqual([1, 2].map((i) => ({ name: `worker-${i}`, argv: argvFor(run, release.workers, i), cwd: '/srv/app' })))
+    const replies = await repliesOn(team, root.id)
+    expect(replies.at(-1)!.text).toBe(`started release: 2 tasks in ${run}`)
+    expect(replies.at(-1)!.by).toEqual({ principal: OWNER, profile: 'workflows' })
+  })
+
+  it('builds the same argv whatever the args say, and puts them only in task text', async () => {
+    const vercel: Workflow = { ...release, workers: { count: 1, agent: 'codex', as: 'w', runner: 'vercel', repo: 'https://github.com/a/b', push: true, timeout: '20m' } }
+    const { team, root, rec } = await ready([vercel])
+    const plain = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '1' } })
+    const hostile = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '--push ; rm -rf /', nope: '$(id) `id` {run}' } })
+    expect((await runWorkflows(team, [vercel], rec.deps)).started).toEqual([plain.seq, hostile.seq])
+    const runs = [plain.seq, hostile.seq].map((seq) => `work/app/release-${seq}`)
+    expect(rec.spawned.map((worker) => worker.argv)).toEqual(runs.map((run) => argvFor(run, vercel.workers, 1)))
+    expect(rec.spawned[0]!.argv).toEqual(['run', '--ready', runs[0], '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'codex', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push', '--timeout', '20m'])
+    expect(rec.spawned[1]!.argv.map((part) => part.replace(runs[1]!, runs[0]!))).toEqual(rec.spawned[0]!.argv)
+    // Filled once, as text: an argument that looks like a placeholder stays as written.
+    expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
+  })
+
+  it('refuses a name it has not got, someone not in who, and a channel it does not run in, and creates nothing', async () => {
+    const { team, as, root, rec } = await ready()
+    const elsewhere = await team.post({ channel: 'random', text: 'ship' })
+    const unknown = await team.workflowRequest({ name: 'deploy', on: root.id })
+    const stranger = await as('local:user:eve').workflowRequest({ name: 'release', on: root.id })
+    // A profile with an allowed name, under someone else's principal, is someone else.
+    const borrowed = await as('local:user:eve').as('releaser').workflowRequest({ name: 'release', on: root.id })
+    const wrongPlace = await team.workflowRequest({ name: 'release', on: elsewhere.id })
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [unknown.seq, stranger.seq, borrowed.seq, wrongPlace.seq] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([
+      "deploy isn't registered here",
+      'local:user:eve may not start release',
+      'local:user:eve+releaser may not start release',
+    ])
+    expect((await repliesOn(team, elsewhere.id)).map((reply) => reply.text)).toEqual(["release doesn't run in random"])
+  })
+
+  it("lets a bare profile name in who stand for that profile under the daemon owner's principal only", async () => {
+    const only = { ...release, who: ['releaser'] }
+    const { team, root, rec } = await ready([only])
+    const owner = await team.workflowRequest({ name: 'release', on: root.id })
+    const profile = await team.as('releaser').workflowRequest({ name: 'release', on: root.id })
+    const other = await team.as('worker').workflowRequest({ name: 'release', on: root.id })
+    expect(await runWorkflows(team, [only], rec.deps)).toEqual({ started: [profile.seq], refused: [owner.seq, other.seq] })
+  })
+
+  it('matches a channel exactly, or under a prefix that ends in "/"', async () => {
+    const exact = { ...release, channels: ['work'] }
+    const { team, root, rec } = await ready([exact])
+    const top = await team.post({ channel: 'work', text: 'ship' })
+    const below = await team.workflowRequest({ name: 'release', on: root.id })
+    const at = await team.workflowRequest({ name: 'release', on: top.id })
+    expect(await runWorkflows(team, [exact], rec.deps)).toEqual({ started: [at.seq], refused: [below.seq] })
+  })
+
+  it('starts a request once: a second tick, or a daemon that stopped half way, makes nothing twice', async () => {
+    let failing = true
+    const { team, root } = await ready()
+    const rec = recorder(() => failing)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    // The plan is written, then starting a worker fails: the request is not passed over.
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [], why: 'spawn failed' })
+    expect(await tasksIn(team, `work/app/release-${seq}`)).toHaveLength(2)
+    failing = false
+    // Read again, the request finds its plan already made: no new tasks, and no second crew.
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [seq], refused: [] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toHaveLength(2)
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [] })
+    expect(await allTasks(team)).toHaveLength(2)
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([`started release: 2 tasks in work/app/release-${seq}`])
+  })
+
+  it('a daemon new to a board starts from now, not from requests made before it', async () => {
+    const { team } = memoryBoard()
+    const root = await team.post({ channel: 'work/app', text: 'ship' })
+    await team.workflowRequest({ name: 'release', on: root.id })
+    const rec = recorder()
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [] })
+    expect(await allTasks(team)).toEqual([])
+  })
+
+  it('runs in the daemon tick', async () => {
+    const { team, root, rec } = await ready()
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    const watcherDeps = { now: () => Date.now(), spawn: async () => ({ code: 0, stdout: '' }) }
+    const did = await tickOnce(team, [], new Map(), watcherDeps, undefined, { list: [release], deps: rec.deps })
+    expect(did.workflows).toEqual({ started: [seq], refused: [] })
+    expect(rec.spawned).toHaveLength(2)
+  })
 })

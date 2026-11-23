@@ -943,13 +943,21 @@ const commands: Record<string, Command> = {
         run.io.err(`error: ${(error as Error).message}`)
         run.io.err('  No outgoing webhooks are sent until that is fixed and the server restarted.')
       }
-      // A server's output is its address and its token. What a hook couldn't deliver is the one thing worth adding.
+      // On their own too: a workflows file that is wrong starts no workflow, and every request is answered as one this board hasn't got.
+      let workflows: ReturnType<typeof loadWorkflows> = []
+      try {
+        workflows = loadWorkflows()
+      } catch (error) {
+        run.io.err(`error: ${(error as Error).message}`)
+        run.io.err('  No workflows are started until that is fixed and the server restarted.')
+      }
+      // A server's output is its address and its token. What a hook couldn't deliver, or a workflow couldn't start, is worth adding.
       const log = (line: string) => {
-        if (/^(failed|dropped) {2,}hook /.test(line)) run.io.err(line)
+        if (/^(failed|dropped) {2,}(hook|workflow) /.test(line)) run.io.err(line)
       }
       try {
         // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, stop: run.io.stop, log })
+        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, workflows, stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.
@@ -970,10 +978,12 @@ const commands: Record<string, Command> = {
       if (verb === 'run') {
         let watchers
         let hooks
+        let workflows
         try {
           const config = loadDaemonConfig(run.io.env)
           watchers = config.watchers
           hooks = config.arm()
+          workflows = config.workflows
         } catch (error) {
           // A config a restart can't fix: say so and exit cleanly, so the service manager leaves it stopped.
           run.io.err(`error: ${(error as Error).message}`)
@@ -984,7 +994,8 @@ const commands: Record<string, Command> = {
         run.io.out(`board     ${me.where}`)
         run.io.out(`watchers  ${watchers.length}`)
         if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
-        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, stop: run.io.stop, log: run.io.out })
+        if (workflows.length) run.io.out(`workflows ${workflows.length}`)
+        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
       }

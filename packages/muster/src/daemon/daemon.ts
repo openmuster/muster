@@ -7,6 +7,7 @@ import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { takeLock } from './lock.ts'
 import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
+import { runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
 import { loadWorkflows, workflowsPath, type Workflow } from './workflows.ts'
 import { runWatcher, type Deps, type Watcher, type WatchState } from './watchers.ts'
 
@@ -90,9 +91,11 @@ export type DaemonOptions = {
   watchers: Watcher[]
   /** Outgoing webhooks, with their secrets already read. */
   hooks?: ArmedHook[]
+  /** Registered workflows: what a request on a thread may start. */
+  workflows?: Workflow[]
   stop: AbortSignal
   log: (line: string) => void
-  deps?: Partial<Deps & HookDeps>
+  deps?: Partial<Deps & HookDeps> & { spawnWorker?: RunDeps['spawn'] }
   /** Milliseconds between ticks. A tick is cheap; a long sleep would only delay what is due. */
   interval?: number
 }
@@ -100,8 +103,11 @@ export type DaemonOptions = {
 /** What a tick needs to send outgoing webhooks: the hooks, and what each has been through since the daemon started. */
 export type Hooks = { list: ArmedHook[]; states: Map<string, HookState>; deps: HookDeps; notes?: Set<number> }
 
-/** One pass: send what is due, run each watcher, then each outgoing webhook. Returns what it did, for logs and tests. */
-export async function tickOnce(team: Board, watchers: Watcher[], states: Map<string, WatchState>, deps: Deps, hooks?: Hooks) {
+/** What a tick needs to start requested workflows: the registered ones, and how to start a worker. */
+export type Workflows = { list: Workflow[]; deps: RunDeps }
+
+/** One pass: send what is due, run each watcher, each outgoing webhook, then requested workflows. Returns what it did, for logs and tests. */
+export async function tickOnce(team: Board, watchers: Watcher[], states: Map<string, WatchState>, deps: Deps, hooks?: Hooks, workflows?: Workflows) {
   const schedules = await team.scheduleTick()
   await team.backend.syncTick()
   const watched: Record<string, Awaited<ReturnType<typeof runWatcher>>> = {}
@@ -116,7 +122,9 @@ export async function tickOnce(team: Board, watchers: Watcher[], states: Map<str
     if (!state) hooks!.states.set(hook.name, (state = { attempts: 0, retryAt: -Infinity }))
     hooked[hook.name] = await runHook(team, hook, state, hooks!.deps, (hooks!.notes ??= new Set()))
   }
-  return { schedules, watched, hooked }
+  // Read even with none registered: a request for one this daemon hasn't got is answered, never left unsaid.
+  const ran: Ran | null = workflows ? await runWorkflows(team, workflows.list, workflows.deps) : null
+  return { schedules, watched, hooked, workflows: ran }
 }
 
 /**
@@ -129,10 +137,11 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   const deps: Deps & HookDeps = { now: () => Date.now(), spawn: spawnCommand, fetch, ...options.deps }
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
+  const workflows: Workflows = { list: options.workflows ?? [], deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now } }
   try {
     while (!options.stop.aborted) {
       try {
-        const did = await tickOnce(options.team, options.watchers, states, deps, hooks)
+        const did = await tickOnce(options.team, options.watchers, states, deps, hooks, workflows)
         for (const id of did.schedules.sent) options.log(`sent      schedule ${id}`)
         for (const id of did.schedules.skipped) options.log(`skipped   schedule ${id}`)
         for (const id of did.schedules.canceled) options.log(`canceled  schedule ${id}  its token was revoked`)
@@ -145,6 +154,9 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
           if (result.failed.length) options.log(`failed    hook ${name}  at ${result.failed[0]}  ${result.why}`)
           if (result.dropped.length) options.log(`dropped   hook ${name}  ${result.dropped.join(' ')}  ${result.why}`)
         }
+        if (did.workflows?.started.length) options.log(`started   workflow  ${did.workflows.started.join(' ')}`)
+        if (did.workflows?.refused.length) options.log(`refused   workflow  ${did.workflows.refused.join(' ')}`)
+        if (did.workflows?.why) options.log(`failed    workflow  ${did.workflows.why}`)
       } catch (error) {
         options.log(`error     ${(error as Error).message}`)
       }
