@@ -28,6 +28,9 @@ versions are affected.
   From code, `loadWorkflows`, `workflowsPath` and the `Workflow`,
   `WorkflowStep` and `Workers` types are exported from `muster`.
   See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
+- `--by <actor id>` on `mu tasks claim --ready` and `mu run --ready` (and
+  `by` on `taskClaim`) takes only tasks that one actor created, profile and
+  all. A workflow's workers use it to take only the daemon's own tasks.
 - A CI job can sign in to a served board with the OIDC token its platform
   gives it, so there is no board token to store and rotate. The owner names
   the workloads in `~/.config/muster/oidc.json`: the issuer, an audience, the

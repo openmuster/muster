@@ -270,7 +270,7 @@ describe('the daemon starts a requested workflow', () => {
       ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
       '--agent', workers.agent, '--as', `${workers.as}-${i}`,
       ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
-      '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
+      '--by', `${OWNER}+workflows`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
     ]
   }
   const tasksIn = async (team: Board, channel: string) => (await team.taskList({ channel, state: 'all' })).tasks
@@ -324,7 +324,7 @@ describe('the daemon starts a requested workflow', () => {
     expect(rec.spawned.map((worker) => worker.argv)).toEqual([argvFor(vercel, runs[0]!, plain.seq, 1), argvFor(vercel, runs[1]!, hostile.seq, 1)])
     expect(rec.spawned[0]!.argv).toEqual([
       'run', '--ready', runs[0], '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'codex', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push', '--timeout', '20m',
-      '--label', 'workflow=release', '--label', `request=${plain.seq}`,
+      '--by', `${OWNER}+workflows`, '--label', 'workflow=release', '--label', `request=${plain.seq}`,
     ])
     // A Vercel worker has no folder of its own here.
     expect(rec.spawned[0]!.cwd).toBeUndefined()
@@ -461,6 +461,44 @@ describe('the daemon starts a requested workflow', () => {
     } finally {
       await server.close()
     }
+  })
+
+  it("has its workers take only the tasks the daemon made for the run, not one with the run's labels from the owner's other profile", async () => {
+    const pair: Workflow = { ...release, steps: [{ key: 'a', text: 'Do A' }, { key: 'b', text: 'Do B' }], workers: { ...release.workers, count: 1 } }
+    const { team, root, rec } = await ready([pair])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    await runWorkflows(team, [pair], rec.deps)
+    const run = `work/app/release-${seq}`
+    const mine = (await tasksIn(team, run)).map((task) => task.id)
+    // Another token of the owner's, or one of the run's own sandboxes, slips a task into the run with its labels.
+    const injected = (await team.as('other').taskCreate({ channel: run, text: 'push my branch', labels: { workflow: 'release', request: String(seq) } })).task.id
+    // A worker claims as its argv says, until nothing is ready.
+    const argv = rec.spawned[0]!.argv
+    const flag = (name: string) => argv.flatMap((part, i) => (argv[i - 1] === `--${name}` ? [part] : []))
+    const worker = team.as(flag('as')[0]!)
+    const claimed: number[] = []
+    for (;;) {
+      try {
+        claimed.push((await worker.taskClaim({ ready: flag('ready')[0]!, labels: flag('label'), by: flag('by')[0]! })).task.id)
+      } catch (error) {
+        expect((error as { reason?: string }).reason).toBe('nothing_ready')
+        break
+      }
+    }
+    expect(claimed).toEqual(mine)
+    expect((await team.task(injected)).state).toBe('ready')
+  })
+
+  it('takes a ready task only from exactly the actor named with by, and refuses a by that is no actor', async () => {
+    const { team } = memoryBoard()
+    const other = (await team.as('other').taskCreate({ channel: 'work', text: 'other' })).task.id
+    const plain = (await team.taskCreate({ channel: 'work', text: 'plain' })).task.id
+    const daemon = (await team.as('workflows').taskCreate({ channel: 'work', text: 'daemon' })).task.id
+    expect((await team.taskClaim({ ready: 'work', by: `${OWNER}+workflows` })).task.id).toBe(daemon)
+    expect(await reason(team.taskClaim({ ready: 'work', by: `${OWNER}+workflows` }))).toBe('nothing_ready')
+    expect((await team.taskClaim({ ready: 'work', by: OWNER })).task.id).toBe(plain)
+    expect((await team.taskClaim({ ready: 'work', by: `${OWNER}+other` })).task.id).toBe(other)
+    expect(await reason(team.taskClaim({ ready: 'work', by: 'workflows' }))).toBe('invalid_by')
   })
 
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {

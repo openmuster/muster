@@ -41,7 +41,7 @@ tasks
   tasks create <id>              make a thread a task
   tasks create <channel> --file plan.json
   tasks claim <id> | --ready <channel> [--label k=v]... [--from <owner>]...
-       [--wait 10m] [--lease 15m]
+       [--by <actor>] [--wait 10m] [--lease 15m]
   tasks run   <id> | --ready <channel> ... [--result <text>] -- <cmd>...
   tasks renew <id> [--lease 15m]
   tasks release <id>
@@ -62,7 +62,8 @@ tasks
 
 agents
   run <id> | --ready <channel>   start an agent on a task and stay with it
-       [--label k=v]... [--from <owner>]... [--wait 10m] [--lease 15m]
+       [--label k=v]... [--from <owner>]... [--by <actor>]
+       [--wait 10m] [--lease 15m]
        --agent claude|codex  (or a command after --)  [--cwd <dir>]
        [--worktree <repo> --branch <name>] [--model <m>] [--timeout 30m]
        [--env K=V]... [--bypass-permissions] [--loop] [--budget <usd>]

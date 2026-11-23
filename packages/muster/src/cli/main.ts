@@ -660,7 +660,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -1036,7 +1036,7 @@ const commands: Record<string, Command> = {
 
   tasks: {
     spec: {
-      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key'],
+      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key', 'by'],
       many: ['label', 'needs', 'from'],
       bool: ['claim', 'no-sync', 'round', 'pool', 'none', 'no-count', 'latest'],
     },
@@ -1073,10 +1073,12 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
   const from = list(parsed.flags, 'from')
+  const by = str(parsed.flags, 'by')
   const request = {
     ...(ready !== undefined ? { ready } : { id: id(target, 'a task') }),
     ...(labels.length ? { labels } : {}),
     ...(from.length ? { from } : {}),
+    ...(by !== undefined ? { by } : {}),
     ...lease(parsed.flags),
     ...(pid !== undefined ? { pid, pidStart: processStart(pid) ?? undefined } : {}),
     ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}),
@@ -1470,8 +1472,9 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
   if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
-  // As a worker here would: --label narrows which ready tasks it takes.
+  // As a worker here would: --label narrows which ready tasks it takes, and --by to whose.
   const labels = list(parsed.flags, 'label')
+  const by = str(parsed.flags, 'by')
   const { ready: _, loop: __, wait: ___, ...flags } = parsed.flags
   let quietSince = Date.now()
   let failed = 0
@@ -1481,7 +1484,7 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
     const claimToken = randomBytes(32).toString('base64url')
     let claimed: number | undefined
     try {
-      claimed = (await run.team.as(profile).taskClaim({ ready, ...(labels.length ? { labels } : {}), token: claimToken })).task.id
+      claimed = (await run.team.as(profile).taskClaim({ ready, ...(labels.length ? { labels } : {}), ...(by !== undefined ? { by } : {}), token: claimToken })).task.id
     } catch (error) {
       if (!(error instanceof Failure && error.reason === 'nothing_ready')) throw error
     }

@@ -60,8 +60,8 @@ The example is a fixed pipeline: the daemon makes the three tasks, and the
 workers only complete them. `plan` ends with a short plan as its result,
 `work` reads it, makes the change and, with `push`, opens the pull request,
 and `review` checks the change against the plan. A step never asks an agent
-to create more tasks: workers take only the tasks the daemon labelled for the
-run, so tasks an agent made would never be taken. A complete example, with a
+to create more tasks: workers take only the tasks the daemon itself made for
+the run, so tasks an agent made would never be taken. A complete example, with a
 second workflow, is
 [`workflows.json` in the swarm template](https://github.com/openmuster/muster/blob/main/templates/swarm/workflows.json).
 
@@ -166,9 +166,13 @@ For a request on thread 812 in `work/api`, the daemon:
    labelled `workflow=implement` and `request=41`, as one plan: it is made
    whole or not at all.
 3. Starts the workers. Each is `mu run --ready work/api/implement-41 --loop
-   --wait 10m` with the workflow's settings and `--label workflow=implement
-   --label request=41`, so it takes only its own run's tasks. It stops when
-   nothing is ready for ten minutes.
+   --wait 10m` with the workflow's settings, `--by <owner>+workflows` and
+   `--label workflow=implement --label request=41`. `--by` is what holds a
+   worker to the run: it takes only tasks created by the daemon's own
+   profile, which only the board itself can write as. A task someone else
+   puts in the run's channel with the same labels, even under the owner's
+   principal, is never taken. It stops when nothing is ready for ten
+   minutes.
 4. Replies on the thread.
 
 | Reply | When |
@@ -231,6 +235,7 @@ A `pr` is shown only for a pull request URL on github.com.
   starts anyway, says so on its error output, and reads no requests until
   the file is fixed and it is restarted. Nothing is lost: the requests wait and are answered
   then.
-- **Workers start and take nothing.** A worker takes only tasks labelled for
-  its own run, and a task that `needs` another waits for it.
+- **Workers start and take nothing.** A worker takes only tasks the daemon
+  made and labelled for its own run, and a task that `needs` another waits
+  for it.
   `mu tasks <run channel> --state all` shows which.

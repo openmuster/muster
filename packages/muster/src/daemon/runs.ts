@@ -48,11 +48,12 @@ export const spawnWorker: Spawner = (worker) =>
   })
 
 /**
- * A worker's command line. Built from the operator's config and the request's seq alone: nothing a
- * request carries reaches it, so an argument that looks like a flag is only ever text in a task. The
- * labels hold it to its own run's tasks.
+ * A worker's command line. Built from the operator's config, the request's seq and the board's owner
+ * alone: nothing a request carries reaches it, so an argument that looks like a flag is only ever text in
+ * a task. `--by` holds it to tasks the daemon itself made, which only the board can write as; the labels
+ * then hold it to its own run's.
  */
-export function workerArgv(workflow: Workflow, run: string, seq: number, i: number): string[] {
+export function workerArgv(workflow: Workflow, run: string, seq: number, i: number, owner: string): string[] {
   const workers = workflow.workers
   return [
     'run', '--ready', run, '--loop', '--wait', '10m',
@@ -61,7 +62,7 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
     ...(workers.repo ? ['--repo', workers.repo] : []),
     ...(workers.push ? ['--push'] : []),
     ...(workers.timeout ? ['--timeout', workers.timeout] : []),
-    '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
+    '--by', `${owner}+${WORKFLOWS_PROFILE}`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
   ]
 }
 
@@ -361,7 +362,7 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
   if (!opened) {
     for (let i = 1; i <= workflow.workers.count; i++) {
       try {
-        await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
+        await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i, owner), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
       } catch (error) {
         // The ones already started keep running: say how many, as it is.
         const reason = (error as Error).message

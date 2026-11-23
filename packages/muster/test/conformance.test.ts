@@ -321,17 +321,33 @@ export const Sandbox = { async create(options) {
     expect(JSON.parse(refused.stderr).error.reason).toBe('push_unsupported')
   })
 
-  it('vercel: a --ready --loop worker with --label takes only the ready tasks that carry it', async () => {
+  it('vercel: a --ready --loop worker with --label and --by takes only the ready tasks that carry it, made by that actor', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir)
     const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
+    const labels = ['--label', 'workflow=review', '--label', 'request=7']
     const other = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'not mine', '--json'])).stdout).task.id
-    const mine = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'mine', '--label', 'workflow=review', '--label', 'request=7', '--json'])).stdout).task.id
-    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--label', 'workflow=review', '--label', 'request=7'], { env: local })
+    // The run's labels, from the owner's principal under another profile: not the daemon's.
+    const injected = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'injected', ...labels, '--as', 'other', '--json'])).stdout).task.id
+    const mine = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'mine', ...labels, '--as', 'workflows', '--json'])).stdout).task.id
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', ...labels, '--by', `${me}+workflows`], { env: local })
     expect(run.code).toBe(0)
     const started = (await sdk.read()).filter((e) => e.run?.detached)
     expect(started.map((e) => Number(/'run' '(\d+)'/.exec(e.run.args[1])?.[1]))).toEqual([mine])
-    expect(JSON.parse((await cli(dir, ['read', String(other), '--json'])).stdout).task.state).toBe('ready')
+    for (const id of [other, injected]) expect(JSON.parse((await cli(dir, ['read', String(id), '--json'])).stdout).task.state).toBe('ready')
+  })
+
+  it('a local --ready worker with --by takes only what that actor made', async () => {
+    const dir = tempDir()
+    const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
+    const injected = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'injected', '--as', 'other', '--json'])).stdout).task.id
+    const mine = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'mine', '--as', 'workflows', '--json'])).stdout).task.id
+    const claimed = await cli(dir, ['tasks', 'claim', '--ready', 'swarm/web', '--by', `${me}+workflows`, '--json'])
+    expect(JSON.parse(claimed.stdout).task.id).toBe(mine)
+    const again = await cli(dir, ['tasks', 'claim', '--ready', 'swarm/web', '--by', `${me}+workflows`, '--json'])
+    expect(JSON.parse(again.stderr).error.reason).toBe('nothing_ready')
+    expect(JSON.parse((await cli(dir, ['read', String(injected), '--json'])).stdout).task.state).toBe('ready')
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {
