@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
 import { SANDBOX_ENV, cloudflare, vercel, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
 import { BUNDLE, BUNDLE_MAX, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
+import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
@@ -1433,7 +1434,19 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
     if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
     if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push takes one task: a worker\'s tasks would share one checkout.')
-    if (!env.GITHUB_TOKEN) throw new Failure('runner_not_configured', '--push needs GITHUB_TOKEN: a token that may write contents and pull requests on the repository.', { hint: 'A fine-grained token for that one repository is best: it goes on the push, never into the sandbox.' })
+  }
+  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
+  const app = gh ? githubApp(env) : undefined
+  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
+  // To clone: read only, and only while Vercel clones. A public repository the App isn't on is cloned without one.
+  let cloneToken: string | undefined
+  if (app && gh) {
+    try {
+      cloneToken = (await installationToken(app, gh, { contents: 'read' }, githubApi)).token
+    } catch (error) {
+      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) throw error
+    }
   }
   let runner: CloudRunner
   if (where === 'cloudflare') {
@@ -1505,7 +1518,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     ...(modelKey ? { model: { key: modelKey } } : {}),
     ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),
     // Only for cloning, and only for this repository's git routes: never in the agent's policy.
-    ...(gh && env.GITHUB_TOKEN ? { github: { token: env.GITHUB_TOKEN } } : {}),
+    ...(cloneToken ? { github: { token: cloneToken } } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
     permissionMode: safe ? 'safe' : 'bypass',
@@ -1533,7 +1546,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   let pr: string | null = null
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
-    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, token: env.GITHUB_TOKEN!, profile: profile ?? 'agent', ...(env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}), ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
+    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -1555,7 +1568,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
  * agent's, and the pull request opened from here. No sandbox the agent ran in ever holds the token. Null
  * when nothing changed.
  */
-async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string }; token: string; profile: string; api?: string; remote?: string }): Promise<string | null> {
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; api?: string; remote?: string }): Promise<string | null> {
   if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'npm i @vercel/sandbox@latest' })
   if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
   const thread = await run.team.readThread({ id: options.task }).catch(() => null)
@@ -1575,8 +1588,10 @@ async function pushChanges(run: Run, started: CloudRun, options: { task: number;
   // Read with this side's limit: what the sandbox says about its size is not taken on trust.
   const bundle = await started.readFile(out, BUNDLE_MAX)
   if (!bundle) throw new Failure('push_failed', `The agent's changes are missing, or over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
-  await pushBundle({ repo: options.repo, token: options.token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
-  const url = await openPullRequest({ repo: options.repo, token: options.token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
+  // Made now, on this machine, for this repository, to write its contents and open the pull request.
+  const { token } = await installationToken(options.app, options.repo, { contents: 'write', pull_requests: 'write' }, options.api ? { api: options.api } : {})
+  await pushBundle({ repo: options.repo, token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
+  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
   await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
   await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
   return url

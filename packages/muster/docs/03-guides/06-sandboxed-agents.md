@@ -96,9 +96,17 @@ The agent needs `mu` and its own CLI where it runs.
 ### Push what it changed
 
 ```bash
-export GITHUB_TOKEN=github_pat_...   # a fine-grained token: this repository, contents and pull requests, write
+export GITHUB_APP_ID=123456                     # your GitHub App, installed on the repository
+export GITHUB_APP_KEY_FILE=~/.config/muster/app.pem
 mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git --push
 ```
+
+`--push` takes a GitHub App, not a personal token: install it on the
+repository with Contents and Pull requests, read and write. For each run,
+`mu run` makes the App's tokens on this machine, each for this repository
+alone and gone within the hour: one to read, for the clone, and one to
+write, made when the push is. The App's key never leaves this machine.
+`GITHUB_APP_PRIVATE_KEY` can hold the key itself instead of a path.
 
 With `--push`, once the agent is done, `mu run` closes the sandbox to every
 host, commits what the agent changed on top of where the checkout started,
@@ -107,8 +115,8 @@ and reads it out as a git bundle. It pushes that from this machine to
 cloned from. The pull request's address is on the task as a `pr` label and a
 reply. Nothing changed, no pull request.
 
-- **The token is never where the agent has been.** It is in the sandbox's
-  policy only while Vercel clones the repository, before anything of the
+- **No token is ever where the agent has been.** The read token is in the
+  sandbox's policy only while Vercel clones the repository, before anything of the
   repository's runs, and only on its git fetch routes. The push is made here,
   from a repository made for it, and its branch is the one `mu run` names,
   so nothing the agent left behind, a hook, a process, a changed `git`, can
@@ -121,11 +129,13 @@ reply. Nothing changed, no pull request.
 - **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
   whose tasks would share one checkout. Only the Vercel runner pushes, and
   it needs `git` on this machine.
-- Without `--push`, `GITHUB_TOKEN` is used to clone a private repository,
-  the same way, and nothing is pushed.
+- Without `--push`, a GitHub App that is set is used to clone a private
+  repository, the same way, and nothing is pushed. A public repository the
+  App isn't installed on is cloned without it.
 
-The token can write any branch of the repository, so protect the ones that
-matter on GitHub: `mu run` only ever pushes `mu/task-<id>`.
+The write token can write any branch of the repository for its hour, though
+only this machine holds it, and `mu run` only ever pushes `mu/task-<id>`:
+protect the branches that matter on GitHub all the same.
 
 ### Setting up holds no credential
 

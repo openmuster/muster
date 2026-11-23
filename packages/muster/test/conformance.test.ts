@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -208,11 +209,18 @@ export const Sandbox = { async create(options) {
     expect(lines.some((e) => e.run?.args?.[1]?.includes('--ignore-scripts'))).toBe(false)
   })
 
+  /** A GitHub App as `mu run` reads it from the environment: an ID, and a key in a file. */
+  const appEnv = () => {
+    const file = join(tempDir(), 'app.pem')
+    writeFileSync(file, generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString())
+    return { GITHUB_APP_ID: '123', GITHUB_APP_KEY_FILE: file }
+  }
+
   it('vercel: --push is refused where it can\'t work, before anything starts', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir)
     const repo = ['--repo', 'https://github.com/acme/web.git']
-    const reasonOf = async (args: string[], env: Record<string, string> = { GITHUB_TOKEN: 'ghp_secret' }) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
+    const reasonOf = async (args: string[], env: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
     expect(await reasonOf(['--runner', 'cloudflare', ...repo])).toBe('push_unsupported')
     expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
@@ -241,25 +249,32 @@ export const Sandbox = { async create(options) {
     execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
     const bundle = readFileSync(join(work, 'mu.bundle')).toString('base64')
 
+    // GitHub's API, standing in: the App is installed on acme/web, and each token is named for what it may do.
     const got: any[] = []
     const api = createServer((req, res) => {
       let body = ''
       req.on('data', (chunk) => (body += chunk))
       req.on('end', () => {
-        got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: body ? JSON.parse(body) : null })
-        res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ html_url: 'https://github.com/acme/web/pull/7' }))
+        const parsed = body ? JSON.parse(body) : null
+        got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: parsed })
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        json(201, { html_url: 'https://github.com/acme/web/pull/7' })
       })
     })
     await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
     const dir = tempDir()
     const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
-    const env = { ...board, ...sdk.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    const env = { ...board, ...sdk.env, ...appEnv(), MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
     const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
-    api.close()
     expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
     // The branch is on GitHub, with the agent's change, under the name this machine chose.
     expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:README.md'], { encoding: 'utf8' })).toBe('hello, fixed\n')
-    expect(got).toEqual([{ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghp_secret', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) }])
+    // A read token to clone, a write token made only for the push, and the pull request opened with it.
+    const tokens = got.filter((each) => each.url.endsWith('/access_tokens'))
+    expect(tokens.map((each) => each.body)).toEqual([{ repositories: ['web'], permissions: { contents: 'read' } }, { repositories: ['web'], permissions: { contents: 'write', pull_requests: 'write' } }])
+    expect(got.at(-1)).toEqual({ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghs_write', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) })
     const lines = await sdk.read()
     const exited = lines.findIndex((e) => e.exited !== undefined)
     // After the agent the sandbox reaches nothing, and no policy of the sandbox's ever holds the token after it was cloned.
@@ -267,12 +282,16 @@ export const Sandbox = { async create(options) {
     const bundled = lines.findIndex((e) => e.run?.args?.[1]?.includes('bundle create'))
     expect(bundled).toBeGreaterThan(exited + 1)
     expect(lines[bundled].run.env).toMatchObject({ MU_BASE: base, MU_NAME: 'fixer' })
-    expect(lines.slice(1).filter((e) => e.update).some((e) => JSON.stringify(e).includes(Buffer.from('x-access-token:ghp_secret').toString('base64')))).toBe(false)
+    // The read token is in the policy it was made with, to clone; nothing after it holds a token, and the write token never reaches the sandbox.
+    expect(JSON.stringify(lines[0])).toContain(Buffer.from('x-access-token:ghs_read').toString('base64'))
+    expect(lines.slice(1).filter((e) => e.update).some((e) => JSON.stringify(e).includes('x-access-token') || JSON.stringify(e).includes(Buffer.from('x-access-token:ghs_read').toString('base64')))).toBe(false)
+    expect((await import('node:fs')).readFileSync(join(dir, 'sdk.log'), 'utf8')).not.toContain(Buffer.from('x-access-token:ghs_write').toString('base64'))
     expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(bundled)
 
     // Nothing changed: no push, no pull request.
     const quiet = fakeSdk(tempDir(), { checkout: `${base}\nmain`, bundled: 'unchanged' })
-    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env, MUSTER_GITHUB_API: 'http://127.0.0.1:1' } })
+    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env } })
+    api.close()
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
   })
 
