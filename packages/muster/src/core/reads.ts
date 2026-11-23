@@ -16,6 +16,11 @@ export type Filter = {
   mentions?: string
   text?: string
   types?: string[]
+  /**
+   * What is for one actor: events that mention it, tasks assigned to it, and replies in threads it wrote in,
+   * never its own. A profile name is one of the caller's own; a value with `:` or `+` is a whole actor ID.
+   */
+  for?: string
 }
 
 export const head = (ctx: Context): number => (ctx.db.raw.prepare('select coalesce(max(seq), 0) as s from events').get() as { s: number }).s
@@ -109,9 +114,11 @@ type Compiled = {
   mentions: string | null
   text: string | null
   types: string[] | null
+  for: { id: string; principal: string; profile: string | null } | null
 }
 
-function compile(filter: Filter): Compiled {
+function compile(filter: Filter, caller: Caller): Compiled {
+  const id = filter.for === undefined ? null : /[:+]/.test(filter.for) ? filter.for : `${caller.principal}+${filter.for}`
   return {
     scope: filter.channel === undefined ? null : channelScope(filter.channel),
     re: filter.re ?? null,
@@ -120,7 +127,18 @@ function compile(filter: Filter): Compiled {
     mentions: filter.mentions ?? null,
     text: filter.text?.toLowerCase() ?? null,
     types: filter.types ?? null,
+    for: id === null ? null : { id, principal: id.split('+')[0]!, profile: id.includes('+') ? id.slice(id.indexOf('+') + 1) : null },
   }
+}
+
+/** Why an event is for an actor, by the first rule that says so: it mentions them, assigns a task to them, or answers them in a thread they wrote in. */
+function forReason(event: BoardEvent, target: NonNullable<Compiled['for']>, wrote: (thread: number, before: number) => boolean): FeedEvent['for'] | null {
+  if (actorId(event.by) === target.id) return null
+  const data = event.data as Record<string, any>
+  if (((data.mentions ?? []) as string[]).includes(target.id)) return 'mention'
+  if ((event.type === 'task.assigned' || event.type === 'task.created') && target.profile !== null && data.for === target.profile) return 'assigned'
+  if (event.type === 'message.posted' && event.thread !== null && event.thread !== event.seq && wrote(event.thread, event.seq)) return 'reply'
+  return null
 }
 
 /** Whether an actor reference a filter gives (`ada`, `local:user:ada`, `local:user:ada+claude`) names who wrote an event. */
@@ -160,16 +178,26 @@ function matches(ctx: Context, caller: Caller, event: BoardEvent, filter: Compil
   return true
 }
 
-export type FeedEvent = BoardEvent & { message?: Message; task?: Task }
+export type FeedEvent = BoardEvent & {
+  message?: Message
+  task?: Task
+  /** Set when the read was `for` someone: why the event is for them. */
+  for?: 'mention' | 'assigned' | 'reply'
+}
 
 /** What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on from. */
 export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number }): { events: FeedEvent[]; cursor: number } {
-  const filter = compile(request.filter ?? {})
+  const filter = compile(request.filter ?? {}, caller)
   if (filter.re !== null) messageFor(ctx, caller, filter.re)
   const limit = limitOf(request.limit, 200, 1000)
   const after = request.after ?? head(ctx)
   const roots = new Map<number, Message | null>()
   const gone = new Map<number, boolean>()
+  // A reply is for an actor when a message of theirs, still there and earlier, is in its thread.
+  const written = filter.for
+    ? ctx.db.raw.prepare("select exists (select 1 from messages where thread = ? and id < ? and deleted = 0 and principal = ? and coalesce(profile, '') = ?) as found")
+    : null
+  const wrote = (thread: number, before: number) => (written!.get(thread, before, filter.for!.principal, filter.for!.profile ?? '') as { found: number }).found === 1
   const out: FeedEvent[] = []
   let cursor = after
   // Read in pages so a quiet filter on a busy board still moves its cursor forward.
@@ -181,9 +209,11 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
       // find what a delete took away.
       const event = { ...toEvent(row) }
       event.data = shown(ctx, event, gone)
-      if (matches(ctx, caller, event, filter, roots)) {
+      const why = filter.for ? forReason(event, filter.for, wrote) : null
+      if (matches(ctx, caller, event, filter, roots) && (filter.for === null || why !== null)) {
         const data = event.data as Record<string, any>
         const feed: FeedEvent = { ...event }
+        if (why) feed.for = why
         const id = typeof data.id === 'number' ? data.id : event.type === 'message.posted' ? event.seq : null
         if (event.type.startsWith('message.') && id !== null) {
           const message = findMessage(ctx.db, id)
