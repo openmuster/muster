@@ -73,7 +73,7 @@ second workflow, is
 | `channels` | Where it may be started. Required. An entry ending in `/` is a prefix (`work/` covers `work/api`); any other is that channel only |
 | `steps` | 1 to 20 tasks. `key` and `text` are required. `needs` names earlier keys, `for` gives the task to one profile, `labels` are `k: v` text |
 | `workers` | The crew. See below |
-| `timeout` | How long a run may take before it is summed up as it stands, such as `2h`. Left out, the run is summed up only when every task has ended |
+| `timeout` | How long a run may take before it is summed up as it stands, such as `2h`. Left out, `24h` |
 
 `workers` takes:
 
@@ -196,16 +196,22 @@ in the middle makes nothing twice.
 
 ### The summary
 
-When every task has ended, or the `timeout` has passed since the run began,
-the daemon says how it went, once:
+When every task has ended or can never start, or the `timeout` (a day,
+unless the workflow names one) has passed since the run began, the daemon
+says how it went, once:
 
 ```text
-implement finished: 2 completed, 1 failed, 0 canceled
-#43 completed: Planned 4 tasks: #46 #47 #48 #49
-#45 failed: the tests don't pass yet (pr https://github.com/your-org/your-repo/pull/90)
+implement finished: 1 completed, 1 failed, 0 canceled, 1 won't start
+#43 completed: Change rate.ts and add a test that sends 101 requests
+#44 failed: the tests don't pass yet (pr https://github.com/your-org/your-repo/pull/90)
+#45 won't start: blocked by #44
 ```
 
-A task that is still open when a timeout ends the run is listed as such.
+A task that needs a failed or canceled task, directly or through another,
+can never start, so it holds nothing open: it is listed as `won't start`.
+The timeout ends only the waiting for a summary. Nothing is canceled, the
+workers keep going, and a task that ends later isn't reported; one still open
+then is listed as `still open`.
 What a task said is its result or its reason: the first line, cut at 200
 characters. Because a worker, or anyone, wrote that text, the daemon defuses
 it before speaking as itself: `@` becomes a lookalike so it mentions nobody,

@@ -283,7 +283,7 @@ describe('the daemon starts a requested workflow', () => {
   const ready = async (workflows: Workflow[] = [release]) => {
     const made = memoryBoard()
     const root = await made.team.post({ channel: 'work/app', text: 'ship 1.2' })
-    const rec = recorder()
+    const rec = recorder(undefined, () => made.time.now().getTime())
     expect(await runWorkflows(made.team, workflows, rec.deps)).toEqual({ started: [], refused: [] })
     return { ...made, root, rec }
   }
@@ -385,7 +385,7 @@ describe('the daemon starts a requested workflow', () => {
       const team = board({ backend })
       const lead = { ...release, who: ['lead', `${OWNER}+chief`] }
       const root = await team.post({ channel: 'work/app', text: 'ship' })
-      const rec = recorder()
+      const rec = recorder(undefined, () => time.now().getTime())
       await runWorkflows(team, [lead], rec.deps)
       // An unbound CI token that says it is lead, or chief by full ID: its word only.
       const claimed = await token(null).as('lead').workflowRequest({ name: 'release', on: root.id })
@@ -451,7 +451,7 @@ describe('the daemon starts a requested workflow', () => {
       const narrowed = token({ 'work/': ['read', 'post', 'label'] })
       const team = board({ backend })
       const root = await team.post({ channel: 'work/app', text: 'ship' })
-      const rec = recorder()
+      const rec = recorder(undefined, () => time.now().getTime())
       await runWorkflows(team, [release], rec.deps)
       const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
       const run = `work/app/release-${seq}`
@@ -497,7 +497,7 @@ describe('the daemon starts a requested workflow', () => {
       }
     }
     expect(claimed).toEqual(mine)
-    expect((await team.task(injected)).state).toBe('ready')
+    expect((await team.task(injected))!.state).toBe('ready')
   })
 
   it('takes a ready task only from exactly the actor named with by, and refuses a by that is no actor', async () => {
@@ -740,6 +740,32 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await replies()).toHaveLength(2)
   })
 
+  it("sums up a run whose failed step strands what needs it, with no timeout and no time passing", async () => {
+    const pipeline: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }, { key: 'b', text: 'Do B', needs: ['a'] }, { key: 'c', text: 'Do C', needs: ['b'] }] }
+    const { team, seq, tasks, tick, replies, fail } = await started(pipeline)
+    const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+    // Held by a person, not failed: the rest may still start, so the run stays open.
+    await team.as('workflows').taskBlock({ id: a, reason: 'needs a key' })
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    await team.as('workflows').taskUnblock({ id: a })
+    await fail(a, 'no access')
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    expect((await replies()).slice(1)).toEqual([
+      [`release finished: 0 completed, 1 failed, 0 canceled, 2 won't start`, `#${a} failed: no access`, `#${b} won't start: blocked by #${a}`, `#${c} won't start: blocked by #${a}`].join('\n'),
+    ])
+    expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  it('sums up a run whose workflow names no timeout once a day has passed, with what is still open', async () => {
+    const { time, seq, tasks, tick, replies } = await started(trio)
+    expect(trio.timeout).toBeUndefined()
+    time.advance(24 * 60 * 60 * 1000 - 1)
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    time.advance(1)
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    expect((await replies()).at(-1)).toBe(['release finished: 0 completed, 0 failed, 0 canceled, 3 still open', ...tasks.map((task) => `#${task.id} still open (ready)`)].join('\n'))
+  })
+
   it('says it once when the daemon stopped between the summary and the label, whatever changed since', async () => {
     const { team, time, root, seq, tasks, opening, tick, replies, complete } = await started(timed)
     const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
@@ -903,10 +929,10 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect((await runWorkflows(team, [one], deps)).reported).toEqual([seq])
   })
 
-  it('reports a run whose workflow has since gone from the config, or moved, when it settles, with no timeout', async () => {
+  it("reports a run whose workflow has since gone from the config, or moved, when it settles, or after the default day", async () => {
     const { time, seq, tasks, tick, replies, complete, deps, team } = await started({ ...one, timeout: '1m' })
     time.advance(60 * 60 * 1000)
-    // Its timeout is the config's, so a workflow gone or moved elsewhere has none.
+    // Its timeout is the config's, so a workflow gone or moved elsewhere has only the default day's.
     expect(await runWorkflows(team, [], deps)).toEqual({ started: [], refused: [] })
     expect(await runWorkflows(team, [{ ...one, timeout: '1m', channels: ['other/'] }], deps)).toEqual({ started: [], refused: [] })
     await complete(tasks[0]!.id, 'done')

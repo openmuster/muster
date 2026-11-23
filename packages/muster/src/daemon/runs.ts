@@ -191,10 +191,43 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
 export const REPORTS_CURSOR = 'workflow:reports'
 /** The board's own record that one run was summed up: reserved, so a narrowed token can't set it, and no label is read for it. */
 export const reportedCursor = (seq: number) => `workflow:reported:${seq}`
+/** How long a run may take before it is summed up as it stands, when its workflow names no `timeout` (or is gone). */
+export const DEFAULT_TIMEOUT = '24h'
 /** A PR link the summary shows: a GitHub pull request, and nothing else. */
 const PR = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/\d+$/
 
-type RunTask = { id: number; state: string; said: string | null; pr: string | undefined }
+/** A run's task as the summary sees it. `stuck` is the failed or canceled task that keeps it from ever starting. */
+type RunTask = { id: number; state: string; said: string | null; pr: string | undefined; needs: readonly number[]; stuck?: number }
+
+const isOpen = (task: RunTask) => (OPEN_STATES as readonly string[]).includes(task.state)
+
+/**
+ * Marks each waiting task that can never start: one it needs, directly or through another waiting task,
+ * failed or was canceled. Nothing readies it after that, so the run is settled without it.
+ */
+function markStuck(tasks: RunTask[]): void {
+  const byId = new Map(tasks.map((task) => [task.id, task]))
+  const seen = new Map<number, number | null>()
+  const stuckOn = (task: RunTask): number | null => {
+    if (seen.has(task.id)) return seen.get(task.id)!
+    seen.set(task.id, null)
+    let found: number | null = null
+    if (task.state === 'waiting') {
+      for (const id of task.needs) {
+        const need = byId.get(id)
+        if (!need) continue
+        found = need.state === 'failed' || need.state === 'canceled' ? need.id : stuckOn(need)
+        if (found !== null) break
+      }
+    }
+    seen.set(task.id, found)
+    return found
+  }
+  for (const task of tasks) {
+    const on = stuckOn(task)
+    if (on !== null) task.stuck = on
+  }
+}
 
 /**
  * Says on the asking thread how each run went, once all its tasks have ended or its workflow's `timeout`
@@ -266,7 +299,7 @@ async function reportOne(team: Board, writer: Board, workflows: Workflow[], owne
     for (const each of page.threads) {
       if (!byDaemon(each.message)) continue
       if (each.task === null) first = each.message
-      else tasks.push({ id: each.task.id, state: each.task.state, said: each.task.result ?? each.task.reason, pr: each.message.labels.pr })
+      else tasks.push({ id: each.task.id, state: each.task.state, said: each.task.result ?? each.task.reason, pr: each.message.labels.pr, needs: each.task.needs })
     }
     if (!page.more || page.older === null) break
     before = page.older
@@ -274,10 +307,13 @@ async function reportOne(team: Board, writer: Board, workflows: Workflow[], owne
   // No first message: refused, or its workers never all started. There is no run to report on.
   if (first === undefined) return 'done'
   tasks.sort((x, y) => x.id - y.id)
-  const open = tasks.filter((task) => (OPEN_STATES as readonly string[]).includes(task.state))
-  // Only the timeout comes from the config, and only while the workflow still runs where it was asked.
+  markStuck(tasks)
+  // A task that can never start holds nothing open.
+  const open = tasks.filter((task) => isOpen(task) && task.stuck === undefined)
+  // Only the timeout comes from the config, and only while the workflow still runs where it was asked;
+  // without one, a day, so a run nobody finishes is still summed up.
   const workflow = workflows.find((each) => each.name === name && runsIn(each.channels, asked.channel!))
-  const timedOut = workflow?.timeout !== undefined && Date.parse(first.at) + duration(workflow.timeout, 'timeout') * 1000 <= deps.now()
+  const timedOut = Date.parse(first.at) + duration(workflow?.timeout ?? DEFAULT_TIMEOUT, 'timeout') * 1000 <= deps.now()
   if (!timedOut && (open.length > 0 || tasks.length === 0)) return 'open'
   try {
     await writer.reply({ to: asked.thread, text: summary(name, tasks), idempotencyKey: `workflow-${seq}-report` })
@@ -316,11 +352,12 @@ function quote(text: string | null): string {
 /** A run's summary: a line of counts, then a line per task with how it ended, the first line of what it said, and its PR. */
 function summary(name: string, tasks: RunTask[]): string {
   const count = (state: string) => tasks.filter((task) => task.state === state).length
-  const isOpen = (task: RunTask) => (OPEN_STATES as readonly string[]).includes(task.state)
-  const open = tasks.filter(isOpen).length
-  const head = `${name} finished: ${count('completed')} completed, ${count('failed')} failed, ${count('canceled')} canceled${open > 0 ? `, ${open} still open` : ''}`
+  const stuck = tasks.filter((task) => task.stuck !== undefined).length
+  const open = tasks.filter(isOpen).length - stuck
+  const head = `${name} finished: ${count('completed')} completed, ${count('failed')} failed, ${count('canceled')} canceled${stuck > 0 ? `, ${stuck} won't start` : ''}${open > 0 ? `, ${open} still open` : ''}`
   const lines = tasks.map((task) => {
     const pr = task.pr !== undefined && PR.test(task.pr) ? ` (pr ${task.pr})` : ''
+    if (task.stuck !== undefined) return `#${task.id} won't start: blocked by #${task.stuck}${pr}`
     if (isOpen(task)) return `#${task.id} still open (${task.state})${pr}`
     const said = quote(task.said)
     return `#${task.id} ${task.state}${said ? `: ${said}` : ''}${pr}`
