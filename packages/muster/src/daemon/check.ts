@@ -19,7 +19,7 @@ const inScope = (channel: string, scope: string) => (scope.endsWith('/') ? chann
  * Works out a write the watcher's own filter would match, or says why there is none. It is built from
  * the filter, so a check exercises the same path a real wake takes: the filter, the gate, the command.
  */
-export function checkWrite(watcher: Watcher, options: { in?: string } = {}): CheckWrite {
+export function checkWrite(watcher: Watcher, options: { in?: string; principal?: string } = {}): CheckWrite {
   const tail = watcher.tail
   if (tail.types && !tail.types.some((type) => type === 'message.posted' || (type.endsWith('.') && 'message.posted'.startsWith(type)))) {
     throw notCheckable(watcher, `it listens for ${tail.types.join(', ')}, not for messages.`)
@@ -33,6 +33,8 @@ export function checkWrite(watcher: Watcher, options: { in?: string } = {}): Che
   if (as !== undefined && as === watcher.as) throw notCheckable(watcher, `it listens only to ${as}, which is its own profile.`)
   const parts = [`Watcher check for "${watcher.name}". If a watcher woke you for this, reply in this thread with anything.`]
   if (tail.mentions !== undefined) parts.push(`@${tail.mentions.split(/[:+]/).at(-1)}`)
+  // A mention by ID, settled as written: a profile that has never written on the board has no handle to settle.
+  if (tail.for !== undefined) parts.push(/[:+]/.test(tail.for) ? `@[${tail.for}]` : options.principal ? `@[${options.principal}+${tail.for}]` : `@${tail.for}`)
   if (tail.text !== undefined) parts.push(tail.text)
   const text = parts.join(' ')
   if (tail.re !== undefined) {

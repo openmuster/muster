@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
+import { forName } from '../core/reads.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { takeLock } from './lock.ts'
@@ -27,6 +28,15 @@ export function loadWatchers(path = watchersPath()): Watcher[] {
     if (names.has(entry.name)) throw new Failure('invalid_config', `Two watchers in ${path} are named "${entry.name}".`)
     names.add(entry.name)
     if (!Array.isArray(entry.run) || entry.run.length === 0 || !entry.run.every((part) => typeof part === 'string')) throw new Failure('invalid_config', `Watcher "${entry.name}" needs "run": the command as an array of strings.`)
+    // A bad `for` would fail every tick and hold up the watchers after it: say so when the file is read.
+    if (entry.tail?.for !== undefined) {
+      try {
+        if (typeof entry.tail.for !== 'string') throw new Error()
+        forName(entry.tail.for)
+      } catch {
+        throw new Failure('invalid_config', `Watcher "${entry.name}" has a "for" that isn't a profile name or an actor ID: ${JSON.stringify(entry.tail.for)}.`)
+      }
+    }
     return { name: entry.name, tail: entry.tail ?? {}, run: entry.run, ...(entry.gate ? { gate: entry.gate } : {}), ...(entry.as ? { as: entry.as } : {}), ...(entry.every !== undefined ? { every: entry.every } : {}), ...(Array.isArray(entry.env) ? { env: entry.env.map(String) } : {}) }
   })
 }

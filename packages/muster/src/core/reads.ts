@@ -16,6 +16,12 @@ export type Filter = {
   mentions?: string
   text?: string
   types?: string[]
+  /**
+   * What is for one actor: messages posted that mention it, tasks assigned to it, and replies in threads it
+   * wrote in, never its own writes except a message it scheduled. A profile name is one of the caller's own; a
+   * value with `:` or `+` is a whole actor ID, with no `+profile` the principal alone.
+   */
+  for?: string
 }
 
 export const head = (ctx: Context): number => (ctx.db.raw.prepare('select coalesce(max(seq), 0) as s from events').get() as { s: number }).s
@@ -109,9 +115,26 @@ type Compiled = {
   mentions: string | null
   text: string | null
   types: string[] | null
+  for: { id: string; principal: string; profile: string | null } | null
 }
 
-function compile(filter: Filter): Compiled {
+/** Checks what a `for` filter names: a profile name, or a whole actor ID whose profile part, if any, is one. */
+export function forName(value: string): string {
+  if (!/[:+]/.test(value)) return profileName(value)
+  if (value.includes('+')) profileName(value.slice(value.indexOf('+') + 1))
+  return value
+}
+
+/** Who a `for` filter is for. A bare name is one of the caller's profiles; anything else is a whole actor ID, with or without a profile. */
+function forTarget(value: string, caller: Caller): NonNullable<Compiled['for']> {
+  forName(value)
+  if (!/[:+]/.test(value)) return { id: `${caller.principal}+${value}`, principal: caller.principal, profile: value }
+  const plus = value.indexOf('+')
+  if (plus === -1) return { id: value, principal: value, profile: null }
+  return { id: value, principal: value.slice(0, plus), profile: value.slice(plus + 1) }
+}
+
+function compile(filter: Filter, caller: Caller): Compiled {
   return {
     scope: filter.channel === undefined ? null : channelScope(filter.channel),
     re: filter.re ?? null,
@@ -120,7 +143,23 @@ function compile(filter: Filter): Compiled {
     mentions: filter.mentions ?? null,
     text: filter.text?.toLowerCase() ?? null,
     types: filter.types ?? null,
+    for: filter.for === undefined ? null : forTarget(filter.for, caller),
   }
+}
+
+/**
+ * Why an event is for an actor, by the first rule that says so: it mentions them, assigns a task to them, or
+ * answers them in a thread they wrote in. Never their own writes, except a message they scheduled: that is how
+ * they ask to be woken later. A deleted message is for no one, and an edit is not a new mention.
+ */
+function forReason(event: BoardEvent, target: NonNullable<Compiled['for']>, wrote: (thread: number, before: number) => boolean, gone: (id: number) => boolean): FeedEvent['for'] | null {
+  const data = event.data as Record<string, any>
+  if (event.type === 'message.posted' && gone(event.seq)) return null
+  if (actorId(event.by) === target.id) return event.type === 'message.posted' && data.schedule ? 'reply' : null
+  if (event.type === 'message.posted' && ((data.mentions ?? []) as string[]).includes(target.id)) return 'mention'
+  if ((event.type === 'task.assigned' || event.type === 'task.created') && target.profile !== null && data.for === target.profile && typeof data.id === 'number' && !gone(data.id)) return 'assigned'
+  if (event.type === 'message.posted' && event.thread !== null && event.thread !== event.seq && wrote(event.thread, event.seq)) return 'reply'
+  return null
 }
 
 /** Whether an actor reference a filter gives (`ada`, `local:user:ada`, `local:user:ada+claude`) names who wrote an event. */
@@ -160,16 +199,26 @@ function matches(ctx: Context, caller: Caller, event: BoardEvent, filter: Compil
   return true
 }
 
-export type FeedEvent = BoardEvent & { message?: Message; task?: Task }
+export type FeedEvent = BoardEvent & {
+  message?: Message
+  task?: Task
+  /** Set when the read was `for` someone: why the event is for them. */
+  for?: 'mention' | 'assigned' | 'reply'
+}
 
 /** What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on from. */
 export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number }): { events: FeedEvent[]; cursor: number } {
-  const filter = compile(request.filter ?? {})
+  const filter = compile(request.filter ?? {}, caller)
   if (filter.re !== null) messageFor(ctx, caller, filter.re)
   const limit = limitOf(request.limit, 200, 1000)
   const after = request.after ?? head(ctx)
   const roots = new Map<number, Message | null>()
   const gone = new Map<number, boolean>()
+  // A reply is for an actor when a message of theirs, still there and earlier, is in its thread.
+  const written = filter.for
+    ? ctx.db.raw.prepare("select exists (select 1 from messages where thread = ? and id < ? and deleted = 0 and principal = ? and coalesce(profile, '') = ?) as found")
+    : null
+  const wrote = (thread: number, before: number) => (written!.get(thread, before, filter.for!.principal, filter.for!.profile ?? '') as { found: number }).found === 1
   const out: FeedEvent[] = []
   let cursor = after
   // Read in pages so a quiet filter on a busy board still moves its cursor forward.
@@ -181,9 +230,12 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
       // find what a delete took away.
       const event = { ...toEvent(row) }
       event.data = shown(ctx, event, gone)
-      if (matches(ctx, caller, event, filter, roots)) {
+      // The cheap gate first: who may read the event, and the other filters. Only then the `for` rules, one of which asks the store.
+      const why = matches(ctx, caller, event, filter, roots) ? (filter.for ? forReason(event, filter.for, wrote, (id) => isGone(ctx, id, gone)) : undefined) : null
+      if (why !== null) {
         const data = event.data as Record<string, any>
         const feed: FeedEvent = { ...event }
+        if (why) feed.for = why
         const id = typeof data.id === 'number' ? data.id : event.type === 'message.posted' ? event.seq : null
         if (event.type.startsWith('message.') && id !== null) {
           const message = findMessage(ctx.db, id)
@@ -203,6 +255,16 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
   return { events: out, cursor }
 }
 
+/** Whether a message has been deleted, asked once per read. */
+function isGone(ctx: Context, id: number, gone: Map<number, boolean>): boolean {
+  let deleted = gone.get(id)
+  if (deleted === undefined) {
+    deleted = (ctx.db.raw.prepare('select deleted from messages where id = ?').get(id) as { deleted: number } | undefined)?.deleted === 1
+    gone.set(id, deleted)
+  }
+  return deleted
+}
+
 /**
  * An event as readers see it. A claim's secret never leaves the store. And the log keeps every event as
  * it was written, so what a deleted message said is dropped here, on the way out: its text, its labels
@@ -213,12 +275,7 @@ function shown(ctx: Context, event: BoardEvent, gone: Map<number, boolean>): Rec
   const carries = event.type === 'message.posted' || event.type === 'message.edited' || event.type === 'labels.changed'
   const id = event.type === 'message.posted' ? event.seq : rest.id
   if (!carries || typeof id !== 'number') return rest
-  let deleted = gone.get(id)
-  if (deleted === undefined) {
-    deleted = (ctx.db.raw.prepare('select deleted from messages where id = ?').get(id) as { deleted: number } | undefined)?.deleted === 1
-    gone.set(id, deleted)
-  }
-  if (!deleted) return rest
+  if (!isGone(ctx, id, gone)) return rest
   const blank: Record<string, unknown> = { text: '', labels: {}, attachments: [], mentions: [], set: {}, unset: [], before: {} }
   for (const key of Object.keys(rest)) if (key in blank) rest[key] = blank[key]
   return rest

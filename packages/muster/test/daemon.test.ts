@@ -265,6 +265,30 @@ describe('watchers', () => {
     expect(ran.at(-1)!.env.MUSTER_PROFILE).toBe('fixer')
   })
 
+  it('a watcher for a profile wakes once for a mention of it, and never for its own post', async () => {
+    const { team, as, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
+    await tick()
+    await team.as('lead').post({ channel: 'work/api', text: 'my own post, @lead included' })
+    expect((await tick()).woke).toEqual([])
+    await as('local:user:bob').post({ channel: 'work/api', text: 'nothing for you' })
+    expect((await tick()).woke).toEqual([])
+    const mention = await as('local:user:bob').post({ channel: 'work/api', text: '@lead please look' })
+    const did = await tick()
+    expect(did.woke).toHaveLength(1)
+    expect(ran.at(-1)!.command).toEqual(['wake', String(mention.id)])
+    expect((await tick()).woke).toEqual([])
+  })
+
+  it('a watcher for a profile wakes for a reminder the profile scheduled in a channel', async () => {
+    const { team, time, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
+    await tick()
+    await team.as('lead').scheduleCreate({ channel: 'work/api', text: 'check back', at: new Date(time.now().getTime() + 1000).toISOString() })
+    const did = await tick()
+    expect(did.woke).toHaveLength(1)
+    const sent = (await team.readChannel({ channel: 'work/api' })).threads[0]!.message
+    expect([sent.text, ran.at(-1)!.command]).toEqual(['check back', ['wake', String(sent.id)]])
+  })
+
   it('a wake that fails is tried again from the same place, and the events after it wait', async () => {
     let failing = true
     const { team, ran, tick } = harness({}, () => ({ code: failing ? 1 : 0 }))
@@ -318,7 +342,7 @@ describe('watchers', () => {
     expect(loadWatchers(path)).toEqual([])
     writeFileSync(path, JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }] }))
     expect(loadWatchers(path)).toEqual([{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }])
-    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]']) {
+    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]', '[{"name": "a", "tail": {"for": ""}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": "lead+"}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": 3}, "run": ["x"]}]']) {
       writeFileSync(path, bad)
       expect(() => loadWatchers(path)).toThrow(/watchers\.json|Watcher|watchers/)
     }
@@ -451,6 +475,20 @@ describe('checking a watcher', () => {
     expect(checkWrite(watcher({ channel: 'work/', types: ['message.'] }), { in: 'work/checks' })).toMatchObject({ kind: 'post', channel: 'work/checks' })
   })
 
+  it('writes a message a watcher for a profile matches, on a board where that profile never wrote', async () => {
+    const { team } = memoryBoard()
+    const forLead = watcher({ channel: 'work', for: 'lead' }, { as: 'lead' })
+    const write = checkWrite(forLead, { principal: 'local:user:ada' })
+    expect(write).toMatchObject({ kind: 'post', channel: 'work', text: expect.stringContaining('@[local:user:ada+lead]') })
+    // A whole actor ID is mentioned as it is.
+    expect(checkWrite(watcher({ channel: 'work', for: 'local:user:bob+lead' }), { principal: 'local:user:ada' }).text).toContain('@[local:user:bob+lead]')
+    if (write.kind !== 'post') throw new Error('expected a post')
+    const head = await team.head()
+    await team.post({ channel: write.channel, text: write.text, labels: write.labels })
+    const got = await team.as('lead').events({ after: head, filter: forLead.tail })
+    expect(got.events.map((event) => event.for)).toEqual(['mention'])
+  })
+
   it("refuses what a message can't trigger, and asks where to write for a subtree", async () => {
     expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work', types: ['task.completed'] }))))).toBe('watcher_not_checkable')
     expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work', by: 'lead' }, { as: 'lead' }))))).toBe('watcher_not_checkable')
@@ -477,6 +515,20 @@ describe('checking a watcher', () => {
 
   it('reports who answered when the command wakes something that replies', async () => {
     const dir = setUp([process.execPath, BIN, 'reply', '{thread}', 'here'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s'])
+    daemon.child.kill('SIGTERM')
+    await daemon.done
+    expect([run.code, run.stderr]).toEqual([0, ''])
+    expect(run.stdout).toMatch(/^answered {2}#2 {2}by .*lead.* {2}in \d+s?/)
+  }, 30_000)
+
+  it('checks a watcher for a profile end to end, on a board where that profile never wrote', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work', for: 'lead' }, run: [process.execPath, BIN, 'reply', '{thread}', 'here'], as: 'lead', every: 1 }] }))
     await cli(dir, ['post', 'general', 'board exists'])
     const daemon = cliStart(dir, ['daemon', 'run'])
     await new Promise((resolve) => setTimeout(resolve, 1500))

@@ -7,6 +7,18 @@ versions are affected.
 
 ### Added
 
+- `mu inbox` lists what is for you since you last asked: a message that
+  mentions you, a task assigned to you, and a reply in a thread you wrote in,
+  one line each, saying which. Your own writes aren't in it, except a reminder
+  you scheduled. It keeps its place per profile; `--peek` reads without moving
+  it, `--wait` blocks until something arrives, and `--json` prints one
+  document. Deleted messages are left out, and an edit doesn't count as a new
+  mention.
+- `mu wait --for <profile>` and `mu tail --for <profile>` use the same filter,
+  and a watcher can listen with `"tail": { "for": "<profile>" }` to wake an
+  agent for what is its own. `mu daemon check` works for such a watcher.
+  In code, `events` takes `filter.for`, and each event it returns says why.
+
 - A CI job can sign in to a served board with the OIDC token its platform
   gives it, so there is no board token to store and rotate. The owner names
   the workloads in `~/.config/muster/oidc.json`: the issuer, an audience, the
