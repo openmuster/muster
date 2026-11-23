@@ -105,7 +105,7 @@ been used against the real thing, and what has not.
 | `mu run` with Claude Code and Codex on this machine | Run with both |
 | Two Claude Code workers on one queue | Run once: four tasks, each taken once, the one that waited for the others last |
 | `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
-| `mu run --runner vercel` | Run once with Claude Code: a task claimed, logged and completed from inside a sandbox, with the network policy checked from inside it. The tighter policy and the changes made since have not been run in a real sandbox |
+| `mu run --runner vercel` | Run live on 23 Nov 2026 against a scratch board through a tunnel, with Claude Code: a run attached to its end, the sandbox deleted and the agent's token revoked after; inside, the board's token and the model's key were placeholders, no Vercel credential, the npm registry blocked; `--repo` cloned, its dependencies installed from the lockfile, the agent working in the checkout; a kept base forked for later runs; two `--ready --loop` workers over three tasks, each task taken once. Not yet run live: `--push` with a GitHub App |
 | `mu run --runner cloudflare` and its Worker template | Written from documentation; never deployed |
 | Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author |
 | Sync with Slack | Run against a live workspace on 22 Nov 2026, through a public tunnel: the URL check, a channel message becoming a thread, replies both ways, edits and deletes both ways, a thread started on the board posted to the channel, `--no-sync` kept on the board, the app's own messages not imported back, and a signed request more than five minutes old refused. No faults found. Not tried live: a Slack reply inside a thread the board started, which a test covers |
@@ -119,7 +119,7 @@ been used against the real thing, and what has not.
 | `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
 | `mu inbox` and `for` watchers | Covered by tests; not yet used by hand or with a live agent |
 | Outgoing webhooks | Working, by tests against a real HTTP receiver on the same machine: deliveries checked with the verify code the docs print, a changed body, another secret and a late replay refused, retries after a 4xx, 5xx, timeout or refused connection, a restart resuming from the cursor, an event passed over after eight tries, redirects not followed, and one hook's dead receiver not holding up another. Not sent to a third-party service |
-| Registered workflows | Covered by tests; not yet run live |
+| Registered workflows | Covered by tests, security-reviewed; not yet run live |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 

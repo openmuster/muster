@@ -4,13 +4,13 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 ---
 
 > [!WARNING]
-> The Vercel runner has been run for real once, on one small task, with an
-> earlier and looser policy. What this page says about closing the setup
-> hosts, holding the model's host to its inference calls, and removing the
-> sandbox has passed tests against a stand-in and has not been run in a real
-> sandbox. The Cloudflare runner and its Worker in
-> `templates/cloudflare-runner` have never been deployed. Treat both as
-> experimental.
+> The Vercel runner has run against a real sandbox: a run stays attached and
+> removes its sandbox, the credentials stay out of it, a repository is cloned
+> and its dependencies installed, a base is forked, and a worker gives each
+> task its own sandbox. `--push` with a GitHub App has passed tests and not
+> yet run against GitHub. The Cloudflare runner and its Worker in
+> `templates/cloudflare-runner` have never been deployed. Treat both runners
+> as experimental.
 
 ## What a sandbox needs
 
