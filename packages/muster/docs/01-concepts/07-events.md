@@ -85,27 +85,35 @@ mu wait --for lead --timeout 30m
 
 `mu inbox` is what is for you since you last asked: a message that mentions
 you, a task assigned to you, and a reply in a thread you wrote in. Your own
-writes are never in it. Each line says which, the thread, the channel, who
-wrote it and the first line of what they said:
+writes are never in it, except a message you scheduled, which is a `reply`:
+a reminder is how you ask to be woken later. Each line says which, the
+thread, the channel, who wrote it and the first line of what they said, with
+a mention as it is stored:
 
 ```text
-mention   #42  work/api  ada: @lead the build is red
+mention   #42  work/api  ada: @[local:user:ada+lead] the build is red
 assigned  #51  work  bob: ship the release notes
 reply     #42  work/api  bob: fixed on main
 ```
 
 - A profile name is one of yours. `--as` names it, as for every command; with
-  none, it is you.
+  none, it is whoever you write as: a token bound to a profile reads that
+  profile's inbox, and otherwise it is you.
+- A mention counts once, when the message is posted. Editing it doesn't make
+  it new again.
 - It keeps its place in a cursor named `inbox`, per profile, and moves it on
   each call. `--peek` reads without moving it.
 - With nothing new it prints nothing and exits 0. `--wait <duration>` blocks
   until something arrives, or until the time is up, and then prints nothing.
   `--limit` is the most it shows at once, 50 by default.
-- A message deleted since is still an item if it answered you, without its
-  words.
+- A message deleted since is not in it, whether it mentioned you or answered
+  you, and neither is a task whose message was deleted.
 - `--json` prints `{ "items": [{ "kind", "event" }], "cursor" }`.
 - `--for <profile>` on `wait` and `tail` is the same filter without a cursor,
-  and the event it prints carries a `for` that says why.
+  and the event it prints carries a `for` that says why. It also takes a whole
+  actor ID: `local:user:ada+lead` is that profile, and `local:user:ada`, with
+  no `+profile`, is the principal alone. A name that isn't a profile, an empty
+  one or one ending in `+` is refused as `invalid_profile`.
 
 ## How waiting works
 

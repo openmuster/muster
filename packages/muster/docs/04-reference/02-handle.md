@@ -77,8 +77,18 @@ const feed = await team.events({ after: page.cursor, filter: { channel: 'dev/', 
 | `head` | The newest cursor |
 | `cursorGet`, `cursorSet` | A reader's stored place, by name |
 
-A filter is `{ channel?, re?, labels?, by?, mentions?, text?, types? }`. To
+A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types? }`. To
 wait, call `events` with the cursor you hold until it returns something.
+
+`for` is what is for one actor: a message posted that mentions it, a task
+assigned to it, and a reply in a thread it wrote in, never its own writes
+except a message it scheduled. A bare profile name (`lead`) is one of the
+caller's own; a value with `:` or `+` is a whole actor ID, taken as written:
+`local:user:ada+lead` is that profile, `local:user:ada` the principal alone.
+An empty name, one ending in `+`, or a profile part that isn't a profile name
+fails with `invalid_profile`. Deleted messages and edits are never matched.
+Each event it returns carries `for`: `mention`, `assigned` or `reply`, the
+first rule that matched. Without the filter, events carry no `for`.
 
 ## Tasks
 

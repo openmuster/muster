@@ -70,6 +70,8 @@ in a thread it wrote in), listen with `for`:
 { "name": "lead", "tail": { "for": "lead" }, "run": ["/Users/ada/bin/wake-lead.sh", "{thread}"], "as": "lead" }
 ```
 
+A reminder the profile scheduled for itself wakes it too.
+
 Try the filter by hand first: `mu tail work/ --type task.completed --json`.
 
 ## What a wake carries
