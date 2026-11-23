@@ -21,7 +21,16 @@ export type CloudRequest = {
   timeoutMs?: number
 }
 
-export type CloudRun = { id: string; stop(): Promise<void> }
+export type CloudRun = {
+  id: string
+  /** Closes the run's way out and removes what is left of it. */
+  stop(): Promise<void>
+  /**
+   * Resolves when what runs in the sandbox exits, with its exit code. It can reject on a dropped
+   * connection while the run goes on, so it may be asked again. Absent where the platform can't tell.
+   */
+  wait?(): Promise<{ exitCode: number | null }>
+}
 
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
 export type CloudRunner = { name: string; start(request: CloudRequest): Promise<CloudRun> }
@@ -38,7 +47,8 @@ export type VercelSandbox = {
   create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>): Promise<{
     sandboxId?: string
     name?: string
-    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<unknown>
+    /** A finished command has its `exitCode`; a detached one can be waited on. Older stand-ins return nothing. */
+    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<{ exitCode?: number | null; wait?(): Promise<{ exitCode: number | null }> } | void>
     /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
     update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
     stop(): Promise<unknown>
@@ -107,7 +117,14 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
-      for (const [cmd, ...args] of setup) await sandbox.runCommand({ cmd: cmd!, args })
+      for (const [cmd, ...args] of setup) {
+        const done = await sandbox.runCommand({ cmd: cmd!, args })
+        // What it printed stays in the sandbox: an install's output can name private packages and registries.
+        if (done && typeof done.exitCode === 'number' && done.exitCode !== 0) {
+          await end(sandbox)
+          throw new Failure('runner_setup_failed', `Setting up the sandbox failed: \`${[cmd, ...args].join(' ')}\` exited ${done.exitCode}.`, { hint: 'The sandbox was removed. MUSTER_INSTALL names another muster to install.' })
+        }
+      }
       // What the setup needed is closed before anything the agent decides runs.
       if (setup.length && options.setupHosts?.length) {
         if (!sandbox.update) {
@@ -118,8 +135,9 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       }
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag.
-      await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
-      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox) }
+      const agent = await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
+      const wait = agent && typeof agent.wait === 'function' ? agent.wait.bind(agent) : undefined
+      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox), ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
     },
   }
 }

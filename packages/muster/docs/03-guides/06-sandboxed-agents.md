@@ -33,11 +33,26 @@ mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/ac
 mu run --ready work/ --runner cloudflare --agent codex --as worker-3
 ```
 
-The command starts the run and returns. What runs in the sandbox is `mu run`
+What runs in the sandbox is `mu run`
 itself, as it runs on your machine: it claims the task, keeps the claim alive
 while the agent works, fails the task if the agent leaves it open, and labels
 it with the session, tokens and cost. With `--ready` the sandbox is a worker
 that takes one task after another until none is ready.
+
+On Vercel, `mu run` here stays with the run: it waits for the one in the
+sandbox to exit, then closes the sandbox's way out and removes it, and says
+how the task ended. Ctrl-C does the same, sooner. A dropped connection is
+waited out, not taken for an exit. `--detach` starts the run and returns,
+and the sandbox is left to its timeout, holding the agent's token in its
+policy until then. On Cloudflare the command always returns once it starts.
+
+One length of time sets the rest. `--timeout`, 30 minutes when you don't
+pass one, is how long the agent works on the task. The sandbox lives ten
+minutes longer, to install muster and settle the task, so it is `mu run` in
+it that fails a task that ran out of time, never the platform cutting it off.
+A `--ready` worker's sandbox lives two hours at least, and ends as soon as
+the worker finds no task. The agent's token lasts ten minutes past the
+sandbox.
 
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never
@@ -124,9 +139,12 @@ A path with dot segments or an encoded slash doesn't pass.
 
 ## What is left afterwards
 
-Nothing, by design: this is not yet checked on a real sandbox. A Vercel
-sandbox is started so that it isn't kept, and when a run is stopped its way
-out is closed and the sandbox is removed. A kept sandbox
+Nothing, once `mu run` ends it. A Vercel sandbox is started so that it isn't
+kept, and when the run exits or is stopped its way out is closed and the
+sandbox is deleted, so it isn't left in Vercel's list either. A setup step
+that fails ends it the same way. With `--detach`, or if this machine sleeps
+through the run, it is stopped at its timeout instead, and stays listed as
+stopped. A kept sandbox
 would hold the repository, the agent's transcript and a policy with the
 credentials in it.
 

@@ -113,6 +113,38 @@ describe('cloud runners', () => {
     expect(calls.at(-1)).toEqual(['stop'])
   })
 
+  it('vercel: a setup step that fails ends the sandbox and starts no agent', async () => {
+    const calls: any[] = []
+    const made = {
+      sandboxId: 'sbx_9',
+      runCommand: async (command: any) => (calls.push(['run', command]), command.detached ? {} : { exitCode: 1 }),
+      update: async (options: any) => void calls.push(['update', options]),
+      delete: async () => void calls.push(['delete']),
+      stop: async () => void calls.push(['stop']),
+    }
+    const failed = await vercel({ Sandbox: { create: async () => made } }).start(request).catch((error) => error)
+    expect(failed.reason).toBe('runner_setup_failed')
+    expect(failed.message).toContain('npm install -g https://example.com/muster.tgz')
+    expect(failed.message).toContain('exited 1')
+    expect(calls.some(([kind, command]) => kind === 'run' && command.detached)).toBe(false)
+    expect(calls.slice(-2)).toEqual([['update', { networkPolicy: 'deny-all' }], ['delete']])
+  })
+
+  it('vercel: a run can be waited on until mu run in the sandbox exits, and asked again after a dropped wait', async () => {
+    let waits = 0
+    const made = {
+      sandboxId: 'sbx_10',
+      runCommand: async (command: any) => (command.detached ? { wait: async () => (++waits === 1 ? Promise.reject(new Error('socket hang up')) : { exitCode: 3 }) } : { exitCode: 0 }),
+      stop: async () => {},
+    }
+    const run = await vercel({ Sandbox: { create: async () => made } }).start(request)
+    await expect(run.wait!()).rejects.toThrow('socket hang up')
+    expect(await run.wait!()).toEqual({ exitCode: 3 })
+    // An SDK whose detached command can't be waited on gives a run that can't be either.
+    const old = await vercel({ Sandbox: { create: async () => ({ sandboxId: 'sbx_11', runCommand: async () => undefined, stop: async () => {} }) } }).start(request)
+    expect(old.wait).toBeUndefined()
+  })
+
   it('vercel: the model\'s key is added to requests for the provider\'s host and never enters the sandbox', async () => {
     const calls: any[] = []
     const Sandbox = { create: async (options: any) => (calls.push(options), { name: 'sbx-2', runCommand: async (command: any) => void calls.push(command), stop: async () => {} }) }

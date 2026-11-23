@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { conformance, mint } from '../src/index.ts'
-import { cli, memoryBoard, tempDir } from './helpers.ts'
+import { cli, cliStart, memoryBoard, tempDir } from './helpers.ts'
 
 describe('conformance', () => {
   it('this backend passes every check', async () => {
@@ -85,13 +85,13 @@ describe('mu run in a cloud sandbox', () => {
     // In a sandbox the agent's own prompts are off: headless, one would stop it at its first command.
     // GitHub was open for the install only: the agent starts with the board as its one way out.
     expect(lines[2]).toEqual({ closedTo: ['board.example.com'] })
-    expect(lines[3].args[1]).toContain("'mu' 'run' '12' '--bypass-permissions' '--agent' 'codex'")
+    expect(lines[3].args[1]).toContain("'mu' 'run' '12' '--bypass-permissions' '--timeout' '30m' '--agent' 'codex'")
     // The agent's clean environment is told what the sandbox set that it must still see: the certificate for its intercepted connections.
     expect(lines[0].env.MUSTER_AGENT_ENV.split(',')).toEqual(expect.arrayContaining(['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'GIT_SSL_CAINFO', 'IS_SANDBOX', 'OPENAI_API_KEY']))
     // --safe keeps them on.
     await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'codex', '--safe', '--json'], { env: { ...board, MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') } })
     const again = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
-    expect(again.at(-1).args[1]).toContain("'mu' 'run' '12' '--agent' 'codex'")
+    expect(again.at(-1).args[1]).toContain("'mu' 'run' '12' '--timeout' '30m' '--agent' 'codex'")
     expect(again.at(-1).args[1]).not.toContain('--bypass-permissions')
   })
 
@@ -115,6 +115,89 @@ describe('mu run in a cloud sandbox', () => {
     expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(1)
   })
 
+  /** A stand-in for @vercel/sandbox that logs every call, and whose agent command exits with `exit` after `after` ms. */
+  const fakeSdk = (dir: string, opts: { exit?: number; after?: number } = {}) => {
+    const log = join(dir, 'sdk.log')
+    mkdirSync(join(dir, 'sdk'), { recursive: true })
+    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'
+const log = (entry) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + '\\n')
+export const Sandbox = { async create(options) {
+  log({ create: options })
+  return {
+    sandboxId: 'sbx_44',
+    async runCommand(c) {
+      log({ run: c })
+      if (!c.detached) return { exitCode: 0 }
+      return { wait: () => new Promise((resolve) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), resolve({ exitCode: ${opts.exit ?? 0} })), ${opts.after ?? 50})) }
+    },
+    update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow) }),
+    delete: async () => log({ deleted: true }),
+    stop: async () => log({ stopped: true }),
+  }
+} }\n`)
+    return { env: { MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs') }, read: async () => (await import('node:fs')).readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) }
+  }
+
+  it('vercel: attached by default, it waits for mu run in the sandbox, then closes the sandbox\'s way out and deletes it', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { exit: 0, after: 300 })
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--json'], { env: { ...board, ...sdk.env } })
+    const lines = await sdk.read()
+    const at = (match: (entry: any) => boolean) => lines.findIndex(match)
+    // Ended only after the run in it exited: its way out closed first, then removed.
+    expect(at((e) => e.exited !== undefined)).toBeLessThan(at((e) => e.update === 'deny-all'))
+    expect(at((e) => e.update === 'deny-all')).toBeLessThan(at((e) => e.deleted))
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, runner: 'vercel', run: 'sbx_44', exit: 0 })
+    expect(run.code).toBe(0)
+  })
+
+  it('vercel: one length of time sets the agent\'s timeout, the sandbox\'s, which outlives it, and the token\'s', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    // Without --timeout: 30 minutes for the agent, ten more for the sandbox to set up and settle the task.
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--json'], { env: { ...board, ...sdk.env } })
+    let lines = await sdk.read()
+    expect(lines[0].create.timeout).toBe(40 * 60_000)
+    expect(lines.find((e) => e.run?.detached).run.args[1]).toContain("'--timeout' '30m'")
+    // With one: the same rule.
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--timeout', '1h', '--json'], { env: { ...board, ...sdk.env } })
+    lines = await sdk.read()
+    expect(lines.filter((e) => e.create).at(-1).create.timeout).toBe(70 * 60_000)
+    expect(lines.filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--timeout' '1h'")
+  })
+
+  it('vercel: a run that exits badly is a failure here too, and the sandbox is still removed', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { exit: 2 })
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--json'], { env: { ...board, ...sdk.env } })
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stdout)).toMatchObject({ exit: 2 })
+    expect((await sdk.read()).some((e) => e.deleted)).toBe(true)
+  })
+
+  it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { after: 5000 })
+    const started = Date.now()
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--detach', '--json'], { env: { ...board, ...sdk.env } })
+    expect(Date.now() - started).toBeLessThan(4000)
+    expect(JSON.parse(run.stdout)).toEqual({ task: 12, runner: 'vercel', run: 'sbx_44' })
+    expect((await sdk.read()).some((e) => e.deleted || e.update === 'deny-all')).toBe(false)
+  })
+
+  it('vercel: stopping mu run here ends the sandbox too', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { after: 60_000 })
+    const run = cliStart(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude'], { ...board, ...sdk.env })
+    for (let i = 0; i < 100 && !run.output().includes('started'); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    run.child.kill('SIGINT')
+    const ended = await run.done
+    expect(ended.code).toBe(130)
+    const lines = await sdk.read()
+    expect(lines.some((e) => e.update === 'deny-all')).toBe(true)
+    expect(lines.some((e) => e.deleted)).toBe(true)
+  }, 15_000)
+
   it('with --ready the sandbox is a worker that takes tasks itself until none is ready', async () => {
     const dir = tempDir()
     const log = join(dir, 'sdk.log')
@@ -125,7 +208,7 @@ describe('mu run in a cloud sandbox', () => {
     const { readFileSync } = await import('node:fs')
     const started = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).at(-1)
     // A worker: the next ready task, a fresh agent on it, and again until none is ready.
-    expect(started.args[1]).toContain("'mu' 'run' '--ready' 'work/' '--loop' '--wait' '2m' '--as' 'worker-3' '--bypass-permissions' '--agent' 'claude'")
+    expect(started.args[1]).toContain("'mu' 'run' '--ready' 'work/' '--loop' '--wait' '2m' '--as' 'worker-3' '--bypass-permissions' '--timeout' '30m' '--agent' 'claude'")
   })
 
   it('starts nothing with a token that would hand the sandbox more than one agent\'s reach, or with none', async () => {

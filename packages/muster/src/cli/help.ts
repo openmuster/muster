@@ -69,6 +69,7 @@ agents
   run <id> --runner vercel|cloudflare --agent <a> [--repo <clone url>]
                                  the same, in a cloud sandbox
        [--safe]                  keep the agent's permission prompts on there
+       [--detach]                return once started, not when it ends
   The agent is told where its task is, not what it says.
   It settles the task itself; one left unsettled is failed or released.
 
