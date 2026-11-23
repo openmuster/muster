@@ -154,6 +154,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |
+| `runner_setup_failed` | A step that prepares the sandbox failed; the sandbox was removed |
 | `board_not_reachable` | A sandbox can't reach that board: it needs an HTTPS address |
 | `invalid_session` | Not a session ID |
 | `platform_refused` | A platform didn't do what was asked |

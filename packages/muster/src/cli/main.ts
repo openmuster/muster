@@ -633,7 +633,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -1442,19 +1442,28 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
   const task = ready === undefined ? id(parsed.positionals[0], 'a task') : 0
-  const timeout = str(parsed.flags, 'timeout')
+  // One length of time sets them all. The agent gets `timeout`; a Vercel sandbox outlives it by the time it
+  // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
+  // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
+  const limit = str(parsed.flags, 'timeout')
+  const timeout = limit ?? (where === 'vercel' ? DEFAULT_CLOUD_TIMEOUT : undefined)
+  const seconds = timeout ? duration(timeout, 'timeout') : undefined
+  // A --timeout you give is the bound, for a worker too; without one a worker gets time for several tasks.
+  const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? WORKER_LIFETIME : seconds + SETTLE
   // A token for this run alone: this agent's name, the task's own channel, gone soon after the run should be,
   // and what it writes stays on the board. It is made by the board, from your token, and can make no others.
   let token = given
+  let made: string | undefined
   if (token === undefined) {
     const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
-    const made = await run.team.backend.tokens.create({
+    const minted = await run.team.backend.tokens.create({
       profile: named!,
       can: { [channel]: ['read', 'post', 'react', 'label'] },
-      ttl: (timeout ? duration(timeout, 'timeout') : 30 * 60) + 10 * 60,
+      ttl: (lifetime ?? 30 * 60) + 10 * 60,
       noSync: true,
     })
-    token = made.token
+    token = minted.token
+    made = minted.record.id
   }
   // The model's key is read here and added to the sandbox's requests on the way out: it never enters the sandbox.
   const modelKey = agent.model ? env[agent.model.keyEnv] : undefined
@@ -1491,11 +1500,57 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     // A Vercel sandbox gets the same release as this CLI, from its tarball: never a package looked up by name.
     // A Cloudflare container has no internet: mu is in the image you built.
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
-    ...(timeout ? { timeoutMs: duration(timeout, 'timeout') * 1000 } : {}),
+    ...(lifetime ? { timeoutMs: lifetime * 1000 } : {}),
   })
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200) } }).catch(() => {})
-  print(run, { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }, () => `started  ${task ? `#${task}` : ready}  ${runner.name} ${started.id}`)
-  return 0
+  const what = { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }
+  const line = `${task ? `#${task}` : ready}  ${runner.name} ${started.id}`
+  if (on(parsed.flags, 'detach') || !started.wait) {
+    print(run, what, () => `started  ${line}`)
+    return 0
+  }
+  // Attached: the sandbox is ended when what runs in it exits, or when this is stopped, so nothing of it
+  // idles until its timeout with the agent's token in its policy. Its timeout is still there for a CLI that dies.
+  if (!run.json) run.io.out(`started  ${line}`)
+  const deadline = Date.now() + (lifetime ?? 30 * 60) * 1000 + 60_000
+  let exitCode: number | null = null
+  try {
+    exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
+  } finally {
+    await started.stop().catch(() => {})
+    // The token made for this run has nothing left to do: it goes now, not when it would have expired.
+    if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
+  }
+  if (run.io.stop.aborted) {
+    run.io.err(`stopped  ${line}  removed`)
+    return stopCode(run.io.stop)
+  }
+  const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
+  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}`)
+  return exitCode === 0 ? 0 : 1
+}
+
+/** How long a cloud agent may work when no --timeout says, and how much longer its sandbox lives to set up and settle the task. */
+const DEFAULT_CLOUD_TIMEOUT = '30m'
+const SETTLE = 10 * 60
+/** A --ready worker's sandbox: long enough for several tasks. It is ended as soon as the worker finds none. */
+const WORKER_LIFETIME = 2 * 60 * 60
+
+/**
+ * Waits for a cloud run to exit. A wait that fails is a dropped connection, not an exit: it is asked
+ * again, less often each time, until `deadline`, the sandbox's own timeout. Null when stopped or out of time.
+ */
+async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: AbortSignal, deadline: number): Promise<number | null> {
+  let pause = 2000
+  while (!stop.aborted && Date.now() < deadline) {
+    const stopped = new Promise<null>((resolve) => (stop.aborted ? resolve(null) : stop.addEventListener('abort', () => resolve(null), { once: true })))
+    const outcome = await Promise.race([wait().then((done) => ({ done }), (error: unknown) => ({ error })), stopped])
+    if (outcome === null) return null
+    if ('done' in outcome) return outcome.done.exitCode
+    await sleep(Math.min(pause, Math.max(0, deadline - Date.now())), stop)
+    pause = Math.min(pause * 2, 30_000)
+  }
+  return null
 }
 
 /**

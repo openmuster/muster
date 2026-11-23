@@ -29,3 +29,6 @@ const code = await main(process.argv.slice(2), {
   stop: stop.signal,
 })
 process.exitCode = code
+// Stopped by a signal, a command has already cleaned up: whatever it was still waiting on, such as a
+// cloud run's open request, mustn't keep the process alive. Its output is flushed first.
+if (stop.signal.aborted) process.stdout.write('', () => process.stderr.write('', () => process.exit(code)))
