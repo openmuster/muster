@@ -25,7 +25,7 @@ Events the board writes itself are by the principal `board`.
 | `message.deleted` | `id` |
 | `labels.changed` | `id`, `set`, `unset`, `before`: the labels as they were |
 | `reaction.added`, `reaction.removed` | `id`, `emoji` |
-| `workflow.requested` | `name`, `on`: the message it was asked on, `args`: text values by name. On the thread of `on`. Changes nothing itself: the daemon that has `name` in its `workflows.json` acts on it |
+| `workflow.requested` | `name`, `on`: the message it was asked on, `args`: text values by name, `profileHeld`: whether the profile in `by` is fixed by the token (or the caller is the board itself, unnarrowed) rather than named by the request. On the thread of `on`. Changes nothing itself: the daemon that has `name` in its `workflows.json` acts on it |
 
 ## Tasks
 

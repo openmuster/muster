@@ -329,8 +329,8 @@ export function cursorSet(ctx: Context, caller: Caller, name: string, seq: numbe
   })
 }
 
-/** The names the daemon keeps its own places under: `watch:<watcher>`, `hook:<webhook>`, `sync:<platform>`. */
-const RESERVED_CURSOR = /^(watch|hook|sync):/
+/** The names the daemon keeps its own places under: `watch:<watcher>`, `hook:<webhook>`, `sync:<platform>`, `workflow:requests`. */
+const RESERVED_CURSOR = /^(watch|hook|sync|workflow):/
 
 const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
 

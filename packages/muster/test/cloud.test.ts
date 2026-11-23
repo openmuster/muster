@@ -13,8 +13,9 @@ describe('the sandbox network policy', () => {
     expect([...SANDBOX_ROUTES].sort()).toEqual([
       'actors', 'budgets', 'channels', 'createChannel', 'edit', 'events', 'fileGet', 'filePut', 'head', 'label', 'post', 'react', 'readChannel', 'readThread', 'remove', 'reply', 'schemaList', 'search',
       'task', 'taskAssign', 'taskBlock', 'taskCancel', 'taskClaim', 'taskComplete', 'taskCreate', 'taskFail', 'taskList', 'taskNeeds', 'taskPlan', 'taskRelease', 'taskRenew', 'taskReopen', 'taskUnblock',
-      'workflowRequest',
     ])
+    // A workflow request starts workers outside the sandbox, so it is closed.
+    expect(SANDBOX_CLOSED).toContain('workflowRequest')
     // A route added to the board is in neither list until someone decides, and this fails until they do.
     expect([...SANDBOX_ROUTES, ...SANDBOX_CLOSED].sort()).toEqual([...ROUTES].sort())
     const { networkPolicy } = boardPolicy({ url: URL_, token: 'T' })

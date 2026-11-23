@@ -74,6 +74,8 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
     if (w.runner !== undefined && w.runner !== 'local' && w.runner !== 'vercel') fail('needs a "workers.runner" of "local" or "vercel".')
     if (w.repo !== undefined && typeof w.repo !== 'string') fail('has a "workers.repo" that isn\'t a string.')
     if (w.cwd !== undefined && typeof w.cwd !== 'string') fail('has a "workers.cwd" that isn\'t a string.')
+    // A worker on this machine works in a folder the operator names: never wherever the daemon happened to start.
+    if (w.runner !== 'vercel' && (typeof w.cwd !== 'string' || w.cwd === '')) fail('needs "workers.cwd": the folder its workers run in on this machine.')
     if (w.push !== undefined && typeof w.push !== 'boolean') fail('has a "workers.push" that isn\'t true or false.')
     if (w.push === true && !(w.runner === 'vercel' && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel" and a github.com https "repo".')
     if (w.timeout !== undefined) checkDuration(w.timeout, 'workers.timeout')

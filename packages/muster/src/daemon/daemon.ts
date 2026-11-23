@@ -91,7 +91,10 @@ export type DaemonOptions = {
   watchers: Watcher[]
   /** Outgoing webhooks, with their secrets already read. */
   hooks?: ArmedHook[]
-  /** Registered workflows: what a request on a thread may start. */
+  /**
+   * Registered workflows: what a request on a thread may start. Left out, requests aren't read at all, so
+   * a workflows file that couldn't be loaded loses none: they are answered once it is fixed.
+   */
   workflows?: Workflow[]
   stop: AbortSignal
   log: (line: string) => void
@@ -137,7 +140,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   const deps: Deps & HookDeps = { now: () => Date.now(), spawn: spawnCommand, fetch, ...options.deps }
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
-  const workflows: Workflows = { list: options.workflows ?? [], deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now } }
+  const workflows: Workflows | undefined = options.workflows ? { list: options.workflows, deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now } } : undefined
   try {
     while (!options.stop.aborted) {
       try {

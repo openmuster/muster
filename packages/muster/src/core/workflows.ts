@@ -36,8 +36,12 @@ export function request(ctx: Context, caller: Caller, req: WorkflowRequest): { s
   const message = messageFor(ctx, caller, req.on)
   if (message.deleted) throw new Failure('not_found', `No message ${req.on}.`)
   authorize(caller, message.channel, 'post')
+  // Whether the profile in `by` is one the caller can't simply name: held by its token, or the caller's own
+  // board with nothing narrowed. A narrowed token held to no profile may send any name per request, so a
+  // daemon matching `who` by profile must not believe it.
+  const profileHeld = caller.profile !== null && (caller.can === undefined || caller.profileHeld === true)
   return ctx.db.write(() => {
-    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args } }, ctx.now().toISOString())
+    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args, profileHeld } }, ctx.now().toISOString())
     return { seq: event.seq }
   })
 }

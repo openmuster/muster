@@ -943,13 +943,14 @@ const commands: Record<string, Command> = {
         run.io.err(`error: ${(error as Error).message}`)
         run.io.err('  No outgoing webhooks are sent until that is fixed and the server restarted.')
       }
-      // On their own too: a workflows file that is wrong starts no workflow, and every request is answered as one this board hasn't got.
-      let workflows: ReturnType<typeof loadWorkflows> = []
+      // On their own too. A workflows file that is wrong means requests aren't read at all: they wait, and
+      // are answered once it is fixed and the server restarted, never refused for a typo.
+      let workflows: ReturnType<typeof loadWorkflows> | undefined
       try {
         workflows = loadWorkflows()
       } catch (error) {
         run.io.err(`error: ${(error as Error).message}`)
-        run.io.err('  No workflows are started until that is fixed and the server restarted.')
+        run.io.err('  No workflow requests are read until that is fixed and the server restarted.')
       }
       // A server's output is its address and its token. What a hook couldn't deliver, or a workflow couldn't start, is worth adding.
       const log = (line: string) => {
@@ -957,7 +958,7 @@ const commands: Record<string, Command> = {
       }
       try {
         // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, workflows, stop: run.io.stop, log })
+        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, ...(workflows ? { workflows } : {}), stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.
@@ -1469,6 +1470,8 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
   if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
+  // As a worker here would: --label narrows which ready tasks it takes.
+  const labels = list(parsed.flags, 'label')
   const { ready: _, loop: __, wait: ___, ...flags } = parsed.flags
   let quietSince = Date.now()
   let failed = 0
@@ -1478,7 +1481,7 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
     const claimToken = randomBytes(32).toString('base64url')
     let claimed: number | undefined
     try {
-      claimed = (await run.team.as(profile).taskClaim({ ready, token: claimToken })).task.id
+      claimed = (await run.team.as(profile).taskClaim({ ready, ...(labels.length ? { labels } : {}), token: claimToken })).task.id
     } catch (error) {
       if (!(error instanceof Failure && error.reason === 'nothing_ready')) throw error
     }

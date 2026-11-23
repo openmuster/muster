@@ -17,7 +17,7 @@ const good = {
     { key: 'plan', text: 'Plan it' },
     { key: 'build', text: 'Build it', needs: ['plan'] },
   ],
-  workers: { count: 2, agent: 'claude', as: 'worker' },
+  workers: { count: 2, agent: 'claude', as: 'worker', cwd: '/srv/app' },
 }
 
 describe('the workflows file', () => {
@@ -76,6 +76,14 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...good.workers, agent: 'gpt' } })).toMatch(/Workflow "release".*agent/)
   })
 
+  it('needs a folder for workers that run on this machine', () => {
+    const { cwd: _, ...noCwd } = good.workers
+    expect(bad({ workers: noCwd })).toMatch(/Workflow "release".*"workers.cwd"/)
+    expect(bad({ workers: { ...noCwd, runner: 'local' } })).toMatch(/Workflow "release".*"workers.cwd"/)
+    expect(bad({ workers: { ...noCwd, cwd: '' } })).toMatch(/Workflow "release".*"workers.cwd"/)
+    expect(bad({ workers: { ...noCwd, runner: 'vercel' } })).toBe('loaded')
+  })
+
   it('says a bad runner needs to be local or vercel', () => {
     expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local" or "vercel"/)
   })
@@ -131,7 +139,7 @@ describe('workflow requests', () => {
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({ seq: sent.seq, type: 'workflow.requested', by: { principal: 'local:user:ada' }, channel: 'work', thread: root.id, data: { name: 'release', on: reply.id, args: { version: '1.2.0' } } })
     expect((await team.workflowRequest({ name: 'release', on: root.id })).seq).toBeGreaterThan(sent.seq)
-    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {} })
+    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {}, profileHeld: false })
   })
 
   it('refuses a bad name, and bad args: a key, a value, too many keys, a value that is not text', async () => {
@@ -170,9 +178,9 @@ describe('workflow requests', () => {
     }
   })
 
-  it('a sandbox may POST workflowRequest', () => {
+  it('a sandbox may not POST workflowRequest: it would start work beyond the sandbox', () => {
     const { networkPolicy } = boardPolicy({ url: 'https://board.example.com/api/board', token: 'T' })
-    expect(applyPolicy(networkPolicy, { url: 'https://board.example.com/api/board/workflowRequest', method: 'POST' })).not.toBeNull()
+    expect(applyPolicy(networkPolicy, { url: 'https://board.example.com/api/board/workflowRequest', method: 'POST' })).toBeNull()
   })
 })
 
@@ -217,7 +225,7 @@ describe('mu workflow', () => {
     }
     // The server wrote it into the board's file, as the token's principal.
     const events = (await board({ dir: join(dir, 'board'), principal: 'local:user:ada' }).events({ after: 0, filter: { types: ['workflow.requested'] } })).events
-    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' } }])
+    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' }, profileHeld: false }])
   }, 20_000)
 })
 
@@ -234,23 +242,33 @@ describe('the daemon starts a requested workflow', () => {
     ],
     workers: { count: 2, agent: 'claude', as: 'worker', cwd: '/srv/app' },
   }
-  const recorder = (fail?: () => boolean) => {
+  /** A spawner that takes notes. `fail` says, by call number from 1, which start throws. */
+  const recorder = (fail?: (call: number) => boolean) => {
     const spawned: Parameters<Spawner>[0][] = []
-    const spawn: Spawner = (worker) => {
-      if (fail?.()) throw new Error('spawn failed')
+    let calls = 0
+    const spawn: Spawner = async (worker) => {
+      calls += 1
+      if (fail?.(calls)) throw new Error('spawn mu ENOENT')
       spawned.push(worker)
     }
     return { spawned, deps: { spawn, now: () => Date.now() } }
   }
-  const argvFor = (run: string, workers: Workflow['workers'], i: number) => [
-    'run', '--ready', run, '--loop', '--wait', '10m',
-    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd ?? process.cwd()]),
-    '--agent', workers.agent, '--as', `${workers.as}-${i}`,
-    ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
-  ]
+  const argvFor = (workflow: Workflow, run: string, seq: number, i: number) => {
+    const workers = workflow.workers
+    return [
+      'run', '--ready', run, '--loop', '--wait', '10m',
+      ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
+      '--agent', workers.agent, '--as', `${workers.as}-${i}`,
+      ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
+      '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
+    ]
+  }
   const tasksIn = async (team: Board, channel: string) => (await team.taskList({ channel, state: 'all' })).tasks
   const allTasks = async (team: Board) => (await team.taskList({ state: 'all' })).tasks
   const repliesOn = async (team: Board, thread: number) => (await team.readThread({ id: thread })).replies
+  /** The messages in a run's channel that aren't tasks. */
+  const openings = async (team: Board, run: string) => (await team.readChannel({ channel: run })).threads.filter((each) => each.task === null).map((each) => each.message)
+  const channelNames = async (team: Board) => (await team.channels()).channels.map((each) => each.path)
   /** A board whose daemon has already ticked once, so its cursor is set and what comes next is new. */
   const ready = async (workflows: Workflow[] = [release]) => {
     const made = memoryBoard()
@@ -272,15 +290,18 @@ describe('the daemon starts a requested workflow', () => {
     expect(tasks[1]!.for).toBe('builder')
     expect(tasks[0]!.labels).toMatchObject({ role: 'plan', workflow: 'release', request: String(seq) })
     expect(tasks[1]!.labels).toMatchObject({ workflow: 'release', request: String(seq) })
-    // The run's first message, not a task, says where it came from.
-    const opening = (await team.readChannel({ channel: run })).threads.filter((each) => each.task === null)
-    expect(opening.map((each) => each.message.text)).toEqual([`release, asked for by ${OWNER} on #${root.id}`])
-    expect(opening[0]!.message.labels).toMatchObject({ workflow: 'release', request: String(seq), thread: String(root.id) })
-    expect(opening[0]!.message.id).toBeLessThan(tasks[0]!.id)
-    expect(rec.spawned).toEqual([1, 2].map((i) => ({ name: `worker-${i}`, argv: argvFor(run, release.workers, i), cwd: '/srv/app' })))
+    // The run's first message, not a task, says where it came from; it is written once the workers have started.
+    const opening = await openings(team, run)
+    expect(opening.map((message) => message.text)).toEqual([`release, asked for by ${OWNER} on #${root.id}`])
+    expect(opening[0]!.labels).toMatchObject({ workflow: 'release', request: String(seq), thread: String(root.id) })
+    expect(rec.spawned).toEqual([1, 2].map((i) => ({ name: `worker-${i}`, argv: argvFor(release, run, seq, i), cwd: '/srv/app' })))
     const replies = await repliesOn(team, root.id)
     expect(replies.at(-1)!.text).toBe(`started release: 2 tasks in ${run}`)
     expect(replies.at(-1)!.by).toEqual({ principal: OWNER, profile: 'workflows' })
+    // The answer on the asking thread syncs, as the asker may be on a platform; the run's own message doesn't.
+    const posted = (await team.events({ after: 0, filter: { types: ['message.posted'] } })).events
+    expect(posted.find((event) => event.seq === replies.at(-1)!.id)!.data).toMatchObject({ noSync: false })
+    expect(posted.find((event) => event.seq === opening[0]!.id)!.data).toMatchObject({ noSync: true })
   })
 
   it('builds the same argv whatever the args say, and puts them only in task text', async () => {
@@ -290,9 +311,15 @@ describe('the daemon starts a requested workflow', () => {
     const hostile = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '--push ; rm -rf /', nope: '$(id) `id` {run}' } })
     expect((await runWorkflows(team, [vercel], rec.deps)).started).toEqual([plain.seq, hostile.seq])
     const runs = [plain.seq, hostile.seq].map((seq) => `work/app/release-${seq}`)
-    expect(rec.spawned.map((worker) => worker.argv)).toEqual(runs.map((run) => argvFor(run, vercel.workers, 1)))
-    expect(rec.spawned[0]!.argv).toEqual(['run', '--ready', runs[0], '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'codex', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push', '--timeout', '20m'])
-    expect(rec.spawned[1]!.argv.map((part) => part.replace(runs[1]!, runs[0]!))).toEqual(rec.spawned[0]!.argv)
+    expect(rec.spawned.map((worker) => worker.argv)).toEqual([argvFor(vercel, runs[0]!, plain.seq, 1), argvFor(vercel, runs[1]!, hostile.seq, 1)])
+    expect(rec.spawned[0]!.argv).toEqual([
+      'run', '--ready', runs[0], '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'codex', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push', '--timeout', '20m',
+      '--label', 'workflow=release', '--label', `request=${plain.seq}`,
+    ])
+    // A Vercel worker has no folder of its own here.
+    expect(rec.spawned[0]!.cwd).toBeUndefined()
+    const same = (argv: string[], seq: number, run: string) => argv.map((part) => part.replace(run, 'RUN').replace(`request=${seq}`, 'request=SEQ'))
+    expect(same(rec.spawned[1]!.argv, hostile.seq, runs[1]!)).toEqual(same(rec.spawned[0]!.argv, plain.seq, runs[0]!))
     // Filled once, as text: an argument that looks like a placeholder stays as written.
     expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
   })
@@ -325,6 +352,33 @@ describe('the daemon starts a requested workflow', () => {
     expect(await runWorkflows(team, [only], rec.deps)).toEqual({ started: [profile.seq], refused: [owner.seq, other.seq] })
   })
 
+  it('believes a profile only when a token holds it: a narrowed token that names one per request is refused', async () => {
+    const time = clock()
+    const key = randomBytes(32)
+    const backend = file({ memory: true, principal: OWNER, now: time.now })
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    try {
+      const exp = Math.floor(time.now().getTime() / 1000) + 3600
+      const can = { 'work/': ['read', 'post'] }
+      const token = (profile: string | null) => board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile, exp, can } as never) }) })
+      const team = board({ backend })
+      const lead = { ...release, who: ['lead', `${OWNER}+chief`] }
+      const root = await team.post({ channel: 'work/app', text: 'ship' })
+      const rec = recorder()
+      await runWorkflows(team, [lead], rec.deps)
+      // An unbound CI token that says it is lead, or chief by full ID: its word only.
+      const claimed = await token(null).as('lead').workflowRequest({ name: 'release', on: root.id })
+      const claimedId = await token(null).as('chief').workflowRequest({ name: 'release', on: root.id })
+      // A token held to lead, and the owner's own board as lead.
+      const held = await token('lead').workflowRequest({ name: 'release', on: root.id })
+      const owner = await team.as('lead').workflowRequest({ name: 'release', on: root.id })
+      expect(await runWorkflows(team, [lead], rec.deps)).toEqual({ started: [held.seq, owner.seq], refused: [claimed.seq, claimedId.seq] })
+      expect((await repliesOn(team, root.id)).map((reply) => reply.text).slice(0, 2)).toEqual([`${OWNER}+lead may not start release`, `${OWNER}+chief may not start release`])
+    } finally {
+      await server.close()
+    }
+  })
+
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {
     const exact = { ...release, channels: ['work'] }
     const { team, root, rec } = await ready([exact])
@@ -334,22 +388,51 @@ describe('the daemon starts a requested workflow', () => {
     expect(await runWorkflows(team, [exact], rec.deps)).toEqual({ started: [at.seq], refused: [below.seq] })
   })
 
-  it('starts a request once: a second tick, or a daemon that stopped half way, makes nothing twice', async () => {
-    let failing = true
+  it("says so, and never \"started\", when a worker won't start; and doesn't try again", async () => {
     const { team, root } = await ready()
-    const rec = recorder(() => failing)
+    const rec = recorder((call) => call === 2)
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
-    // The plan is written, then starting a worker fails: the request is not passed over.
-    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [], why: 'spawn failed' })
-    expect(await tasksIn(team, `work/app/release-${seq}`)).toHaveLength(2)
-    failing = false
-    // Read again, the request finds its plan already made: no new tasks, and no second crew.
-    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [seq], refused: [] })
-    expect(rec.spawned).toEqual([])
-    expect(await allTasks(team)).toHaveLength(2)
+    const run = `work/app/release-${seq}`
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
+    expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(['couldn\'t start workers for release: spawn mu ENOENT'])
+    // The tasks are there for whoever starts workers by hand; the run isn't marked as started.
+    expect(await tasksIn(team, run)).toHaveLength(2)
+    expect(await openings(team, run)).toEqual([])
     expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [] })
+    expect(rec.spawned).toHaveLength(1)
+    expect(await repliesOn(team, root.id)).toHaveLength(1)
+  })
+
+  it('starts a request once: a daemon that stopped after the plan starts the workers; one that stopped after them does not', async () => {
+    const simple: Workflow = { ...release, steps: [{ key: 'a', text: 'Do A' }], workers: { ...release.workers, count: 1 } }
+    const { team, root, rec } = await ready([simple])
+    const writer = team.as('workflows')
+    // As the daemon would have written them before it stopped.
+    const plan = async (seq: number) => writer.taskPlan({ channel: `work/app/release-${seq}`, tasks: [{ key: 'a', text: 'Do A', labels: { workflow: 'release', request: String(seq) } }], idempotencyKey: `workflow-${seq}` })
+    const planned = await team.workflowRequest({ name: 'release', on: root.id })
+    await plan(planned.seq)
+    const both = await team.workflowRequest({ name: 'release', on: root.id })
+    await plan(both.seq)
+    await writer.post({ channel: `work/app/release-${both.seq}`, text: 'release', labels: { workflow: 'release', request: String(both.seq) }, noSync: true })
+    expect(await runWorkflows(team, [simple], rec.deps)).toEqual({ started: [planned.seq, both.seq], refused: [] })
+    expect(rec.spawned.map((worker) => worker.argv[2])).toEqual([`work/app/release-${planned.seq}`])
     expect(await allTasks(team)).toHaveLength(2)
-    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([`started release: 2 tasks in work/app/release-${seq}`])
+    // And a second tick makes nothing.
+    expect(await runWorkflows(team, [simple], rec.deps)).toEqual({ started: [], refused: [] })
+    expect(await allTasks(team)).toHaveLength(2)
+    expect(rec.spawned).toHaveLength(1)
+  })
+
+  it("answers a plan the board won't take, and leaves nothing behind", async () => {
+    const long: Workflow = { ...release, steps: [{ key: 'a', text: `${'x'.repeat(9_800)} {args.more}` }] }
+    const { team, root, rec } = await ready([long])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { more: 'y'.repeat(500) } })
+    expect(await runWorkflows(team, [long], rec.deps)).toEqual({ started: [], refused: [seq] })
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([expect.stringMatching(/^couldn't start release: A message holds up to 10,000 characters/)])
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect(await channelNames(team)).not.toContain(`work/app/release-${seq}`)
   })
 
   it('a daemon new to a board starts from now, not from requests made before it', async () => {
@@ -361,6 +444,21 @@ describe('the daemon starts a requested workflow', () => {
     expect(await allTasks(team)).toEqual([])
   })
 
+  it("keeps its cursor to itself: a narrowed token can't move workflow:requests", async () => {
+    const time = clock()
+    const key = randomBytes(32)
+    const backend = file({ memory: true, principal: OWNER, now: time.now })
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    try {
+      const exp = Math.floor(time.now().getTime() / 1000) + 3600
+      const narrowed = board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile: null, exp, can: { 'work/': ['read', 'post'] } } as never) }) })
+      expect(await reason(narrowed.cursorSet('workflow:requests', 1_000_000))).toBe('forbidden')
+      expect(await board({ backend }).cursorGet('workflow:requests')).toBeNull()
+    } finally {
+      await server.close()
+    }
+  })
+
   it('runs in the daemon tick', async () => {
     const { team, root, rec } = await ready()
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
@@ -369,4 +467,46 @@ describe('the daemon starts a requested workflow', () => {
     expect(did.workflows).toEqual({ started: [seq], refused: [] })
     expect(rec.spawned).toHaveLength(2)
   })
+
+  it('under mu serve, a workflows file that is wrong holds requests until it is fixed, and says so', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    const config = (body: unknown) => writeFileSync(join(dir, 'config', 'workflows.json'), typeof body === 'string' ? body : JSON.stringify(body))
+    // Nobody may start it, so a fixed file answers with a refusal and starts nothing on this machine.
+    const fixed = { workflows: [{ ...release, who: ['local:user:nobody'], channels: ['work'] }] }
+    // The board as the server runs it: whoever this process is.
+    const owner = board({ dir: join(dir, 'board') })
+    const me = (await owner.whoami()).principal
+    const serve = async (until: (err: string) => boolean | Promise<boolean>) => {
+      const serving = cliStart(dir, ['serve', '--port', '0'])
+      let err = ''
+      serving.child.stderr!.on('data', (chunk) => (err += chunk))
+      let done = false
+      for (let i = 0; i < 300 && !done; i++) {
+        done = await until(err)
+        if (!done) await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      serving.child.kill('SIGTERM')
+      await serving.done
+      expect(done).toBe(true)
+      return err
+    }
+    config(fixed)
+    const root = await owner.post({ channel: 'work', text: 'ship' })
+    // A first serve with a good file sets the place it reads from.
+    await serve(async () => (await owner.cursorGet('workflow:requests')) !== null)
+    config('{ not json')
+    const { seq } = await owner.workflowRequest({ name: 'release', on: root.id })
+    const before = await owner.cursorGet('workflow:requests')
+    // Long enough for the ticker to have ticked more than once.
+    let seen = 0
+    const err = await serve((err) => (err.includes('No workflow requests are read') && (seen ||= Date.now()) > 0 && Date.now() - seen > 2500))
+    expect(err).toMatch(/workflows\.json isn't JSON/)
+    expect(await owner.cursorGet('workflow:requests')).toBe(before)
+    expect((await owner.readThread({ id: root.id })).replies).toEqual([])
+    config(fixed)
+    await serve(async () => (await owner.readThread({ id: root.id })).replies.length > 0)
+    expect((await owner.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual([`${me} may not start release`])
+    expect(await owner.cursorGet('workflow:requests')).toBeGreaterThanOrEqual(seq)
+  }, 60_000)
 })

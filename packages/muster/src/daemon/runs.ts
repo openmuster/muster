@@ -3,10 +3,13 @@ import type { PlanTask } from '../core/tasks.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { actorId, channelScope, inScope, type By } from '../model.ts'
-import type { Workers, Workflow } from './workflows.ts'
+import type { Workflow } from './workflows.ts'
 
-/** Starts one worker process. The daemon passes the real one; tests pass one that only takes notes. */
-export type Spawner = (worker: { name: string; argv: string[]; cwd: string }) => void
+/**
+ * Starts one worker process, and settles once it has started or couldn't. The daemon passes the real one;
+ * tests pass one that only takes notes. A worker with no `cwd` (a Vercel worker) starts where the daemon runs.
+ */
+export type Spawner = (worker: { name: string; argv: string[]; cwd?: string }) => void | Promise<void>
 
 export type RunDeps = { spawn: Spawner; now: () => number }
 
@@ -21,29 +24,38 @@ const BATCH = 20
 
 /**
  * A worker as `mu` on this machine: `MUSTER_BIN` when it is set, or else the same node and CLI the
- * daemon itself runs as. Started on its own and left running; one that can't start is not the daemon's crash.
+ * daemon itself runs as. It is left running on its own. One that can't start (no such program, no such
+ * folder) rejects, so the daemon says so instead of announcing workers that never ran.
  */
-export const spawnWorker: Spawner = (worker) => {
-  const bin = process.env.MUSTER_BIN
-  const child = bin
-    ? spawn(bin, worker.argv, { cwd: worker.cwd, detached: true, stdio: 'ignore' })
-    : spawn(process.execPath, [process.argv[1]!, ...worker.argv], { cwd: worker.cwd, detached: true, stdio: 'ignore' })
-  child.on('error', () => {})
-  child.unref()
-}
+export const spawnWorker: Spawner = (worker) =>
+  new Promise<void>((resolve, reject) => {
+    const bin = process.env.MUSTER_BIN
+    const options = { ...(worker.cwd !== undefined ? { cwd: worker.cwd } : {}), detached: true, stdio: 'ignore' as const }
+    const child = bin ? spawn(bin, worker.argv, options) : spawn(process.execPath, [process.argv[1]!, ...worker.argv], options)
+    child.once('spawn', () => {
+      // Started: what it does from here is its own, and no later error of its may end the daemon.
+      child.on('error', () => {})
+      child.unref()
+      resolve()
+    })
+    child.once('error', (error) => reject(error))
+  })
 
 /**
- * A worker's command line. Built from the operator's config alone: nothing a request carries reaches it,
- * so an argument that looks like a flag is only ever text in a task.
+ * A worker's command line. Built from the operator's config and the request's seq alone: nothing a
+ * request carries reaches it, so an argument that looks like a flag is only ever text in a task. The
+ * labels hold it to its own run's tasks.
  */
-export function workerArgv(workers: Workers, run: string, i: number): string[] {
+export function workerArgv(workflow: Workflow, run: string, seq: number, i: number): string[] {
+  const workers = workflow.workers
   return [
     'run', '--ready', run, '--loop', '--wait', '10m',
-    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd ?? process.cwd()]),
+    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
     '--agent', workers.agent, '--as', `${workers.as}-${i}`,
     ...(workers.repo ? ['--repo', workers.repo] : []),
     ...(workers.push ? ['--push'] : []),
     ...(workers.timeout ? ['--timeout', workers.timeout] : []),
+    '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
   ]
 }
 
@@ -62,11 +74,15 @@ export function fillStep(text: string, values: { thread: number; channel: string
 /**
  * Whether a verified author is one `who` names. An entry with a `:` is a whole actor ID. A bare name is a
  * profile, and only under the principal of whoever runs this daemon: someone else's agent of that name is
- * someone else.
+ * someone else. A match that rests on a profile counts only when the board says the profile was held by
+ * the caller's token (or the caller was the board itself), not named by the request.
  */
-export function mayStart(who: string[], by: By, owner: string): boolean {
+export function mayStart(who: string[], by: By, owner: string, profileHeld: boolean): boolean {
   const id = actorId(by)
-  return who.some((entry) => (entry.includes(':') ? entry === id : by.principal === owner && by.profile === entry))
+  return who.some((entry) => {
+    if (entry.includes(':')) return entry === id && (by.profile === null || profileHeld)
+    return profileHeld && by.principal === owner && by.profile === entry
+  })
 }
 
 /** Whether a channel is one of a workflow's: exactly, or under an entry that ends in `/`, as `tail --channel` reads them. */
@@ -80,15 +96,17 @@ export function runsIn(channels: string[], channel: string): boolean {
   })
 }
 
+type Request = { seq: number; channel: string; thread: number; by: By; args: Record<string, string> }
+
 /**
  * Reads the workflow requests made since it last looked and handles each in order: a refusal on the
- * thread, or a run. A run is a labelled first message in `<channel>/<name>-<seq>`, the workflow's steps as
- * tasks there, its workers, and a reply on the thread. Every write is keyed by the request's seq, so a
- * request read twice (a restart, a tick that stopped half way) makes nothing twice, and workers are
- * started only by the tick that made the plan.
+ * thread, or a run. A run is the workflow's steps as tasks in `<channel>/<name>-<seq>`, its workers, a
+ * labelled first message there once they have started, and a reply on the thread. Every write is keyed
+ * by the request's seq, so a request read twice (a restart, a tick that stopped half way) makes nothing
+ * twice; the first message is the mark that the workers were started, so they are started once.
  *
- * The cursor moves past a request once it is handled. Something that isn't the board's answer, such as a
- * worker that wouldn't start, stops the pass before that request, and the next tick reads it again.
+ * The cursor moves past a request once it is answered. Something that isn't the board's answer stops the
+ * pass before that request, and the next tick reads it again.
  */
 export async function runWorkflows(team: Board, workflows: Workflow[], deps: RunDeps): Promise<Ran> {
   const out: Ran = { started: [], refused: [] }
@@ -102,20 +120,21 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   const owner = (await team.whoami()).principal
   const writer = team.as(WORKFLOWS_PROFILE)
   const say = async (seq: number, thread: number, text: string) => {
-    // Keyed, so a request read twice is answered once. A thread that has gone since takes no answer.
-    await writer.reply({ to: thread, text, idempotencyKey: `workflow-${seq}-reply`, noSync: true }).catch((error) => {
+    // Keyed, so a request read twice is answered once, and synced like any reply: whoever asked may be
+    // on a platform. A thread that has gone since takes no answer.
+    await writer.reply({ to: thread, text, idempotencyKey: `workflow-${seq}-reply` }).catch((error) => {
       if (!(error instanceof Failure)) throw error
     })
   }
   let reached = page.cursor
   for (const event of page.events) {
-    const { name, args } = event.data as { name: string; args?: Record<string, string> }
+    const { name, args, profileHeld } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean }
     const channel = event.channel!
     const thread = event.thread!
     const workflow = workflows.find((each) => each.name === name)
     const refusal = !workflow
       ? `${name} isn't registered here`
-      : !mayStart(workflow.who, event.by, owner)
+      : !mayStart(workflow.who, event.by, owner, profileHeld === true)
         ? `${actorId(event.by)} may not start ${name}`
         : !runsIn(workflow.channels, channel)
           ? `${name} doesn't run in ${channel}`
@@ -125,13 +144,17 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         await say(event.seq, thread, refusal!)
         out.refused.push(event.seq)
       } else {
-        const started = await start(writer, workflow, event.seq, { channel, thread, by: event.by, args: args ?? {} }, deps)
-        await say(event.seq, thread, started)
-        out.started.push(event.seq)
+        const result = await start(team, writer, workflow, { seq: event.seq, channel, thread, by: event.by, args: args ?? {} }, owner, deps)
+        await say(event.seq, thread, result.text)
+        if (result.failed === undefined) out.started.push(event.seq)
+        else {
+          out.refused.push(event.seq)
+          out.why = `${name} ${event.seq}: ${result.failed}`
+        }
       }
     } catch (error) {
       if (error instanceof Failure && refusal === null) {
-        // The board's own answer, such as a run channel it won't make: the same next time, so said and passed over.
+        // The board's own answer, such as a task text too long to post: the same next time, so said and passed over.
         await say(event.seq, thread, `couldn't start ${name}: ${error.message}`)
         out.refused.push(event.seq)
       } else {
@@ -147,10 +170,9 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
 }
 
 /** Makes one run, and says what to answer on the thread. */
-async function start(writer: Board, workflow: Workflow, seq: number, on: { channel: string; thread: number; by: By; args: Record<string, string> }, deps: RunDeps): Promise<string> {
-  const run = `${on.channel}/${workflow.name}-${seq}`
-  const labels = { workflow: workflow.name, request: String(seq) }
-  await writer.post({ channel: run, text: `${workflow.name}, asked for by ${actorId(on.by)} on #${on.thread}`, labels: { ...labels, thread: String(on.thread) }, idempotencyKey: `workflow-${seq}-run`, noSync: true })
+async function start(team: Board, writer: Board, workflow: Workflow, on: Request, owner: string, deps: RunDeps): Promise<{ text: string; failed?: string }> {
+  const run = `${on.channel}/${workflow.name}-${on.seq}`
+  const labels = { workflow: workflow.name, request: String(on.seq) }
   const tasks: PlanTask[] = workflow.steps.map((step) => ({
     key: step.key,
     text: fillStep(step.text, { thread: on.thread, channel: on.channel, run, args: on.args }),
@@ -158,21 +180,27 @@ async function start(writer: Board, workflow: Workflow, seq: number, on: { chann
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),
   }))
-  // A replayed plan answers with the tasks it made before, so only tasks newer than now mean this tick made them.
-  const before = await writer.head()
-  let fresh: boolean
   try {
-    const made = await writer.taskPlan({ channel: run, tasks, idempotencyKey: `workflow-${seq}` })
-    fresh = made.tasks.every((task) => task.id > before)
+    // One write: a plan the board refuses leaves nothing behind.
+    await writer.taskPlan({ channel: run, tasks, idempotencyKey: `workflow-${on.seq}` })
   } catch (error) {
     // The plan was made under this key before the operator's config changed: it is made, and not made again.
     if (!(error instanceof Failure) || error.reason !== 'idempotency_mismatch') throw error
-    fresh = false
   }
-  if (fresh) {
+  // The run's first message is written once its workers have started: with it there, they were.
+  const opened = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`] })).threads.some(
+    (each) => each.task === null && each.message.by.principal === owner && each.message.by.profile === WORKFLOWS_PROFILE,
+  )
+  if (!opened) {
     for (let i = 1; i <= workflow.workers.count; i++) {
-      deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow.workers, run, i), cwd: workflow.workers.cwd ?? process.cwd() })
+      try {
+        await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
+      } catch (error) {
+        const reason = (error as Error).message
+        return { text: `couldn't start workers for ${workflow.name}: ${reason}`, failed: reason }
+      }
     }
+    await writer.post({ channel: run, text: `${workflow.name}, asked for by ${actorId(on.by)} on #${on.thread}`, labels: { ...labels, thread: String(on.thread) }, idempotencyKey: `workflow-${on.seq}-run`, noSync: true })
   }
-  return `started ${workflow.name}: ${tasks.length} tasks in ${run}`
+  return { text: `started ${workflow.name}: ${tasks.length} tasks in ${run}` }
 }

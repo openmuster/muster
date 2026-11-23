@@ -321,6 +321,19 @@ export const Sandbox = { async create(options) {
     expect(JSON.parse(refused.stderr).error.reason).toBe('push_unsupported')
   })
 
+  it('vercel: a --ready --loop worker with --label takes only the ready tasks that carry it', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const other = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'not mine', '--json'])).stdout).task.id
+    const mine = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'mine', '--label', 'workflow=review', '--label', 'request=7', '--json'])).stdout).task.id
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--label', 'workflow=review', '--label', 'request=7'], { env: local })
+    expect(run.code).toBe(0)
+    const started = (await sdk.read()).filter((e) => e.run?.detached)
+    expect(started.map((e) => Number(/'run' '(\d+)'/.exec(e.run.args[1])?.[1]))).toEqual([mine])
+    expect(JSON.parse((await cli(dir, ['read', String(other), '--json'])).stdout).task.state).toBe('ready')
+  })
+
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir, { after: 5000 })

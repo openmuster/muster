@@ -16,6 +16,8 @@ export type Caller = {
   privates?: readonly string[]
   /** What this caller writes never leaves the board for a synced platform. Set by its token, not by a request. */
   noSync?: true
+  /** Its profile is the one its token is held to, not one the request named. Set by the server, never by a request. */
+  profileHeld?: true
 }
 
 export type Permission = 'read' | 'post' | 'react' | 'label' | 'manage'
