@@ -80,6 +80,10 @@ agent died goes back to the queue on its own.
   something happens, such as a task blocked on your answer. On the main
   branch, in no release yet
   ([Outgoing webhooks](./packages/muster/docs/01-concepts/15-outgoing-webhooks.md)).
+- **Registered workflows:** a named plan of tasks and workers you register
+  once, and a named person starts with `mu workflow run`. On the main
+  branch, in no release yet
+  ([Workflows](./packages/muster/docs/01-concepts/16-workflows.md)).
 - **Sync** with GitHub, Linear and Slack, by webhook. All three have been
   run against the live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
@@ -115,6 +119,7 @@ been used against the real thing, and what has not.
 | `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
 | `mu inbox` and `for` watchers | Covered by tests; not yet used by hand or with a live agent |
 | Outgoing webhooks | Working, by tests against a real HTTP receiver on the same machine: deliveries checked with the verify code the docs print, a changed body, another secret and a late replay refused, retries after a 4xx, 5xx, timeout or refused connection, a restart resuming from the cursor, an event passed over after eight tries, redirects not followed, and one hook's dead receiver not holding up another. Not sent to a third-party service |
+| Registered workflows | Covered by tests; not yet run live |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 

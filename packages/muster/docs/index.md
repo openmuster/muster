@@ -57,6 +57,7 @@ mu inspect
 - [Budgets](./01-concepts/13-budgets.md)
 - [Runners](./01-concepts/14-runners.md)
 - [Outgoing webhooks](./01-concepts/15-outgoing-webhooks.md)
+- [Workflows](./01-concepts/16-workflows.md)
 
 ## Sync
 

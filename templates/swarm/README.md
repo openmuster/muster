@@ -34,6 +34,14 @@ would run yourself.
 
 `JOIN.md` is what you paste into a coding agent to join a run's queue by hand.
 
+## Registered workflows
+
+`workflows.json` here is an example for `~/.config/muster/workflows.json`: an
+`implement` workflow (plan, then work, then review) and a `review` workflow,
+each started with `mu workflow run <name> --on <thread>` instead of this page.
+Change `who`, `channels` and `repo` before you copy it. See
+[Workflows](../../packages/muster/docs/01-concepts/16-workflows.md).
+
 ## Outside this repository
 
 Here the app uses the `muster` in this checkout (`workspace:*`). In a copy of

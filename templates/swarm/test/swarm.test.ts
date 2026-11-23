@@ -1,4 +1,5 @@
-import { board } from 'muster'
+import { join } from 'node:path'
+import { board, loadWorkflows } from 'muster'
 import { describe, expect, it } from 'vitest'
 import { launch, workerArgv } from '../lib/run.ts'
 import { snapshot } from '../lib/swarm.ts'
@@ -136,5 +137,16 @@ describe('snapshot', () => {
     expect(shown.tasks.ready.map((task) => task.id)).toEqual([fresh2])
     // The newest finished, newest first: the two the last-active list had room for beside the one just queued.
     expect(shown.tasks.completed.map((task) => task.id)).toEqual([done[3], done[2]])
+  })
+})
+
+describe('workflows.json', () => {
+  it('is a valid set of registered workflows: implement plans, works and reviews in order, and review has one step', () => {
+    const workflows = loadWorkflows(join(import.meta.dirname, '..', 'workflows.json'))
+    expect(workflows.map((workflow) => workflow.name)).toEqual(['implement', 'review'])
+    const implement = workflows[0]!
+    expect(implement.steps.map((step) => [step.key, step.needs ?? []])).toEqual([['plan', []], ['work', ['plan']], ['review', ['work']]])
+    expect(implement.workers).toMatchObject({ runner: 'vercel', push: true })
+    expect(workflows[1]!.steps).toHaveLength(1)
   })
 })

@@ -1,0 +1,59 @@
+{
+  "workflows": [
+    {
+      "name": "implement",
+      "description": "Plan a goal, do the work, and review it, as pull requests",
+      "who": ["lead"],
+      "channels": ["work/"],
+      "timeout": "2h",
+      "steps": [
+        {
+          "key": "plan",
+          "text": "Plan the work for this goal: {args.goal}\nSplit it into small tasks in {run}, each written for a reader with no context: what to build, which files it owns, what's out of scope, and the command that proves it's done.\nNo two tasks may change the same files at once; make one wait for the other with --needs.\nComplete this task with the list of task IDs you made.",
+          "labels": { "role": "plan" }
+        },
+        {
+          "key": "work",
+          "text": "Do the work the plan task made in {run}, for this goal: {args.goal}\nTake the tasks it queued that are ready, one at a time, and complete each with what you changed.",
+          "needs": ["plan"],
+          "labels": { "role": "work" }
+        },
+        {
+          "key": "review",
+          "text": "Review what the work task changed for this goal: {args.goal}\nRead the pull requests it opened, run the tests, and complete this task with what you found, or fail it with what must change.",
+          "needs": ["work"],
+          "labels": { "role": "review" }
+        }
+      ],
+      "workers": {
+        "count": 3,
+        "agent": "claude",
+        "as": "agent",
+        "runner": "vercel",
+        "repo": "https://github.com/your-org/your-repo",
+        "push": true,
+        "timeout": "30m"
+      }
+    },
+    {
+      "name": "review",
+      "description": "Review one thread's change and say what you found",
+      "who": ["lead"],
+      "channels": ["work/"],
+      "steps": [
+        {
+          "key": "review",
+          "text": "Review the change discussed in thread #{thread} of {channel}. Read it with mu read {thread}, check the work, and complete this task with what you found.",
+          "labels": { "role": "review" }
+        }
+      ],
+      "workers": {
+        "count": 1,
+        "agent": "claude",
+        "as": "reviewer",
+        "runner": "vercel",
+        "repo": "https://github.com/your-org/your-repo"
+      }
+    }
+  ]
+}

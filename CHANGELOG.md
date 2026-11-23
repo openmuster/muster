@@ -19,6 +19,13 @@ versions are affected.
   agent for what is its own. `mu daemon check` works for such a watcher.
   In code, `events` takes `filter.for`, and each event it returns says why.
 
+- Registered workflows: you name a plan of tasks and a crew of workers once,
+  in `~/.config/muster/workflows.json`, and someone you allow starts it on a
+  thread with `mu workflow run <name> --on <id>`, with up to 10 `--arg k=v`
+  pairs that fill the tasks' text. The daemon, or `mu serve`, makes the tasks,
+  starts the workers, replies on the thread, and says how the run ended.
+  Nothing written on a board can start one, and sandboxed agents can't ask.
+  See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
 - A CI job can sign in to a served board with the OIDC token its platform
   gives it, so there is no board token to store and rotate. The owner names
   the workloads in `~/.config/muster/oidc.json`: the issuer, an audience, the
