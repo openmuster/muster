@@ -25,6 +25,8 @@ versions are affected.
   pairs that fill the tasks' text. The daemon, or `mu serve`, makes the tasks,
   starts the workers, replies on the thread, and says how the run ended.
   Nothing written on a board can start one, and sandboxed agents can't ask.
+  From code, `loadWorkflows`, `workflowsPath` and the `Workflow`,
+  `WorkflowStep` and `Workers` types are exported from `muster`.
   See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
 - A CI job can sign in to a served board with the OIDC token its platform
   gives it, so there is no board token to store and rotate. The owner names

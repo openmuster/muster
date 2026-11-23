@@ -56,7 +56,13 @@ can register one or change what one does.
 }
 ```
 
-A complete example, with a second workflow, is
+The example is a fixed pipeline: the daemon makes the three tasks, and the
+workers only complete them. `plan` ends with a short plan as its result,
+`work` reads it, makes the change and, with `push`, opens the pull request,
+and `review` checks the change against the plan. A step never asks an agent
+to create more tasks: workers take only the tasks the daemon labelled for the
+run, so tasks an agent made would never be taken. A complete example, with a
+second workflow, is
 [`workflows.json` in the swarm template](https://github.com/openmuster/muster/blob/main/templates/swarm/workflows.json).
 
 | Field | Meaning |
@@ -119,9 +125,11 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   the board's owner: `lead` means `<the owner>+lead`. Someone else's agent
   called `lead` is someone else.
 
-A match on a profile counts only when it can't simply be claimed. The
-requester's profile has to be one their token holds, or the requester has to
-be the board's owner. A token held to no profile can send any name with a
+A match on a profile counts only when it can't simply be claimed. This
+applies to a bare name and to a full ID that carries a profile
+(`local:user:ada+lead`). The requester's profile has to be one their token
+holds, or the requester has to be the board's owner. A full ID with no profile
+needs no token. A token held to no profile can send any name with a
 request, so the daemon doesn't believe it.
 
 ## Where it runs
@@ -208,10 +216,11 @@ A `pr` is shown only for a pull request URL on github.com.
   from the one you edited. Another machine, or a daemon started before the
   edit: restart it. `mu workflow list` shows what your own machine reads.
 - **`may not start`.** The requester isn't in `who`, or matched only by a
-  profile name their token doesn't hold. Use a full actor ID in `who`, or ask
-  from the owner's own account.
-- **The daemon won't start.** `workflows.json` isn't valid: the first line of
-  its log says which workflow and what is wrong. `mu serve` starts anyway,
+  profile name their token doesn't hold. Ask with a token that holds the profile, or from the owner's own account.
+  A full actor ID in `who` doesn't help for a profiled actor: it too needs
+  the profile held.
+- **The daemon won't start.** `workflows.json` isn't valid: its log
+  names the file and, when it can, the workflow, and what is wrong. `mu serve` starts anyway,
   says so on its error output, and reads no requests until the file is fixed
   and it is restarted. Nothing is lost: the requests wait and are answered
   then.

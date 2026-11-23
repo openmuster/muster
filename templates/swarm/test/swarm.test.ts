@@ -147,6 +147,9 @@ describe('workflows.json', () => {
     const implement = workflows[0]!
     expect(implement.steps.map((step) => [step.key, step.needs ?? []])).toEqual([['plan', []], ['work', ['plan']], ['review', ['work']]])
     expect(implement.workers).toMatchObject({ runner: 'vercel', push: true })
+    expect(implement.workers.count).toBe(2)
+    // Workers take only the daemon's own tasks, so no step may ask an agent to make more.
+    for (const workflow of workflows) for (const step of workflow.steps) expect(step.text).not.toMatch(/tasks create/)
     expect(workflows[1]!.steps).toHaveLength(1)
   })
 })
