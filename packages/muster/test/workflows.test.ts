@@ -735,21 +735,16 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect((await replies()).at(-1)).toBe(['release finished: 1 completed, 0 failed, 0 canceled', `#${tasks[0]!.id} completed: done`].join('\n'))
   })
 
-  it("holds up no other run when one can't be labelled, and says it only once while it waits", async () => {
+  it("says it once even when the run's message can't take the label, which is only a hint", async () => {
     const one: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }] }
-    const { team, root, tasks, opening, tick, replies, complete, deps } = await started(one)
-    const other = await team.workflowRequest({ name: 'release', on: root.id })
-    expect((await tick()).started).toEqual([other.seq])
-    const [otherTask] = (await team.taskList({ channel: `work/app/release-${other.seq}`, state: 'all' })).tasks
-    // The first run's message already carries as many labels as a message may, so it can take no more.
+    const { team, seq, tasks, opening, tick, replies, complete } = await started(one)
+    // The run's message already carries as many labels as a message may, so it can take no more.
     const more = Object.fromEntries(Array.from({ length: 61 }, (_, i) => [`k${i}`, 'v']))
     await team.label({ id: opening.id, set: more })
     await complete(tasks[0]!.id, 'done')
-    await complete(otherTask!.id, 'done too')
-    const ran = await runWorkflows(team, [one], deps)
-    expect(ran).toMatchObject({ started: [], refused: [], reported: [other.seq], why: expect.stringMatching(/^release: A message carries at most 64 labels/) })
-    expect(await tick()).toMatchObject({ started: [], refused: [], why: expect.stringMatching(/64 labels/) })
-    expect((await replies()).filter((text) => text.startsWith('release finished'))).toHaveLength(2)
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    expect((await replies()).filter((text) => text.startsWith('release finished'))).toHaveLength(1)
   })
 
   it('labels the run even when the thread it was asked on has gone, and tries no more', async () => {
@@ -759,5 +754,109 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
     expect(await reported(team, opening.id)).toBe(String(seq))
     expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  const one: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }] }
+
+  it('walks only the open window: passes what needs nothing more and holds at a run still open', async () => {
+    const { team, root, seq, tasks, tick, complete } = await started(one)
+    const refused = await team.workflowRequest({ name: 'nope', on: root.id })
+    const later = await team.workflowRequest({ name: 'release', on: root.id })
+    expect(await tick()).toEqual({ started: [later.seq], refused: [refused.seq] })
+    const [laterTask] = (await team.taskList({ channel: `work/app/release-${later.seq}`, state: 'all' })).tasks
+    // The first run is open, so the cursor stays before it; a later run is still looked at, and reported.
+    await complete(laterTask!.id, 'done')
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [later.seq] })
+    expect(await team.cursorGet('workflow:reports')).toBeLessThan(seq)
+    await complete(tasks[0]!.id, 'done')
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    // Everything up to the last request needs nothing more, so the cursor is past it.
+    expect(await team.cursorGet('workflow:reports')).toBe(later.seq)
+    expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  it('never looks at a run before its cursor', async () => {
+    const { team, seq, tasks, tick, replies, complete } = await started(one)
+    await complete(tasks[0]!.id, 'done')
+    await team.cursorSet('workflow:reports', seq)
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    expect(await replies()).toHaveLength(1)
+  })
+
+  it("doesn't pass a request the daemon hasn't read yet", async () => {
+    const { team, time } = memoryBoard()
+    const deps = { spawn: async () => {}, now: () => time.now().getTime() }
+    const root = await team.post({ channel: 'work/app', text: 'ship' })
+    await runWorkflows(team, [one], deps)
+    // More refusals than one tick reads, then a run: the first tick doesn't reach it.
+    for (let i = 0; i < 20; i++) await team.workflowRequest({ name: 'nope', on: root.id })
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    expect((await runWorkflows(team, [one], deps)).refused).toHaveLength(20)
+    expect(await team.cursorGet('workflow:reports')).toBeLessThan(seq)
+    expect((await runWorkflows(team, [one], deps)).started).toEqual([seq])
+    const [task] = (await team.taskList({ channel: `work/app/release-${seq}`, state: 'all' })).tasks
+    const held = await team.taskClaim({ id: task!.id })
+    await team.taskComplete({ id: task!.id, token: held.token, result: 'done' })
+    expect((await runWorkflows(team, [one], deps)).reported).toEqual([seq])
+  })
+
+  it('reports a run whose workflow has since gone from the config, or moved, when it settles, with no timeout', async () => {
+    const { time, seq, tasks, tick, replies, complete, deps, team } = await started({ ...one, timeout: '1m' })
+    time.advance(60 * 60 * 1000)
+    // Its timeout is the config's, so a workflow gone or moved elsewhere has none.
+    expect(await runWorkflows(team, [], deps)).toEqual({ started: [], refused: [] })
+    expect(await runWorkflows(team, [{ ...one, timeout: '1m', channels: ['other/'] }], deps)).toEqual({ started: [], refused: [] })
+    await complete(tasks[0]!.id, 'done')
+    expect(await runWorkflows(team, [], deps)).toEqual({ started: [], refused: [], reported: [seq] })
+    expect((await replies()).at(-1)).toBe(['release finished: 1 completed, 0 failed, 0 canceled', `#${tasks[0]!.id} completed: done`].join('\n'))
+    expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  it("isn't silenced by someone setting the reported label first", async () => {
+    const { as, seq, tasks, opening, tick, replies, complete } = await started(one)
+    await as('local:user:eve').label({ id: opening.id, set: { 'workflow.reported': String(seq) } })
+    await complete(tasks[0]!.id, 'done')
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    expect((await replies()).at(-1)).toMatch(/^release finished: 1 completed/)
+  })
+
+  it("finds the daemon's tasks however many others share the run's channel and labels", async () => {
+    const { as, seq, run, tasks, tick, replies, complete } = await started(one)
+    await complete(tasks[0]!.id, 'done')
+    const eve = as('local:user:eve')
+    // More than a page of someone else's tasks, all newer than the daemon's, with the run's labels.
+    for (let i = 0; i < 501; i++) await eve.taskCreate({ channel: run, text: `decoy ${i}`, labels: { workflow: 'release', request: String(seq) } })
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    expect((await replies()).at(-1)).toBe(['release finished: 1 completed, 0 failed, 0 canceled', `#${tasks[0]!.id} completed: done`].join('\n'))
+  }, 60_000)
+
+  it('quotes what agents wrote so it mentions nobody, shows only GitHub PR links, and on open tasks too', async () => {
+    const two: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }, { key: 'b', text: 'Do B' }], timeout: '1h' }
+    const { team, time, root, tasks, tick, complete } = await started(two)
+    // So that "@lead" names one actor, and would be a mention if it were left as written.
+    await team.as('lead').post({ channel: 'work/app', text: 'here' })
+    const [a, b] = tasks.map((task) => task.id) as [number, number]
+    await team.label({ id: a, set: { pr: 'https://evil.example/x' } })
+    await team.label({ id: b, set: { pr: PR } })
+    await complete(a, 'ask @lead and @[local:user:ada+lead] now')
+    await team.as('workflows').taskBlock({ id: b, reason: 'waiting' })
+    time.advance(60 * 60 * 1000)
+    await tick()
+    const summary = (await team.readThread({ id: root.id })).replies.at(-1)!
+    expect(summary.text).toBe([
+      'release finished: 1 completed, 0 failed, 0 canceled, 1 still open',
+      `#${a} completed: ask \uFF20lead and \uFF20[local:user:ada+lead] now`,
+      `#${b} still open (blocked) (pr ${PR})`,
+    ].join('\n'))
+    const posted = (await team.events({ after: 0, filter: { types: ['message.posted'] } })).events.find((event) => event.seq === summary.id)!
+    expect((posted.data as { mentions: string[] }).mentions).toEqual([])
+  })
+
+  it('cuts a long result without splitting a character', async () => {
+    const { tasks, tick, replies, complete } = await started(one)
+    await complete(tasks[0]!.id, `${'a'.repeat(198)}\u{1F600}${'b'.repeat(10)}`)
+    await tick()
+    const line = (await replies()).at(-1)!.split('\n')[1]!
+    expect(line).toBe(`#${tasks[0]!.id} completed: ${'a'.repeat(198)}\u{1F600}\u2026`)
   })
 })

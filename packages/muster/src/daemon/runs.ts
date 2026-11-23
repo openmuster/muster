@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { duration } from '../cli/args.ts'
-import { OPEN_STATES, type PlanTask, type TaskListing } from '../core/tasks.ts'
+import { OPEN_STATES, type PlanTask } from '../core/tasks.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
-import { actorId, channelScope, inScope, LIMITS, WORKFLOWS_PROFILE, type By, type Message } from '../model.ts'
+import { actorId, channelScope, inScope, LIMITS, WORKFLOWS_PROFILE, type BoardEvent, type By, type Message } from '../model.ts'
 import type { Workflow } from './workflows.ts'
 
 /**
@@ -25,7 +25,7 @@ export { WORKFLOWS_PROFILE }
 const BATCH = 20
 /** How much of a task's result or reason a summary quotes: its first line, cut to this. */
 const QUOTE = 200
-/** The label on a run's first message once its summary is said, valued with the request's seq. */
+/** A label on a run's first message once its summary is said, for people to see. The daemon never reads it. */
 export const REPORTED = 'workflow.reported'
 
 /**
@@ -172,14 +172,143 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
     await team.cursorSet(REQUESTS_CURSOR, event.seq)
   }
   if (reached > cursor) await team.cursorSet(REQUESTS_CURSOR, reached)
-  const done = await reportRuns(team, writer, workflows, owner, deps)
+  const done = await reportRuns(team, writer, workflows, owner, deps, cursor)
   if (done.reported.length > 0) out.reported = done.reported
   if (done.why !== undefined) out.why ??= done.why
   return out
 }
 
-/** The tree a workflow's runs are made under: the channels it may be started in, and every one below them. */
-const runTree = (entry: string) => (entry.endsWith('/') ? entry : `${entry}/`)
+/**
+ * Where the daemon keeps its place among requests whose runs are summed up: every request at or before
+ * it was refused, never started, or reported. Reserved, like `workflow:requests`.
+ */
+export const REPORTS_CURSOR = 'workflow:reports'
+/** The board's own record that one run was summed up: reserved, so a narrowed token can't set it, and no label is read for it. */
+export const reportedCursor = (seq: number) => `workflow:reported:${seq}`
+/** A PR link the summary shows: a GitHub pull request, and nothing else. */
+const PR = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/\d+$/
+
+type RunTask = { id: number; state: string; said: string | null; pr: string | undefined }
+
+/**
+ * Says on the asking thread how each run went, once all its tasks have ended or its workflow's `timeout`
+ * has passed since its first message was written. It walks the requests the daemon has answered, from
+ * its own cursor on, and moves that cursor past those that need nothing more, so a tick's work is the
+ * runs still open and no more. What a run is comes from its request and from what the board itself wrote
+ * in its channel, never from labels or from the config: only the timeout is the config's. Each summary is
+ * keyed and then marked in a reserved cursor, so it is said once, even by a daemon that stopped between.
+ */
+async function reportRuns(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, start: number): Promise<{ reported: number[]; why?: string }> {
+  const reported: number[] = []
+  let why: string | undefined
+  let cursor = await team.cursorGet(REPORTS_CURSOR)
+  if (cursor === null) {
+    // New to the board: from where this daemon started reading requests.
+    cursor = start
+    await team.cursorSet(REPORTS_CURSOR, cursor)
+  }
+  // Only requests already answered: one not yet read has no run yet, and must not be passed over.
+  const answered = (await team.cursorGet(REQUESTS_CURSOR)) ?? start
+  let after = cursor
+  let leading = true
+  let past = false
+  while (!past && after < answered) {
+    const page = await team.events({ after, filter: { types: ['workflow.requested'] }, limit: 200 })
+    for (const event of page.events) {
+      if (event.seq > answered) {
+        past = true
+        break
+      }
+      let done: boolean
+      try {
+        const state = await reportOne(team, writer, workflows, owner, deps, event)
+        if (state === 'reported') reported.push(event.seq)
+        done = state !== 'open'
+      } catch (error) {
+        // Tried again next tick; it holds the cursor, and holds up no other run.
+        why ??= `${(event.data as { name?: string }).name} ${event.seq}: ${(error as Error).message}`
+        done = false
+      }
+      if (leading && done) cursor = event.seq
+      else leading = false
+    }
+    if (page.events.length === 0 || page.cursor <= after) break
+    after = page.cursor
+  }
+  if (cursor > ((await team.cursorGet(REPORTS_CURSOR)) ?? 0)) await team.cursorSet(REPORTS_CURSOR, cursor)
+  return { reported, ...(why !== undefined ? { why } : {}) }
+}
+
+/** Sums up one request's run if it is due. Says whether it was, whether it needs nothing more, or whether it is still open. */
+async function reportOne(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, asked: BoardEvent): Promise<'reported' | 'done' | 'open'> {
+  const seq = asked.seq
+  if ((await team.cursorGet(reportedCursor(seq))) !== null) return 'done'
+  const name = (asked.data as { name?: unknown }).name
+  if (typeof name !== 'string' || asked.channel === null || asked.thread === null) return 'done'
+  const run = `${asked.channel}/${name}-${seq}`
+  if (!isChannel(run)) return 'done'
+  // The run's own channel, exactly, every page: nobody's messages there can push the board's own out of view.
+  const byDaemon = (message: Message) => message.by.principal === owner && message.by.profile === WORKFLOWS_PROFILE
+  let first: Message | undefined
+  const tasks: RunTask[] = []
+  let before: number | undefined
+  for (;;) {
+    const page = await team.readChannel({ channel: run, limit: LIMITS.readMax, ...(before !== undefined ? { before } : {}) })
+    for (const each of page.threads) {
+      if (!byDaemon(each.message)) continue
+      if (each.task === null) first = each.message
+      else tasks.push({ id: each.task.id, state: each.task.state, said: each.task.result ?? each.task.reason, pr: each.message.labels.pr })
+    }
+    if (!page.more || page.older === null) break
+    before = page.older
+  }
+  // No first message: refused, or its workers never all started. There is no run to report on.
+  if (first === undefined) return 'done'
+  tasks.sort((x, y) => x.id - y.id)
+  const open = tasks.filter((task) => (OPEN_STATES as readonly string[]).includes(task.state))
+  // Only the timeout comes from the config, and only while the workflow still runs where it was asked.
+  const workflow = workflows.find((each) => each.name === name && runsIn(each.channels, asked.channel!))
+  const timedOut = workflow?.timeout !== undefined && Date.parse(first.at) + duration(workflow.timeout, 'timeout') * 1000 <= deps.now()
+  if (!timedOut && (open.length > 0 || tasks.length === 0)) return 'open'
+  try {
+    await writer.reply({ to: asked.thread, text: summary(name, tasks), idempotencyKey: `workflow-${seq}-report` })
+  } catch (error) {
+    // Said before the daemon stopped, perhaps with tasks as they were then; or a thread that has gone, which
+    // takes no answer. Either way there is nothing more to say. Anything else, such as a board out of
+    // reach, is tried again next tick.
+    if (!(error instanceof Failure) || (error.reason !== 'idempotency_mismatch' && error.reason !== 'not_found')) throw error
+  }
+  await team.cursorSet(reportedCursor(seq), seq)
+  // A hint for people reading the run; nothing reads it back.
+  await writer.label({ id: first.id, set: { [REPORTED]: String(seq) }, idempotencyKey: `workflow-${seq}-reported` }).catch((error) => {
+    if (!(error instanceof Failure) || error.reason === 'network_error') throw error
+  })
+  return 'reported'
+}
+
+/** Text someone else wrote, as the daemon quotes it: one line, `@` that can mention nobody, and no more than QUOTE characters. */
+function quote(text: string | null): string {
+  const line = (text ?? '').split('\n')[0]!.trim().replaceAll('@', '\uFF20')
+  const chars = Array.from(line)
+  return chars.length > QUOTE ? `${chars.slice(0, QUOTE - 1).join('')}\u2026` : line
+}
+
+/** A run's summary: a line of counts, then a line per task with how it ended, the first line of what it said, and its PR. */
+function summary(name: string, tasks: RunTask[]): string {
+  const count = (state: string) => tasks.filter((task) => task.state === state).length
+  const isOpen = (task: RunTask) => (OPEN_STATES as readonly string[]).includes(task.state)
+  const open = tasks.filter(isOpen).length
+  const head = `${name} finished: ${count('completed')} completed, ${count('failed')} failed, ${count('canceled')} canceled${open > 0 ? `, ${open} still open` : ''}`
+  const lines = tasks.map((task) => {
+    const pr = task.pr !== undefined && PR.test(task.pr) ? ` (pr ${task.pr})` : ''
+    if (isOpen(task)) return `#${task.id} still open (${task.state})${pr}`
+    const said = quote(task.said)
+    return `#${task.id} ${task.state}${said ? `: ${said}` : ''}${pr}`
+  })
+  return [head, ...lines].join('\n')
+}
+
+/** Whether a name is a channel's. */
 const isChannel = (entry: string) => {
   try {
     channelScope(entry)
@@ -187,99 +316,6 @@ const isChannel = (entry: string) => {
   } catch {
     return false
   }
-}
-
-/**
- * Says on the asking thread how each open run went, once all its tasks have ended or its `timeout` has
- * passed since its first message was written. A run is found by its first message, which only the board
- * itself writes as the daemon's profile; where it was asked is read from the request, not from labels
- * anyone with `label` could change. The summary is keyed and the first message is then labelled, so a
- * run is summed up once, even by a daemon that stopped in between.
- */
-async function reportRuns(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps): Promise<{ reported: number[]; why?: string }> {
-  const reported: number[] = []
-  let why: string | undefined
-  for (const workflow of workflows) {
-    try {
-      await reportWorkflow(team, writer, workflow, owner, deps, reported)
-    } catch (error) {
-      // One workflow's trouble is said, and holds up none of the others.
-      why ??= `${workflow.name}: ${(error as Error).message}`
-    }
-  }
-  return { reported: reported.sort((x, y) => x - y), ...(why !== undefined ? { why } : {}) }
-}
-
-/** Sums up each of one workflow's runs that is due, adding its seq to `reported`. */
-async function reportWorkflow(team: Board, writer: Board, workflow: Workflow, owner: string, deps: RunDeps, reported: number[]) {
-  const firsts = new Map<number, Message>()
-  for (const entry of workflow.channels) {
-    // An entry that isn't a channel's name holds no runs, as no request could be made in it.
-    if (!isChannel(entry)) continue
-    let before: number | undefined
-    for (;;) {
-      // Runs already summed up still match, so every page is read: an open run may be older than a page of them.
-      const page = await team.readChannel({ channel: runTree(entry), labels: [`workflow=${workflow.name}`, 'request', 'thread'], limit: LIMITS.readMax, ...(before !== undefined ? { before } : {}) })
-      for (const each of page.threads) {
-        const message = each.message
-        if (each.task !== null || message.by.principal !== owner || message.by.profile !== WORKFLOWS_PROFILE) continue
-        if (message.labels[REPORTED] !== undefined) continue
-        firsts.set(message.id, message)
-      }
-      if (!page.more || page.older === null) break
-      before = page.older
-    }
-  }
-  let why: unknown
-  for (const first of firsts.values()) {
-    try {
-      if (await report(team, writer, workflow, first, owner, deps)) reported.push(Number(first.labels.request))
-    } catch (error) {
-      // One run that can't be summed up yet is tried again next tick, and holds up no other.
-      why ??= error
-    }
-  }
-  if (why !== undefined) throw why
-}
-
-/** Sums up one run if it is due, and says whether it did. */
-async function report(team: Board, writer: Board, workflow: Workflow, first: Message, owner: string, deps: RunDeps): Promise<boolean> {
-  const seq = Number(first.labels.request)
-  if (!Number.isSafeInteger(seq) || seq < 1 || String(seq) !== first.labels.request) return false
-  // The request this run was made for: it, not a label, says on which thread it was asked.
-  const asked = (await team.events({ after: seq - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
-  if (!asked || asked.seq !== seq || (asked.data as { name?: string }).name !== workflow.name) return false
-  if (`${asked.channel}/${workflow.name}-${seq}` !== first.channel || asked.thread === null) return false
-  const tasks = (await team.taskList({ channel: first.channel, state: 'all', labels: [`workflow=${workflow.name}`, `request=${seq}`], limit: 1000 })).tasks.filter(
-    (task) => task.by.principal === owner && task.by.profile === WORKFLOWS_PROFILE,
-  )
-  const open = tasks.filter((task) => OPEN_STATES.includes(task.state))
-  const timedOut = workflow.timeout !== undefined && Date.parse(first.at) + duration(workflow.timeout, 'timeout') * 1000 <= deps.now()
-  if (!timedOut && (open.length > 0 || tasks.length === 0)) return false
-  try {
-    await writer.reply({ to: asked.thread!, text: summary(workflow.name, tasks), idempotencyKey: `workflow-${seq}-report` })
-  } catch (error) {
-    // Said before the daemon stopped, perhaps with tasks as they were then; or a thread that has gone, which
-    // takes no answer. Either way there is nothing more to say. Anything else, such as a board out of
-    // reach, is tried again next tick.
-    if (!(error instanceof Failure) || (error.reason !== 'idempotency_mismatch' && error.reason !== 'not_found')) throw error
-  }
-  await writer.label({ id: first.id, set: { [REPORTED]: String(seq) }, idempotencyKey: `workflow-${seq}-reported` })
-  return true
-}
-
-/** A run's summary: a line of counts, then a line per task with how it ended, the first line of what it said, and its PR. */
-function summary(name: string, tasks: TaskListing[]): string {
-  const count = (state: string) => tasks.filter((task) => task.state === state).length
-  const open = tasks.filter((task) => OPEN_STATES.includes(task.state)).length
-  const head = `${name} finished: ${count('completed')} completed, ${count('failed')} failed, ${count('canceled')} canceled${open > 0 ? `, ${open} still open` : ''}`
-  const lines = tasks.map((task) => {
-    if (OPEN_STATES.includes(task.state)) return `#${task.id} still open (${task.state})`
-    const said = (task.result ?? task.reason ?? '').split('\n')[0]!.trim()
-    const quote = said.length > QUOTE ? `${said.slice(0, QUOTE - 1)}…` : said
-    return `#${task.id} ${task.state}${quote ? `: ${quote}` : ''}${task.labels.pr ? ` (pr ${task.labels.pr})` : ''}`
-  })
-  return [head, ...lines].join('\n')
 }
 
 /** Makes one run, and says what to answer on the thread. */
