@@ -117,7 +117,7 @@ export function runsIn(channels: string[], channel: string): boolean {
   })
 }
 
-type Request = { seq: number; channel: string; thread: number; by: By; args: Record<string, string> }
+type Request = { seq: number; channel: string; thread: number; by: By; args: Record<string, string>; private: boolean }
 
 /**
  * Reads the workflow requests made since it last looked and handles each in order: a refusal on the
@@ -150,7 +150,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   }
   let reached = page.cursor
   for (const event of page.events) {
-    const { name, args, profileHeld, narrowed } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean; narrowed?: boolean }
+    const { name, args, profileHeld, narrowed, private: inPrivate } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean; narrowed?: boolean; private?: boolean }
     const channel = event.channel!
     const thread = event.thread!
     const workflow = workflows.find((each) => each.name === name)
@@ -167,7 +167,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         await say(event.seq, thread, refusal!)
         out.refused.push(event.seq)
       } else {
-        const result = await start(team, writer, workflow, { seq: event.seq, channel, thread, by: event.by, args: args ?? {} }, owner, deps)
+        const result = await start(team, writer, workflow, { seq: event.seq, channel, thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
         await say(event.seq, thread, result.text)
         if (result.failed === undefined) out.started.push(event.seq)
         else {
@@ -417,6 +417,21 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),
   }))
+  const byDaemon = (each: { task: unknown; message: Message }) => each.message.by.principal === owner && each.message.by.profile === WORKFLOWS_PROFILE
+  if (on.private) {
+    // A run of a private thread is private: only a token that names its channel reads it. (A request
+    // recorded before the board said whether its channel was private is taken to be.)
+    const made = await writer.createChannel({ path: run, private: true })
+    if (!made.created) {
+      // Made before: by this daemon, which then wrote its plan there, or by someone who saw what the run
+      // would be called, as a channel that isn't private. Only the first is used.
+      const mine = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`], limit: LIMITS.readMax })).threads.some((each) => each.task !== null && byDaemon(each))
+      if (!mine) {
+        const reason = `${run} was made by someone else, so it may not be private`
+        return { text: `couldn't start ${workflow.name}: ${reason}`, failed: reason }
+      }
+    }
+  }
   try {
     // One write: a plan the board refuses leaves nothing behind.
     await writer.taskPlan({ channel: run, tasks, idempotencyKey: `workflow-${on.seq}` })
@@ -427,7 +442,7 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
   // The run's first message is written once its workers have started: with it there, they were. Only it
   // carries a `thread` label, and only the board itself writes as the daemon's profile, so nobody forges it.
   const opened = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`, 'thread'], limit: LIMITS.readMax })).threads.some(
-    (each) => each.task === null && each.message.by.principal === owner && each.message.by.profile === WORKFLOWS_PROFILE,
+    (each) => each.task === null && byDaemon(each),
   )
   if (!opened) {
     for (let i = 1; i <= workflow.workers.count; i++) {

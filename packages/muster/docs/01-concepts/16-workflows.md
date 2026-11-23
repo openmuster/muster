@@ -176,7 +176,10 @@ For a request on thread 812 in `work/api`, the daemon:
 2. Writes the steps as tasks in a channel of its own,
    `work/api/implement-41` (the workflow's name and the request's number),
    labelled `workflow=implement` and `request=41`, as one plan: it is made
-   whole or not at all.
+   whole or not at all. When the thread's channel is private, the run's
+   channel is made private too, so only a token that names it reads it: a
+   token for `work/` reads neither. If someone made that channel first, it
+   may not be private, so the daemon answers `couldn't start` instead.
 3. Starts the workers. Each is `mu run --ready work/api/implement-41 --loop
    --wait 10m` with the workflow's settings, `--by <owner>+workflows` and
    `--label workflow=implement --label request=41`. `--by` is what holds a

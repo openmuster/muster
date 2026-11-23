@@ -141,7 +141,7 @@ describe('workflow requests', () => {
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({ seq: sent.seq, type: 'workflow.requested', by: { principal: 'local:user:ada' }, channel: 'work', thread: root.id, data: { name: 'release', on: reply.id, args: { version: '1.2.0' } } })
     expect((await team.workflowRequest({ name: 'release', on: root.id })).seq).toBeGreaterThan(sent.seq)
-    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {}, profileHeld: false, narrowed: false })
+    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {}, profileHeld: false, narrowed: false, private: false })
   })
 
   it('refuses a bad name, and bad args: a key, a value, too many keys, a value that is not text', async () => {
@@ -235,7 +235,7 @@ describe('mu workflow', () => {
     }
     // The server wrote it into the board's file, as the token's principal.
     const events = (await board({ dir: join(dir, 'board'), principal: 'local:user:ada' }).events({ after: 0, filter: { types: ['workflow.requested'] } })).events
-    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' }, profileHeld: false, narrowed: false }])
+    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' }, profileHeld: false, narrowed: false, private: false }])
   }, 20_000)
 })
 
@@ -475,6 +475,51 @@ describe('the daemon starts a requested workflow', () => {
     const legacy = db.write(() => append(db, { type: 'workflow.requested', by: { principal: OWNER, profile: null }, channel: 'work/app', thread: root.id, data: { name: 'release', on: root.id, args: {}, profileHeld: false } }, time.now().toISOString()))
     db.close()
     expect(await runWorkflows(team, [mine], rec.deps)).toEqual({ started: [], refused: [legacy.seq] })
+  })
+
+  it('makes the run of a private thread private: a token over the tree reads neither, one that names the run reads it', async () => {
+    const time = clock()
+    const key = randomBytes(32)
+    const backend = file({ memory: true, principal: OWNER, now: time.now })
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    try {
+      const exp = Math.floor(time.now().getTime() / 1000) + 3600
+      const token = (can: Record<string, string[]>) => board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile: null, exp, can } as never) }) })
+      const team = board({ backend })
+      const rec = recorder(undefined, () => time.now().getTime())
+      await team.createChannel({ path: 'work/secret', private: true })
+      const secret = await team.post({ channel: 'work/secret', text: 'rotate the keys' })
+      const open = await team.post({ channel: 'work/app', text: 'ship' })
+      await runWorkflows(team, [release], rec.deps)
+      const hidden = await team.workflowRequest({ name: 'release', on: secret.id })
+      const plain = await team.workflowRequest({ name: 'release', on: open.id })
+      expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [hidden.seq, plain.seq], refused: [] })
+      const tree = token({ 'work/': ['read', 'post'] })
+      expect(await reason(tree.readChannel({ channel: 'work/secret' }))).toBe('not_found')
+      expect(await reason(tree.readChannel({ channel: `work/secret/release-${hidden.seq}` }))).toBe('not_found')
+      expect((await tree.taskList({ channel: `work/secret/release-${hidden.seq}`, state: 'all' })).tasks).toEqual([])
+      // A run of a thread that isn't private stays as it was.
+      expect((await tree.taskList({ channel: `work/app/release-${plain.seq}`, state: 'all' })).tasks).toHaveLength(2)
+      // As a Vercel worker's token: the run's channel by name.
+      const worker = token({ [`work/secret/release-${hidden.seq}`]: ['read', 'post', 'react', 'label'] })
+      expect((await worker.taskList({ channel: `work/secret/release-${hidden.seq}`, state: 'all' })).tasks).toHaveLength(2)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("won't make a private thread's run in a channel someone else made first, which isn't private", async () => {
+    const { team, rec } = await ready()
+    await team.createChannel({ path: 'work/secret', private: true })
+    const secret = await team.post({ channel: 'work/secret', text: 'rotate the keys' })
+    const { seq } = await team.workflowRequest({ name: 'release', on: secret.id })
+    const run = `work/secret/release-${seq}`
+    // Before the daemon gets to it, someone posts where the run would be, so the channel is made public.
+    await team.as('other').post({ channel: run, text: 'watching' })
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: ${run} was made by someone else, so it may not be private` })
+    expect(await tasksIn(team, run)).toEqual([])
+    expect(rec.spawned).toEqual([])
+    expect((await repliesOn(team, secret.id)).map((reply) => reply.text)).toEqual([`couldn't start release: ${run} was made by someone else, so it may not be private`])
   })
 
   it("keeps the daemon's profile to the board itself, so nobody can forge a run's marks", async () => {

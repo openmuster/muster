@@ -43,8 +43,10 @@ export function request(ctx: Context, caller: Caller, req: WorkflowRequest): { s
   // Whether the caller is held to channels: a token the owner made for CI or a teammate carries the
   // owner's principal, so a daemon matching `who` by principal alone must not take it for the owner.
   const narrowed = caller.can !== undefined
+  // Whether the thread's channel is private, as the board knows it: a run of a private thread is made private too.
+  const inPrivate = (ctx.db.raw.prepare('select private from channels where path = ?').get(message.channel) as { private: number } | undefined)?.private === 1
   return ctx.db.write(() => {
-    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args, profileHeld, narrowed } }, ctx.now().toISOString())
+    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args, profileHeld, narrowed, private: inPrivate } }, ctx.now().toISOString())
     return { seq: event.seq }
   })
 }
