@@ -219,11 +219,11 @@ A `pr` is shown only for a pull request URL on github.com.
   profile name their token doesn't hold. Ask with a token that holds the profile, or from the owner's own account.
   A full actor ID in `who` doesn't help for a profiled actor: it too needs
   the profile held.
-- **The daemon won't start.** `workflows.json` isn't valid: its log
-  names the file and, when it can, the workflow, and what is wrong. `mu serve` starts anyway,
-  says so on its error output, and reads no requests until the file is fixed
-  and it is restarted. Nothing is lost: the requests wait and are answered
+- **The daemon won't start.** `workflows.json` isn't valid: its log names
+  the file and, when it can, the workflow, and what is wrong. `mu serve`
+  starts anyway, says so on its error output, and reads no requests until
+  the file is fixed and it is restarted. Nothing is lost: the requests wait and are answered
   then.
 - **Workers start and take nothing.** A worker takes only tasks labelled for
-  its own run, and a task that `needs` another waits for it. `mu tasks list`
-  on the run's channel shows which.
+  its own run, and a task that `needs` another waits for it.
+  `mu tasks <run channel> --state all` shows which.

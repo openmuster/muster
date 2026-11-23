@@ -20,7 +20,7 @@
         },
         {
           "key": "work",
-          "text": "Do the change for this goal: {args.goal}\nRead the plan task's result in {run} (mu tasks list {run} --state all, then mu read <id>), make the change, and complete this task with a one-line summary.",
+          "text": "Do the change for this goal: {args.goal}\nRead the plan task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole), make the change, and complete this task with a one-line summary.",
           "needs": [
             "plan"
           ],
@@ -30,7 +30,7 @@
         },
         {
           "key": "review",
-          "text": "Review the change against the plan, for this goal: {args.goal}\nRead the plan and the work task's result in {run} (mu tasks list {run} --state all, then mu read <id>). Complete this task with \"approve\", or with the changes needed.",
+          "text": "Review the change against the plan, for this goal: {args.goal}\nRead the plan and the work task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole). Complete this task with \"approve\", or with the changes needed.",
           "needs": [
             "work"
           ],
