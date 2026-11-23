@@ -233,6 +233,10 @@ describe('cloud runners', () => {
     expect(INSTALL).toContain('npm ci --ignore-scripts')
     expect(INSTALL).toContain('--frozen-lockfile --ignore-scripts')
     expect(INSTALL).toContain('YARN_ENABLE_SCRIPTS=false')
+    // pnpm installs with the image's own pnpm, which fetches and keeps the pinned version while setup is
+    // online, so the agent's \`pnpm test\` works offline; npx would leave nothing behind for it.
+    expect(INSTALL).toContain('pnpm --version >/dev/null; pm=pnpm')
+    expect(INSTALL).not.toMatch(/pm="npx -y \$v"/)
     const closed = calls.findIndex(([kind]) => kind === 'update')
     expect(closed).toBeGreaterThan(install)
     expect(calls[closed][1]).toEqual(['board.example.com'])
