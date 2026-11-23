@@ -770,9 +770,21 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await team.cursorGet('workflow:reports')).toBeLessThan(seq)
     await complete(tasks[0]!.id, 'done')
     expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
-    // Everything up to the last request needs nothing more, so the cursor is past it.
-    expect(await team.cursorGet('workflow:reports')).toBe(later.seq)
+    // Everything up to the requests read needs nothing more, so the cursor is where they were read to.
+    expect(await team.cursorGet('workflow:reports')).toBe(await team.cursorGet('workflow:requests'))
     expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  it('starts an idle tick from where requests were read to, not from the last request', async () => {
+    const { team, seq, tasks, tick, complete } = await started(one)
+    await complete(tasks[0]!.id, 'done')
+    expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
+    // Other things happen on the board; no request comes.
+    for (let i = 0; i < 5; i++) await team.post({ channel: 'random', text: `chat ${i}` })
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    const requests = await team.cursorGet('workflow:requests')
+    expect(requests).toBe(await team.head())
+    expect(await team.cursorGet('workflow:reports')).toBe(requests)
   })
 
   it('never looks at a run before its cursor', async () => {
@@ -850,6 +862,15 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     ].join('\n'))
     const posted = (await team.events({ after: 0, filter: { types: ['message.posted'] } })).events.find((event) => event.seq === summary.id)!
     expect((posted.data as { mentions: string[] }).mentions).toEqual([])
+  })
+
+  it('quotes nothing a platform acts on: no Slack pings or links, no markdown links or images', async () => {
+    const { tasks, tick, replies, complete } = await started(one)
+    await complete(tasks[0]!.id, '<!channel> <@U123> [x](https://e.x) ![p](https://e.x/p.png)')
+    await tick()
+    const line = (await replies()).at(-1)!.split('\n')[1]!
+    expect(line).toBe(`#${tasks[0]!.id} completed: \uFF1C!channel\uFF1E \uFF1C\uFF20U123\uFF1E [x] (https://e.x) \uFF01[p] (https://e.x/p.png)`)
+    expect(line).not.toMatch(/<|\]\(|!\[/)
   })
 
   it('cuts a long result without splitting a character', async () => {

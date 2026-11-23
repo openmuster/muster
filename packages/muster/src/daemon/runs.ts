@@ -235,6 +235,9 @@ async function reportRuns(team: Board, writer: Board, workflows: Workflow[], own
     if (page.events.length === 0 || page.cursor <= after) break
     after = page.cursor
   }
+  // Nothing open anywhere in the walk: every request up to the answered ones needs nothing more, so the
+  // next tick starts there, not at the last request, and an idle tick reads only what came since.
+  if (leading) cursor = Math.max(cursor, answered)
   if (cursor > ((await team.cursorGet(REPORTS_CURSOR)) ?? 0)) await team.cursorSet(REPORTS_CURSOR, cursor)
   return { reported, ...(why !== undefined ? { why } : {}) }
 }
@@ -286,9 +289,20 @@ async function reportOne(team: Board, writer: Board, workflows: Workflow[], owne
   return 'reported'
 }
 
-/** Text someone else wrote, as the daemon quotes it: one line, `@` that can mention nobody, and no more than QUOTE characters. */
+/**
+ * Text someone else wrote, as the daemon quotes it under its own name and syncs to platforms: one line, no
+ * more than QUOTE characters, and nothing a platform acts on. `@` mentions nobody; `<` and `>` make no
+ * Slack ping (`<!channel>`, `<@U123>`) or link; and no markdown link or image (`[x](y)`, `![x](y)`) renders.
+ */
 function quote(text: string | null): string {
-  const line = (text ?? '').split('\n')[0]!.trim().replaceAll('@', '\uFF20')
+  const line = (text ?? '')
+    .split('\n')[0]!
+    .trim()
+    .replaceAll('@', '\uFF20')
+    .replaceAll('<', '\uFF1C')
+    .replaceAll('>', '\uFF1E')
+    .replaceAll('![', '\uFF01[')
+    .replaceAll('](', '] (')
   const chars = Array.from(line)
   return chars.length > QUOTE ? `${chars.slice(0, QUOTE - 1).join('')}\u2026` : line
 }
