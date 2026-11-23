@@ -633,7 +633,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install'] },
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
@@ -1493,7 +1493,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     env: { MUSTER_AGENT_ENV: passed.join(',') },
     board: { url, token },
     ...(modelKey ? { model: { key: modelKey } } : {}),
-    ...(repo ? { repo } : {}),
+    ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
     permissionMode: safe ? 'safe' : 'bypass',
@@ -1502,7 +1502,11 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
     ...(lifetime ? { timeoutMs: lifetime * 1000 } : {}),
   })
-  if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200) } }).catch(() => {})
+  if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200), ...(started.installed ? { deps: started.installed } : {}) } }).catch(() => {})
+  if (started.installed?.startsWith('failed')) {
+    run.io.err(`warning: the repository's dependencies didn't install (${started.installed}); the agent starts without them`)
+    if (task) await run.team.reply({ to: task, text: `The sandbox's dependency install ${started.installed}, so tests may not run. Installing reaches no registry from here.` }).catch(() => {})
+  }
   const what = { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }
   const line = `${task ? `#${task}` : ready}  ${runner.name} ${started.id}`
   if (on(parsed.flags, 'detach') || !started.wait) {

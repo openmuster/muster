@@ -78,12 +78,35 @@ Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
 The agent needs `mu` and its own CLI where it runs.
 
 - **Vercel.** Each run installs the release of muster you are running, from
-  its tarball on GitHub. GitHub's download hosts are open while that install
-  runs and closed before the agent starts. `MUSTER_INSTALL` names another tarball or path to install.
-  The agent's CLI has to be in the sandbox's image already.
+  its tarball on GitHub. `MUSTER_INSTALL` names another tarball or path to
+  install. The agent's CLI has to be in the sandbox's image already:
+  `vercel/sandbox/universal` has Claude Code, Codex, git, gh, npm, pnpm and
+  bun.
+- **Your repository, on Vercel.** `--repo` is cloned when the sandbox is
+  made, into `/vercel/<name>`, and the agent starts there. Its dependencies
+  are installed the way its lockfile says (pnpm, npm, yarn or bun, at the
+  version `packageManager` pins), with no install scripts, the
+  dependencies' own included. `--no-install` skips it. A failed install
+  doesn't stop the run: the task gets a `deps` label and a reply that says
+  so, and the agent starts without them.
 - **Cloudflare.** A run's container has no internet and installs nothing. `mu`
   and the agent's CLI are in the image you build: the template's `Dockerfile`
   installs both.
+
+### Setting up holds no credential
+
+A Vercel sandbox is made under a policy of its own for setting up, with
+none of the credentials in it: GitHub's hosts to clone and to install
+muster, and every host while your repository's dependencies install, since a
+lockfile can name any registry. Once set up, that policy is replaced by the
+agent's, and the agent starts with only the board and its model's host open.
+Code that ran while setting up could reach the internet, but there was
+nothing to take: the tokens only ever go on requests after that.
+
+A repository's own configuration still runs at install, scripts or not: a
+`.pnpmfile.cjs`, a yarn plugin, an `.npmrc` pointing at a registry of its
+choosing. That is the repository's code, like its tests, which the agent
+runs anyway: launch only on code you would run.
 
 ## The model's key
 
