@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { claude, vercel } from '../src/index.ts'
 import type { VercelRule } from '../src/runner/cloud.ts'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { BUNDLE, gitRules, githubRepo, openPullRequest, pushBundle } from '../src/runner/github.ts'
+import { BUNDLE, BUNDLE_MAX, gitRules, githubRepo, openPullRequest, pushBundle } from '../src/runner/github.ts'
 import { tempDir } from './helpers.ts'
 
 /** What Vercel Sandbox's proxy does with one request under these rules: the first that matches handles it. */
@@ -51,7 +51,8 @@ describe('GitHub in a sandbox', () => {
 
   it('vercel: the token is in the policy only while the repository is cloned, and never in the agent\'s', async () => {
     const policies: any[] = []
-    const made = { name: 'sbx-gh', runCommand: async () => ({ exitCode: 0, stdout: async () => 'abc123\nmain' }), update: async (options: any) => void policies.push(options.networkPolicy), stop: async () => {} }
+    const sha = 'a'.repeat(40)
+    const made = { name: 'sbx-gh', runCommand: async () => ({ exitCode: 0, stdout: async () => `${sha}\nmain` }), update: async (options: any) => void policies.push(options.networkPolicy), stop: async () => {} }
     const run = await vercel({ Sandbox: { create: async (options: any) => (policies.push(options.networkPolicy), made) }, setupHosts: ['objects.githubusercontent.com'] }).start({
       task: 7,
       agent: claude,
@@ -68,7 +69,7 @@ describe('GitHub in a sandbox', () => {
     expect(policies[1]).toEqual({ allow: { '*': [] } })
     expect(JSON.stringify(policies.slice(1))).not.toContain(auth)
     expect(Object.keys(policies.at(-1).allow)).toEqual(['board.example.com'])
-    expect(run.checkout).toEqual({ sha: 'abc123', branch: 'main' })
+    expect(run.checkout).toEqual({ sha, branch: 'main' })
   })
 
   it('opens the pull request from here, or answers with the one already open for the branch', async () => {
@@ -111,11 +112,16 @@ describe('GitHub in a sandbox', () => {
     writeFileSync(join(checkout, 'monitor.sh'), `#!/bin/sh\necho fsmonitor >> ${marker}\n`)
     chmodSync(join(checkout, 'monitor.sh'), 0o755)
     git(checkout, 'config', 'core.fsmonitor', join(checkout, 'monitor.sh'))
-    const out = execFileSync('sh', ['-c', BUNDLE], { cwd: checkout, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: tempDir(), TMPDIR: tempDir(), MU_BASE: base, MU_TITLE: 'the fix', MU_BODY: 'Task #12', MU_NAME: 'fixer', MU_EMAIL: 'fixer@users.noreply.github.com' } })
-    const [said, data] = out.split('\n')
-    expect(said).toBe('bundle')
+    const file = join(tempDir(), 'mu.bundle')
+    const out = execFileSync('sh', ['-c', BUNDLE], { cwd: checkout, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: tempDir(), MU_OUT: file, MU_BASE: base, MU_TITLE: 'the fix', MU_BODY: 'Task #12', MU_NAME: 'fixer', MU_EMAIL: 'fixer@users.noreply.github.com' } })
+    expect(out.trim()).toBe('bundle')
     expect(existsSync(marker)).toBe(false)
-    await pushBundle({ repo, token: 'ghp_secret', bundle: Buffer.from(data!, 'base64'), base, branch: 'mu/task-12', remote })
+    const bundle = readFileSync(file)
+    // What reaches git here as an argument can't be an option, and the bundle is held to its size here too.
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base: '--upload-pack=touch /tmp/x', branch: 'mu/task-12', remote }).catch((error) => error.reason)).toBe('push_failed')
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'main', remote }).catch((error) => error.reason)).toBe('push_failed')
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle: Buffer.alloc(BUNDLE_MAX + 1), base, branch: 'mu/task-12', remote }).catch((error) => error.reason)).toBe('push_failed')
+    await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', remote })
     expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:a.txt'], { encoding: 'utf8' })).toBe('two\n')
     expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%an %s', 'refs/heads/mu/task-12'], { encoding: 'utf8' }).trim()).toBe('fixer the fix')
     // main is as it was: the push writes the branch this machine names, and no other.
@@ -123,6 +129,29 @@ describe('GitHub in a sandbox', () => {
     // Nothing changed: it says so, and makes no bundle.
     const clean = tempDir()
     execFileSync('git', ['clone', '-q', remote, clean])
-    expect(execFileSync('sh', ['-c', BUNDLE], { cwd: clean, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: tempDir(), MU_BASE: base, MU_TITLE: 't', MU_BODY: 'b', MU_NAME: 'n', MU_EMAIL: 'n@e' } }).trim()).toBe('unchanged')
+    expect(execFileSync('sh', ['-c', BUNDLE], { cwd: clean, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: tempDir(), MU_OUT: join(tempDir(), 'x.bundle'), MU_BASE: base, MU_TITLE: 't', MU_BODY: 'b', MU_NAME: 'n', MU_EMAIL: 'n@e' } }).trim()).toBe('unchanged')
+  })
+
+  it('vercel: what a sandbox prints or hands back is read no further than this side\'s limits, and a checkout it describes oddly is not taken', async () => {
+    const { Readable } = await import('node:stream')
+    const sha = 'b'.repeat(40)
+    let head = `${sha}\nmain`
+    const made = {
+      name: 'sbx-big',
+      runCommand: async () => ({ exitCode: 0, logs: () => Readable.from([{ stream: 'stdout', data: head }, { stream: 'stdout', data: 'x'.repeat(200_000) }]) as any }),
+      readFile: async () => Readable.from([Buffer.alloc(6), Buffer.alloc(6)]),
+      update: async () => {},
+      stop: async () => {},
+    }
+    const request = { task: 7, agent: claude, prompt: '', board: { url: 'https://board.example.com/api/board', token: 'mu1.secret' }, repo: 'https://github.com/acme/web.git' }
+    const run = await vercel({ Sandbox: { create: async () => made } }).start(request)
+    expect((await run.exec!({ cmd: 'sh', args: [] })).stdout.length).toBe(64 * 1024)
+    expect(await run.readFile!('/tmp/x', 12)).toHaveLength(12)
+    expect(await run.readFile!('/tmp/x', 11)).toBeNull()
+    // A commit or branch that git could read as an option is no checkout at all.
+    for (const odd of ['--upload-pack=x\nmain', `${sha}\n--force`, `${sha.slice(1)}\nmain`, `${sha}\na..b`]) {
+      head = odd
+      expect((await vercel({ Sandbox: { create: async () => made } }).start(request)).checkout).toBeUndefined()
+    }
   })
 })

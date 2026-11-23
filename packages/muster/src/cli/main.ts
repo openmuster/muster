@@ -1556,22 +1556,26 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
  * when nothing changed.
  */
 async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string }; token: string; profile: string; api?: string; remote?: string }): Promise<string | null> {
-  if (!started.exec || !started.setPolicy || !started.checkout) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy or run a command in it.", { hint: 'npm i @vercel/sandbox@latest' })
+  if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'npm i @vercel/sandbox@latest' })
+  if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
   const thread = await run.team.readThread({ id: options.task }).catch(() => null)
   const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
   const branch = `mu/task-${options.task}`
   await started.setPolicy('deny-all')
+  const out = `/tmp/mu-task-${options.task}.bundle`
   const made = await started.exec({
     cmd: 'sh',
     args: ['-c', BUNDLE],
-    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
+    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_OUT: out, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
   })
-  const [said, data] = made.stdout.split('\n')
+  const said = made.stdout.trim().split('\n').pop()
   if (made.exitCode !== 0 || !said) throw new Failure('push_failed', `Reading the agent's changes out of the sandbox failed (exit ${made.exitCode}).`)
   if (said === 'unchanged') return null
-  if (said === 'too-big') throw new Failure('push_failed', `The agent's changes are over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
-  if (said !== 'bundle' || !data) throw new Failure('push_failed', "The sandbox didn't hand back the agent's changes.")
-  await pushBundle({ repo: options.repo, token: options.token, bundle: Buffer.from(data.trim(), 'base64'), base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
+  if (said !== 'bundle') throw new Failure('push_failed', "The sandbox didn't hand back the agent's changes.")
+  // Read with this side's limit: what the sandbox says about its size is not taken on trust.
+  const bundle = await started.readFile(out, BUNDLE_MAX)
+  if (!bundle) throw new Failure('push_failed', `The agent's changes are missing, or over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
+  await pushBundle({ repo: options.repo, token: options.token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
   const url = await openPullRequest({ repo: options.repo, token: options.token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
   await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
   await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})

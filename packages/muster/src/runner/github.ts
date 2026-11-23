@@ -80,9 +80,9 @@ export const BUNDLE_MAX = 50 * 1024 * 1024
 
 /**
  * Run in the sandbox, under a policy that reaches nothing: commits what the agent left on top of where
- * the checkout started and prints it as a git bundle, in base64. Git runs without hooks, an fsmonitor, or
- * any system or global config, though what it prints is data either way: the push is made elsewhere.
- * Its first line says `unchanged`, `too-big`, or `bundle` with the bundle on the next.
+ * the checkout started and writes it as a git bundle to `$MU_OUT`. Git runs without hooks, an fsmonitor,
+ * or any system or global config, though what it makes is data either way: the push is made elsewhere,
+ * and the bundle is read with a limit of this side's. It prints `unchanged` or `bundle`.
  */
 export const BUNDLE = `set -e
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
@@ -90,12 +90,9 @@ g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c user.name="$MU_
 g add -A
 if ! g diff --cached --quiet; then g commit -q --no-verify -m "$MU_TITLE" -m "$MU_BODY"; fi
 if [ "$(g rev-parse HEAD)" = "$MU_BASE" ]; then echo unchanged; exit 0; fi
-out="\${TMPDIR:-/tmp}/mu.bundle"
-g bundle create "$out" "$MU_BASE..HEAD" >/dev/null 2>&1
-if [ "$(wc -c < "$out")" -gt ${BUNDLE_MAX} ]; then echo too-big; exit 0; fi
-echo bundle
-base64 < "$out" | tr -d '\\n'
-echo`
+rm -f "$MU_OUT"
+g bundle create "$MU_OUT" "$MU_BASE..HEAD" >/dev/null 2>&1
+echo bundle`
 
 const run = promisify(execFile)
 
@@ -106,6 +103,10 @@ const run = promisify(execFile)
  * not its arguments, so no process listing shows it.
  */
 export async function pushBundle(options: { repo: { slug: string }; token: string; bundle: Buffer; base: string; branch: string; remote?: string }): Promise<void> {
+  // Each of these reaches git as an argument: none may look like an option, and the bundle is held to its size here too.
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(options.base)) throw new Failure('push_failed', "The commit the checkout started from isn't a commit ID.")
+  if (!/^mu\/task-\d+$/.test(options.branch)) throw new Failure('push_failed', `${options.branch} isn't a branch mu run pushes.`)
+  if (options.bundle.length > BUNDLE_MAX) throw new Failure('push_failed', `The agent's changes are over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
   const dir = await mkdtemp(join(tmpdir(), 'mu-push-'))
   const remote = options.remote ?? `https://github.com/${options.repo.slug}.git`
   const env = {
@@ -121,11 +122,11 @@ export async function pushBundle(options: { repo: { slug: string }; token: strin
   const git = (...args: string[]) => run('git', ['-C', dir, ...args], { env, maxBuffer: 16 * 1024 * 1024, timeout: 120_000 })
   try {
     await git('init', '-q', '--bare')
-    await git('fetch', '-q', '--depth=1', remote, options.base)
+    await git('fetch', '-q', '--depth=1', '--end-of-options', remote, options.base)
     await writeFile(join(dir, 'mu.bundle'), options.bundle)
     await git('bundle', 'verify', '-q', join(dir, 'mu.bundle'))
-    await git('fetch', '-q', join(dir, 'mu.bundle'), 'HEAD:refs/mu/head')
-    await git('push', '-q', '-f', remote, `refs/mu/head:refs/heads/${options.branch}`)
+    await git('fetch', '-q', '--end-of-options', join(dir, 'mu.bundle'), 'HEAD:refs/mu/head')
+    await git('push', '-q', '-f', '--end-of-options', remote, `refs/mu/head:refs/heads/${options.branch}`)
   } catch (error) {
     const said = String((error as { stderr?: string }).stderr ?? (error as Error).message).replaceAll(options.token, '[REDACTED]').trim().split('\n').slice(-2).join(' ')
     throw new Failure('push_failed', `Pushing ${options.branch} failed: ${said}`, { hint: 'The token needs Contents: write on the repository.' })

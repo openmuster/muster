@@ -118,7 +118,7 @@ describe('mu run in a cloud sandbox', () => {
   })
 
   /** A stand-in for @vercel/sandbox that logs every call, and whose agent command exits with `exit` after `after` ms. */
-  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; checkout?: string; bundled?: string } = {}) => {
+  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; checkout?: string; bundled?: string; file?: string } = {}) => {
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'), { recursive: true })
     writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'
@@ -136,6 +136,7 @@ export const Sandbox = { async create(options) {
       }
       return { wait: () => new Promise((resolve) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), resolve({ exitCode: ${opts.exit ?? 0} })), ${opts.after ?? 50})) }
     },
+    readFile: async ({ path }) => (log({ read: path }), ${JSON.stringify(opts.file ?? null)} === null ? null : (await import('node:stream')).Readable.from([Buffer.from(${JSON.stringify(opts.file ?? '')}, 'base64')])),
     update: async (o) => log({ update: o.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(o.networkPolicy.allow), policy: o.networkPolicy }),
     delete: async () => log({ deleted: true }),
     stop: async () => log({ stopped: true }),
@@ -251,7 +252,7 @@ export const Sandbox = { async create(options) {
     })
     await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
     const dir = tempDir()
-    const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: `bundle\n${bundle}` })
+    const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
     const env = { ...board, ...sdk.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
     const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
     api.close()
