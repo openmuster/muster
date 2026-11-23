@@ -21,7 +21,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
 import { SANDBOX_ENV, cloudflare, vercel, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
-import { gitRules, githubRepo, openPullRequest } from '../runner/github.ts'
+import { BUNDLE, BUNDLE_MAX, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { loadSync } from '../sync/config.ts'
@@ -1533,7 +1533,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   let pr: string | null = null
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
-    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, token: env.GITHUB_TOKEN!, profile: profile ?? 'agent', api: env.MUSTER_GITHUB_API })
+    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, token: env.GITHUB_TOKEN!, profile: profile ?? 'agent', ...(env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}), ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -1549,38 +1549,34 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
 }
 
 /**
- * What the agent changed, as a pull request. The sandbox's policy is first made GitHub's alone, for this
- * repository's git routes, with the token: the board's token and the model's key are out of it, and so
- * is everything else. Its changes are committed on `mu/task-<id>` and pushed from the sandbox, and the
- * pull request is opened from here, so the sandbox never reaches GitHub's API. Null when nothing changed.
+ * What the agent changed, as a pull request. The sandbox is first closed to every host: whatever the
+ * agent left running there reaches nothing. Its changes are committed there and read out as a git bundle,
+ * then pushed to `mu/task-<id>` from this machine, from a repository that never ran anything of the
+ * agent's, and the pull request opened from here. No sandbox the agent ran in ever holds the token. Null
+ * when nothing changed.
  */
-async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string }; token: string; profile: string; api?: string }): Promise<string | null> {
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string }; token: string; profile: string; api?: string; remote?: string }): Promise<string | null> {
   if (!started.exec || !started.setPolicy || !started.checkout) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy or run a command in it.", { hint: 'npm i @vercel/sandbox@latest' })
   const thread = await run.team.readThread({ id: options.task }).catch(() => null)
   const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
   const branch = `mu/task-${options.task}`
-  await started.setPolicy(gitRules(options.repo, options.token, { push: true }))
-  const pushed = await started.exec({
+  await started.setPolicy('deny-all')
+  const made = await started.exec({
     cmd: 'sh',
-    args: ['-c', PUSH],
-    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_BRANCH: branch, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
+    args: ['-c', BUNDLE],
+    env: { MU_TITLE: title, MU_BODY: `Task #${options.task} on the board, worked by ${options.profile}.`, MU_BASE: started.checkout.sha, MU_NAME: options.profile, MU_EMAIL: `${options.profile.replace(/[^A-Za-z0-9._-]/g, '-')}@users.noreply.github.com` },
   })
-  const said = pushed.stdout.trim().split('\n').pop()
-  if (pushed.exitCode !== 0 || (said !== 'pushed' && said !== 'unchanged')) throw new Failure('push_failed', `Pushing ${branch} from the sandbox failed (exit ${pushed.exitCode}).`, { hint: 'The token needs Contents: write on the repository.' })
+  const [said, data] = made.stdout.split('\n')
+  if (made.exitCode !== 0 || !said) throw new Failure('push_failed', `Reading the agent's changes out of the sandbox failed (exit ${made.exitCode}).`)
   if (said === 'unchanged') return null
+  if (said === 'too-big') throw new Failure('push_failed', `The agent's changes are over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
+  if (said !== 'bundle' || !data) throw new Failure('push_failed', "The sandbox didn't hand back the agent's changes.")
+  await pushBundle({ repo: options.repo, token: options.token, bundle: Buffer.from(data.trim(), 'base64'), base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
   const url = await openPullRequest({ repo: options.repo, token: options.token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
   await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
   await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
   return url
 }
-
-/** Commits what the agent left on top of where the checkout started, and pushes it. Its last line says what it did. */
-const PUSH = `set -e
-git add -A
-if ! git diff --cached --quiet; then git -c user.name="$MU_NAME" -c user.email="$MU_EMAIL" commit -q -m "$MU_TITLE" -m "$MU_BODY"; fi
-if [ "$(git rev-parse HEAD)" = "$MU_BASE" ]; then echo unchanged; exit 0; fi
-git push -q -f origin "HEAD:refs/heads/$MU_BRANCH"
-echo pushed`
 
 /** How long a cloud agent may work when no --timeout says, and how much longer its sandbox lives to set up and settle the task. */
 const DEFAULT_CLOUD_TIMEOUT = '30m'

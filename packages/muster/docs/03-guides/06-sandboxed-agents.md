@@ -100,25 +100,32 @@ export GITHUB_TOKEN=github_pat_...   # a fine-grained token: this repository, co
 mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git --push
 ```
 
-With `--push`, once the agent is done, `mu run` commits what it changed on
-top of where the checkout started, pushes it to `mu/task-12`, and opens a
-pull request into the branch it was cloned from. The pull request's address
-is on the task as a `pr` label and a reply. Nothing changed, no pull request.
+With `--push`, once the agent is done, `mu run` closes the sandbox to every
+host, commits what the agent changed on top of where the checkout started,
+and reads it out as a git bundle. It pushes that from this machine to
+`mu/task-12`, and opens a pull request into the branch the repository was
+cloned from. The pull request's address is on the task as a `pr` label and a
+reply. Nothing changed, no pull request.
 
-- **The token never meets the agent.** It is in the sandbox's policy while
-  Vercel clones the repository, before anything of the repository's runs,
-  and again for the push, after the agent has exited, with the board's
-  token and the model's key taken out. Both times only on the repository's
-  own git routes: no other repository, nothing else on GitHub.
+- **The token is never where the agent has been.** It is in the sandbox's
+  policy only while Vercel clones the repository, before anything of the
+  repository's runs, and only on its git fetch routes. The push is made here,
+  from a repository made for it, and its branch is the one `mu run` names,
+  so nothing the agent left behind, a hook, a process, a changed `git`, can
+  use the token or pick what it writes.
+- **What the agent left is data.** Git runs in the sandbox with no hooks, no
+  fsmonitor and no global config, under a policy that reaches nothing, and
+  all that comes out is the bundle, which becomes the branch.
 - **The pull request is opened from your machine,** so GitHub's API is never
   reachable from the sandbox.
 - **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
-  whose tasks would share one checkout. Only the Vercel runner pushes.
+  whose tasks would share one checkout. Only the Vercel runner pushes, and
+  it needs `git` on this machine.
 - Without `--push`, `GITHUB_TOKEN` is used to clone a private repository,
   the same way, and nothing is pushed.
 
-A token can push to any branch of the repository. Protect the branches that
-matter on GitHub.
+The token can write any branch of the repository, so protect the ones that
+matter on GitHub: `mu run` only ever pushes `mu/task-<id>`.
 
 ### Setting up holds no credential
 

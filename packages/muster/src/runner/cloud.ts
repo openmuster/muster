@@ -21,7 +21,7 @@ export type CloudRequest = {
   setup?: string[][]
   /** Install the repository's dependencies from its lockfile, with no install scripts, before the agent starts. */
   install?: boolean
-  /** A GitHub token for the repository: added to its git routes while it is cloned, and never in the agent's policy. */
+  /** A GitHub token for the repository: added to its git routes while it is cloned, before anything of it runs, and never after. */
   github?: { token: string }
   timeoutMs?: number
 }
@@ -41,8 +41,8 @@ export type CloudRun = {
   checkout?: { sha: string; branch: string }
   /** Runs one command in the sandbox, in the checkout when there is one, and waits for it. */
   exec?(command: { cmd: string; args: string[]; env?: Record<string, string> }): Promise<{ exitCode: number | null; stdout: string }>
-  /** Replaces the sandbox's network policy. */
-  setPolicy?(rules: Record<string, VercelRule[]>): Promise<void>
+  /** Replaces the sandbox's network policy: these hosts' rules, or none reached at all. */
+  setPolicy?(rules: Record<string, VercelRule[]> | 'deny-all'): Promise<void>
 }
 
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
@@ -161,7 +161,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       // GitHub's token, when there is one, is in the policy only while Vercel clones the repository, before
       // anything of the repository's runs, and then only for that repository's git routes, to read.
       const github = dir && request.github ? githubRepo(request.repo!) : null
-      const cloning: Record<string, VercelRule[]> | null = github ? { ...hosts(options.setupHosts ?? []), 'codeload.github.com': [], ...gitRules(github, request.github!.token, { push: false }) } : null
+      const cloning: Record<string, VercelRule[]> | null = github ? { ...hosts(options.setupHosts ?? []), 'codeload.github.com': [], ...gitRules(github, request.github!.token) } : null
       const during: Record<string, VercelRule[]> = install ? { '*': [] } : hosts([...(options.setupHosts ?? []), ...(dir ? CLONE_HOSTS : [])])
       const sandbox = await options.Sandbox.create({
         // Without these the SDK signs in with VERCEL_OIDC_TOKEN. They go to Vercel's API, never into the sandbox.
@@ -215,7 +215,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox',
         stop: () => end(sandbox),
         exec,
-        ...(sandbox.update ? { setPolicy: async (rules: Record<string, VercelRule[]>) => void (await sandbox.update!({ networkPolicy: { allow: rules } })) } : {}),
+        ...(sandbox.update ? { setPolicy: async (rules: Record<string, VercelRule[]> | 'deny-all') => void (await sandbox.update!({ networkPolicy: rules === 'deny-all' ? rules : { allow: rules } })) } : {}),
         ...(checkout ? { checkout } : {}),
         ...(installed ? { installed } : {}),
         ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }

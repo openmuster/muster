@@ -118,7 +118,7 @@ describe('mu run in a cloud sandbox', () => {
   })
 
   /** A stand-in for @vercel/sandbox that logs every call, and whose agent command exits with `exit` after `after` ms. */
-  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; pushed?: string } = {}) => {
+  const fakeSdk = (dir: string, opts: { exit?: number; after?: number; checkout?: string; bundled?: string } = {}) => {
     const log = join(dir, 'sdk.log')
     mkdirSync(join(dir, 'sdk'), { recursive: true })
     writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'
@@ -131,7 +131,7 @@ export const Sandbox = { async create(options) {
       log({ run: c })
       if (!c.detached) {
         const script = c.args?.[1] ?? ''
-        const out = script.includes('git rev-parse HEAD &&') ? 'abc123\\nmain' : script.includes('git push') ? ${JSON.stringify(opts.pushed ?? 'pushed')} : ''
+        const out = script.includes('git rev-parse HEAD &&') ? ${JSON.stringify(opts.checkout ?? 'abc123\nmain')} : script.includes('bundle create') ? ${JSON.stringify(opts.bundled ?? 'unchanged')} : ''
         return { exitCode: 0, stdout: async () => out }
       }
       return { wait: () => new Promise((resolve) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), resolve({ exitCode: ${opts.exit ?? 0} })), ${opts.after ?? 50})) }
@@ -221,7 +221,25 @@ export const Sandbox = { async create(options) {
     expect(existsSync(join(dir, 'sdk.log'))).toBe(false)
   })
 
-  it('vercel: --push pushes what the agent changed from the sandbox, under GitHub\'s policy alone, and opens the pull request from here', async () => {
+  it('vercel: --push reads the agent\'s changes out of a sandbox closed to every host, pushes them from here to mu/task-<id>, and opens the pull request', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    // GitHub, standing in: a bare repository with one commit on main.
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    // What the agent left in the sandbox, as the sandbox hands it back: a bundle on top of base.
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(work, 'mu.bundle')).toString('base64')
+
     const got: any[] = []
     const api = createServer((req, res) => {
       let body = ''
@@ -233,29 +251,27 @@ export const Sandbox = { async create(options) {
     })
     await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
     const dir = tempDir()
-    const sdk = fakeSdk(dir)
-    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], {
-      env: { ...board, ...sdk.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}` },
-    })
+    const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: `bundle\n${bundle}` })
+    const env = { ...board, ...sdk.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
     api.close()
     expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
+    // The branch is on GitHub, with the agent's change, under the name this machine chose.
+    expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:README.md'], { encoding: 'utf8' })).toBe('hello, fixed\n')
+    expect(got).toEqual([{ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghp_secret', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) }])
     const lines = await sdk.read()
     const exited = lines.findIndex((e) => e.exited !== undefined)
-    // After the agent: the policy is GitHub's alone, with the token on this repository's git routes, then the push.
-    const github = lines.findIndex((e, at) => at > exited && Array.isArray(e.update))
-    expect(lines[github].update).toEqual(['github.com'])
-    expect(JSON.stringify(lines[github].policy)).not.toMatch(/mu1\.|board\.example\.com/)
-    const pushed = lines.findIndex((e) => e.run?.args?.[1]?.includes('git push'))
-    expect(pushed).toBeGreaterThan(github)
-    expect(lines[pushed].run.env).toMatchObject({ MU_BRANCH: 'mu/task-12', MU_BASE: 'abc123', MU_NAME: 'fixer' })
-    expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(pushed)
-    // The agent's own policy never held the token.
-    const agentPolicy = lines.find((e) => Array.isArray(e.update) && e.update.includes('board.example.com'))
-    expect(JSON.stringify(agentPolicy.policy)).not.toContain(Buffer.from('x-access-token:ghp_secret').toString('base64'))
-    expect(got).toEqual([{ url: '/repos/acme/web/pulls', method: 'POST', auth: 'Bearer ghp_secret', body: expect.objectContaining({ head: 'mu/task-12', base: 'main' }) }])
-    // Nothing changed: no pull request.
-    const quiet = fakeSdk(tempDir(), { pushed: 'unchanged' })
-    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...board, ...quiet.env, GITHUB_TOKEN: 'ghp_secret', MUSTER_GITHUB_API: 'http://127.0.0.1:1' } })
+    // After the agent the sandbox reaches nothing, and no policy of the sandbox's ever holds the token after it was cloned.
+    expect(lines[exited + 1]).toEqual({ update: 'deny-all', policy: 'deny-all' })
+    const bundled = lines.findIndex((e) => e.run?.args?.[1]?.includes('bundle create'))
+    expect(bundled).toBeGreaterThan(exited + 1)
+    expect(lines[bundled].run.env).toMatchObject({ MU_BASE: base, MU_NAME: 'fixer' })
+    expect(lines.slice(1).filter((e) => e.update).some((e) => JSON.stringify(e).includes(Buffer.from('x-access-token:ghp_secret').toString('base64')))).toBe(false)
+    expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(bundled)
+
+    // Nothing changed: no push, no pull request.
+    const quiet = fakeSdk(tempDir(), { checkout: `${base}\nmain`, bundled: 'unchanged' })
+    const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env, MUSTER_GITHUB_API: 'http://127.0.0.1:1' } })
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
   })
 
