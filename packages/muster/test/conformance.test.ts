@@ -295,6 +295,32 @@ export const Sandbox = { async create(options) {
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
   })
 
+  it('vercel: a --ready --loop worker stays here and gives each task a sandbox of its own, under a claim made for it', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    // This machine has the board; sandboxes reach it at another address.
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1'], { env: local })
+    expect(run.code).toBe(0)
+    const lines = await sdk.read()
+    const created = lines.filter((e) => e.create)
+    expect(created).toHaveLength(2)
+    // Each sandbox runs one task, by ID, with the token of the claim made for it here: no two alike.
+    const started = lines.filter((e) => e.run?.detached)
+    expect(started.map((e) => /'run' '(\d+)'/.exec(e.run.args[1])?.[1]).map(Number)).toEqual(ids)
+    const tokens = created.map((e) => e.create.env.MUSTER_CLAIM_TOKEN)
+    expect(tokens.every((token: string) => /^[\w-]{43}$/.test(token))).toBe(true)
+    expect(new Set(tokens).size).toBe(2)
+    expect(lines.filter((e) => e.deleted)).toHaveLength(2)
+    // The claims are the agent's, so mu run in each sandbox, as that agent, holds them.
+    for (const id of ids) expect(JSON.parse((await cli(dir, ['read', String(id), '--json'])).stdout).task.claim.by.profile).toBe('agent-1')
+    // --push with --ready needs the worker: a sandbox per task.
+    const refused = await cli(dir, ['run', '--ready', 'swarm/web', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--repo', 'https://github.com/acme/web.git', '--push', '--json'], { env: local })
+    expect(JSON.parse(refused.stderr).error.reason).toBe('push_unsupported')
+  })
+
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir, { after: 5000 })

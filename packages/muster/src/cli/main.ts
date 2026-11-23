@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
 import { readFileSync } from 'node:fs'
@@ -639,6 +640,8 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
+      // A Vercel worker keeps its own loop here, a sandbox per task.
+      if (str(parsed.flags, 'runner') === 'vercel') return runAgent(run, parsed, () => {}, () => {})
       // A worker: one task after another until the queue has nothing for it.
       let done = 0
       let stopped = ''
@@ -1415,11 +1418,62 @@ export function repoUrl(value: string): string {
  * itself, through the board at MUSTER_URL, which the sandbox must be able to reach.
  */
 async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
+  if (where === 'vercel' && str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, agent)
+  return cloudTask(run, parsed, where, agent)
+}
+
+/**
+ * A worker that stays here and gives each task a sandbox of its own, as a swarm wants: it claims the
+ * next ready task, as the agent, under a claim token made for it, and runs that one task in a new sandbox
+ * with the token, so `mu run` there holds the same claim and no other worker can take it. Each task gets
+ * its own checkout, so --push makes one pull request per task. It ends when nothing is ready for --wait.
+ */
+async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[string]): Promise<number> {
+  const ready = str(parsed.flags, 'ready')!
+  const profile = str(parsed.flags, 'as') ?? run.io.env.MUSTER_PROFILE
+  if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
+  if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
+  const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
+  const { ready: _, loop: __, wait: ___, ...flags } = parsed.flags
+  let quietSince = Date.now()
+  let failed = 0
+  let worked = 0
+  while (!run.io.stop.aborted) {
+    // One token per task: what the sandbox holds settles that task and no other.
+    const claimToken = randomBytes(32).toString('base64url')
+    let claimed: number | undefined
+    try {
+      claimed = (await run.team.as(profile).taskClaim({ ready, token: claimToken })).task.id
+    } catch (error) {
+      if (!(error instanceof Failure && error.reason === 'nothing_ready')) throw error
+    }
+    if (claimed === undefined) {
+      if (Date.now() - quietSince >= idle) break
+      await sleep(Math.min(5000, idle), run.io.stop)
+      continue
+    }
+    const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile } }, 'vercel', agent, { claimToken }).catch((error: unknown) => {
+      run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
+      return 1
+    })
+    worked += 1
+    if (code !== 0) failed += 1
+    quietSince = Date.now()
+  }
+  if (run.io.stop.aborted) return stopCode(run.io.stop)
+  if (!run.json) run.io.out(`nothing more is ready: worked ${worked} ${worked === 1 ? 'task' : 'tasks'}${failed ? `, ${failed} of them not cleanly` : ''}`)
+  return failed ? 1 : 0
+}
+
+async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string], held: { claimToken?: string } = {}): Promise<number> {
   const env = run.io.env
-  const url = env.MUSTER_URL
-  // A token made for the agent, held to its profile and channels, is better than your own.
-  const given = env.MUSTER_AGENT_TOKEN
-  if (!url) throw new Failure('board_not_reachable', 'A cloud runner needs the board at a URL: set MUSTER_URL.', { hint: 'Serve the board with mu serve behind a public HTTPS name.' })
+  // Where the sandbox reaches the board. MUSTER_SANDBOX_URL is for a machine that has the board itself and
+  // serves it to sandboxes at another address, such as a tunnel's.
+  const url = env.MUSTER_SANDBOX_URL ?? env.MUSTER_URL
+  // A token made for the agent, held to its profile and channels, is better than your own. A worker's task
+  // has one made for it, since the claim it brings is the profile's, and a token handed in may be another's.
+  const given = held.claimToken ? undefined : env.MUSTER_AGENT_TOKEN
+  if (!url) throw new Failure('board_not_reachable', 'A cloud runner needs the board at a URL: set MUSTER_URL, or MUSTER_SANDBOX_URL where this machine has the board itself.', { hint: 'Serve the board with mu serve behind a public HTTPS name.' })
   const named = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE
   // Either you hand over a token made for the agent, or you name the agent and one is made for this run.
   if (given !== undefined) agentToken(given)
@@ -1433,7 +1487,7 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     if (where !== 'vercel') throw misuse('push_unsupported', '--push works with the Vercel runner only.')
     if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
     if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
-    if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push takes one task: a worker\'s tasks would share one checkout.')
+    if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
   }
   // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
   const app = gh ? githubApp(env) : undefined
@@ -1513,7 +1567,8 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     task,
     agent: { ...agent, command: () => ({ bin: 'mu', args: inner }) },
     prompt: '',
-    env: { MUSTER_AGENT_ENV: passed.join(',') },
+    // A claim made for it here is the one it takes there: the claim's token, for this task alone.
+    env: { MUSTER_AGENT_ENV: passed.join(','), ...(held.claimToken ? { MUSTER_CLAIM_TOKEN: held.claimToken } : {}) },
     board: { url, token },
     ...(modelKey ? { model: { key: modelKey } } : {}),
     ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),

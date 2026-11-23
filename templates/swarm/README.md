@@ -18,10 +18,19 @@ The page has no sign-in: whoever can reach it can launch agents as you.
 `pnpm dev` listens on 127.0.0.1 only, so that is this machine. Don't put it
 on a network without something in front that asks who is there.
 
-Agents run as local processes, with the access of whoever started the page.
-Launch runs only on code you would run yourself. To run agents in cloud
-sandboxes instead, start them with muster's `vercel()` or `cloudflare()`
-runner against a board served at a URL they can reach.
+Agents run as local processes, with the access of whoever started the page,
+or in cloud sandboxes when you pick a runner. Launch runs only on code you
+would run yourself.
+
+- **Vercel:** each agent is a worker on this machine that gives every task a
+  sandbox of its own: a fresh clone of the repository, its dependencies
+  installed, the agent's changes pushed to `mu/task-<id>` and a pull request
+  opened, one per task. It needs the board at a URL the sandboxes reach
+  (`MUSTER_URL`, or `MUSTER_SANDBOX_URL` when this machine has the board),
+  the Vercel and model credentials `mu run --runner vercel` reads, and for
+  pull requests a GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_KEY_FILE`).
+- **Cloudflare:** each agent is a sandbox that takes tasks itself, with a
+  token you make for it in `MUSTER_AGENT_TOKEN`. It makes no pull requests.
 
 `JOIN.md` is what you paste into a coding agent to join a run's queue by hand.
 

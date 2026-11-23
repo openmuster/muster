@@ -25,6 +25,7 @@ async function start(form: FormData) {
       cwd,
       runner: String(form.get('runner') ?? 'local') as 'local' | 'vercel' | 'cloudflare',
       ...(form.get('repo') ? { repo: String(form.get('repo')) } : {}),
+      push: form.get('push') === 'on',
     },
     // Each worker is its own process, in its own group, so it outlives this request.
     (worker) => spawn(process.env.MUSTER_BIN ?? 'mu', worker.argv, { cwd: worker.cwd, detached: true, stdio: 'ignore', env: process.env }).unref(),
@@ -74,6 +75,10 @@ export default async function Page() {
         </div>
         <label htmlFor="repo">repository to clone (cloud)</label>
         <input id="repo" name="repo" placeholder="https://github.com/acme/web.git" />
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" name="push" defaultChecked style={{ width: 'auto' }} />
+          a pull request per task (Vercel, with a repository; needs a GitHub App)
+        </label>
         <button type="submit">launch</button>
       </form>
       <h2>runs</h2>

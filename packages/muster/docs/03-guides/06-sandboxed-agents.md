@@ -54,6 +54,28 @@ A `--ready` worker's sandbox lives two hours when you pass no `--timeout`,
 and ends as soon as the worker finds no task. The agent's token lasts ten
 minutes past the sandbox, and an attached run revokes it as soon as it ends.
 
+### A sandbox per task
+
+```bash
+mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo https://github.com/acme/web.git --push
+```
+
+On Vercel, `--ready` with `--loop` is a worker that stays on this machine.
+It claims the next ready task as `worker-1`, under a claim token made for
+that task, and runs it as above in a sandbox of its own, which takes the same
+claim: no other worker can have it, and each task gets its own clone, its own
+token and, with `--push`, its own pull request. Then the next, until nothing
+is ready for `--wait` (ten minutes by default). Start as many as you want
+running at once; the swarm template starts one per agent. The sandbox holds
+the claim token for its one task.
+
+Without `--loop`, `--ready` is one sandbox that takes task after task itself,
+as on Cloudflare, sharing one checkout, so it can't `--push`.
+
+`MUSTER_SANDBOX_URL` is the board's address for sandboxes, when this machine
+has the board itself: `mu run` then reads and claims on the board here, and
+the sandboxes reach it at that address, a tunnel's, say.
+
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never
 passed on. Name the agent with `--as` and `mu run` has the board make one for
