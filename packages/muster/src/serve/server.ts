@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Backend } from '../backend/types.ts'
 import { VERSION } from '../version.ts'
 import { Failure, misuse } from '../failure.ts'
-import { profileName, type Caller } from '../model.ts'
+import { profileName, WORKFLOWS_PROFILE, type Caller } from '../model.ts'
 import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
 import { verify, type Claims } from './token.ts'
 
@@ -109,6 +109,8 @@ export function createHandler(options: ServeOptions) {
     const asked = req.headers['x-muster-profile']
     // A token held to a profile writes as that profile, whatever the request asks for.
     const profile = claims.profile ?? (typeof asked === 'string' && asked.length > 0 ? profileName(asked) : null)
+    // The daemon's own profile: what it writes as marks a workflow's run, so only the board itself writes as it.
+    if (profile === WORKFLOWS_PROFILE && claims.can) throw new Failure('forbidden', `Only the board itself writes as ${WORKFLOWS_PROFILE}.`, { hint: 'Use another profile.' })
     return { principal: claims.sub, profile, ...(claims.can ? { can: claims.can, meter: claims.sub.startsWith('oidc:') ? '' : (claims.jti ?? claims.profile ?? '') } : {}), ...(claims.noSync ? { noSync: true as const } : {}), ...(claims.profile ? { profileHeld: true as const } : {}), ...(claims.jti ? { token: claims.jti } : {}) }
   }
 

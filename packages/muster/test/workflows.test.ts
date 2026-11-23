@@ -190,6 +190,14 @@ describe('mu workflow', () => {
     writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [good] }))
   }
 
+  it('token create --as workflows is refused: that profile is the daemon\'s own', async () => {
+    const dir = tempDir()
+    const made = await cli(dir, ['token', 'create', '--as', 'workflows', '--json'])
+    expect(made.code).not.toBe(0)
+    expect(JSON.parse(made.stderr).error.reason).toBe('invalid_profile')
+    expect((await cli(dir, ['token', 'create', '--as', 'lead', '--json'])).code).toBe(0)
+  })
+
   it("list shows this machine's workflows.json; run requests one on a thread and prints it", async () => {
     const dir = tempDir()
     config(dir)
@@ -379,6 +387,40 @@ describe('the daemon starts a requested workflow', () => {
     }
   })
 
+  it("keeps the daemon's profile to the board itself, so nobody can forge a run's marks", async () => {
+    const time = clock()
+    const key = randomBytes(32)
+    const backend = file({ memory: true, principal: OWNER, now: time.now, key })
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    try {
+      const exp = Math.floor(time.now().getTime() / 1000) + 3600
+      const token = (can?: Record<string, string[]>) => board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile: null, exp, ...(can ? { can } : {}) } as never) }) })
+      const narrowed = token({ 'work/': ['read', 'post', 'label'] })
+      const team = board({ backend })
+      const root = await team.post({ channel: 'work/app', text: 'ship' })
+      const rec = recorder()
+      await runWorkflows(team, [release], rec.deps)
+      const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+      const run = `work/app/release-${seq}`
+      // A token held to channels that names the daemon's profile, from its request: refused on any route.
+      const forger = narrowed.as('workflows')
+      expect(await reason(forger.post({ channel: run, text: 'release', labels: { workflow: 'release', request: String(seq), thread: String(root.id) }, noSync: true }))).toBe('forbidden')
+      expect(await reason(forger.taskPlan({ channel: run, tasks: [{ key: 'x', text: 'decoy' }], idempotencyKey: `workflow-${seq}` }))).toBe('forbidden')
+      expect(await reason(forger.readChannel({ channel: 'work/app' }))).toBe('forbidden')
+      // No token is made for it, by the board's owner or anyone.
+      expect(await reason(team.backend.tokens.create({ profile: 'workflows', can: { 'work/': ['read', 'post'] }, ttl: 3600 }))).toBe('invalid_profile')
+      expect(await reason(token().backend.tokens.create({ profile: 'workflows', can: {}, ttl: 3600 }))).toBe('invalid_profile')
+      // So the daemon starts the run as it should: every worker, the real tasks.
+      expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [seq], refused: [] })
+      expect(rec.spawned).toHaveLength(2)
+      expect((await tasksIn(team, run)).map((task) => task.text)).toEqual([expect.stringMatching(/^Plan /), 'Build {args.version}'])
+      // The board itself, unnarrowed, may still write as it, over HTTP as in its own file.
+      expect((await token().as('workflows').post({ channel: 'work/app', text: 'by the board' })).by).toEqual({ principal: OWNER, profile: 'workflows' })
+    } finally {
+      await server.close()
+    }
+  })
+
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {
     const exact = { ...release, channels: ['work'] }
     const { team, root, rec } = await ready([exact])
@@ -388,14 +430,23 @@ describe('the daemon starts a requested workflow', () => {
     expect(await runWorkflows(team, [exact], rec.deps)).toEqual({ started: [at.seq], refused: [below.seq] })
   })
 
-  it("says so, and never \"started\", when a worker won't start; and doesn't try again", async () => {
+  it("says so, and never \"started\", when no worker will start", async () => {
+    const { team, root } = await ready()
+    const rec = recorder(() => true)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
+    expect(rec.spawned).toEqual([])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start workers for release: spawn mu ENOENT"])
+  })
+
+  it("says how many workers started when one after the first won't, and doesn't try again", async () => {
     const { team, root } = await ready()
     const rec = recorder((call) => call === 2)
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
     const run = `work/app/release-${seq}`
     expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
     expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1'])
-    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(['couldn\'t start workers for release: spawn mu ENOENT'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(['started 1 of 2 workers for release, then: spawn mu ENOENT'])
     // The tasks are there for whoever starts workers by hand; the run isn't marked as started.
     expect(await tasksIn(team, run)).toHaveLength(2)
     expect(await openings(team, run)).toEqual([])
@@ -414,7 +465,9 @@ describe('the daemon starts a requested workflow', () => {
     await plan(planned.seq)
     const both = await team.workflowRequest({ name: 'release', on: root.id })
     await plan(both.seq)
-    await writer.post({ channel: `work/app/release-${both.seq}`, text: 'release', labels: { workflow: 'release', request: String(both.seq) }, noSync: true })
+    await writer.post({ channel: `work/app/release-${both.seq}`, text: 'release', labels: { workflow: 'release', request: String(both.seq), thread: String(root.id) }, noSync: true })
+    // Newer messages in the run's channel, more than a page of them, don't hide the mark.
+    for (let i = 0; i < 60; i++) await team.post({ channel: `work/app/release-${both.seq}`, text: `note ${i}`, labels: { request: String(both.seq) } })
     expect(await runWorkflows(team, [simple], rec.deps)).toEqual({ started: [planned.seq, both.seq], refused: [] })
     expect(rec.spawned.map((worker) => worker.argv[2])).toEqual([`work/app/release-${planned.seq}`])
     expect(await allTasks(team)).toHaveLength(2)

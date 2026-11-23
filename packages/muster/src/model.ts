@@ -20,6 +20,12 @@ export type Caller = {
   profileHeld?: true
 }
 
+/**
+ * The profile the daemon writes a workflow's runs as. Only the board itself may write as it: a caller held
+ * to channels can't, whether its token or its request names it, so nobody can forge a run's marks.
+ */
+export const WORKFLOWS_PROFILE = 'workflows'
+
 export type Permission = 'read' | 'post' | 'react' | 'label' | 'manage'
 
 export type By = { principal: string; profile: string | null }

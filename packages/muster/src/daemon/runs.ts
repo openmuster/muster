@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { PlanTask } from '../core/tasks.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
-import { actorId, channelScope, inScope, type By } from '../model.ts'
+import { actorId, channelScope, inScope, LIMITS, WORKFLOWS_PROFILE, type By } from '../model.ts'
 import type { Workflow } from './workflows.ts'
 
 /**
@@ -17,8 +17,8 @@ export type Ran = { started: number[]; refused: number[]; why?: string }
 
 /** Where the daemon keeps its place among the board's workflow requests. */
 export const REQUESTS_CURSOR = 'workflow:requests'
-/** The profile the daemon writes a run as, so watchers and hooks can tell its writing from a person's. */
-export const WORKFLOWS_PROFILE = 'workflows'
+/** The profile the daemon writes a run as, so watchers and hooks can tell its writing from a person's. Reserved to the board itself. */
+export { WORKFLOWS_PROFILE }
 /** Requests one tick handles, so a burst of them never holds up schedules and watchers. */
 const BATCH = 20
 
@@ -187,8 +187,9 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     // The plan was made under this key before the operator's config changed: it is made, and not made again.
     if (!(error instanceof Failure) || error.reason !== 'idempotency_mismatch') throw error
   }
-  // The run's first message is written once its workers have started: with it there, they were.
-  const opened = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`] })).threads.some(
+  // The run's first message is written once its workers have started: with it there, they were. Only it
+  // carries a `thread` label, and only the board itself writes as the daemon's profile, so nobody forges it.
+  const opened = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`, 'thread'], limit: LIMITS.readMax })).threads.some(
     (each) => each.task === null && each.message.by.principal === owner && each.message.by.profile === WORKFLOWS_PROFILE,
   )
   if (!opened) {
@@ -196,8 +197,10 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
       try {
         await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
       } catch (error) {
+        // The ones already started keep running: say how many, as it is.
         const reason = (error as Error).message
-        return { text: `couldn't start workers for ${workflow.name}: ${reason}`, failed: reason }
+        const text = i === 1 ? `couldn't start workers for ${workflow.name}: ${reason}` : `started ${i - 1} of ${workflow.workers.count} workers for ${workflow.name}, then: ${reason}`
+        return { text, failed: reason }
       }
     }
     await writer.post({ channel: run, text: `${workflow.name}, asked for by ${actorId(on.by)} on #${on.thread}`, labels: { ...labels, thread: String(on.thread) }, idempotencyKey: `workflow-${on.seq}-run`, noSync: true })

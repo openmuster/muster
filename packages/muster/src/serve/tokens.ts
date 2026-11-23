@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
-import { profileName, type Permission } from '../model.ts'
+import { profileName, WORKFLOWS_PROFILE, type Permission } from '../model.ts'
 import type { Db } from '../store/sqlite.ts'
 import { mint, type Claims } from './token.ts'
 
@@ -92,6 +92,7 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
     can[pattern] = permissions as Permission[]
   }
   const profile = request.profile ? profileName(request.profile) : null
+  if (profile === WORKFLOWS_PROFILE) throw misuse('invalid_profile', `"${WORKFLOWS_PROFILE}" is the daemon's own profile: no token is made for it.`, 'Use another profile.')
   if (!Number.isFinite(request.ttl) || request.ttl < 60) throw misuse('invalid_ttl', 'A token lives at least a minute.')
   let exp = Math.floor(now / 1000 + request.ttl)
   if (maker.workload) {
