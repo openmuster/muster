@@ -1445,21 +1445,25 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
   // One length of time sets them all. The agent gets `timeout`; a Vercel sandbox outlives it by the time it
   // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
-  const timeout = str(parsed.flags, 'timeout') ?? (where === 'vercel' ? DEFAULT_CLOUD_TIMEOUT : undefined)
+  const limit = str(parsed.flags, 'timeout')
+  const timeout = limit ?? (where === 'vercel' ? DEFAULT_CLOUD_TIMEOUT : undefined)
   const seconds = timeout ? duration(timeout, 'timeout') : undefined
-  const lifetime = seconds === undefined ? undefined : ready === undefined ? seconds + SETTLE : Math.max(WORKER_LIFETIME, seconds + SETTLE)
+  // A --timeout you give is the bound, for a worker too; without one a worker gets time for several tasks.
+  const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? WORKER_LIFETIME : seconds + SETTLE
   // A token for this run alone: this agent's name, the task's own channel, gone soon after the run should be,
   // and what it writes stays on the board. It is made by the board, from your token, and can make no others.
   let token = given
+  let made: string | undefined
   if (token === undefined) {
     const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
-    const made = await run.team.backend.tokens.create({
+    const minted = await run.team.backend.tokens.create({
       profile: named!,
       can: { [channel]: ['read', 'post', 'react', 'label'] },
       ttl: (lifetime ?? 30 * 60) + 10 * 60,
       noSync: true,
     })
-    token = made.token
+    token = minted.token
+    made = minted.record.id
   }
   // The model's key is read here and added to the sandbox's requests on the way out: it never enters the sandbox.
   const modelKey = agent.model ? env[agent.model.keyEnv] : undefined
@@ -1514,6 +1518,8 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
   } finally {
     await started.stop().catch(() => {})
+    // The token made for this run has nothing left to do: it goes now, not when it would have expired.
+    if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
   }
   if (run.io.stop.aborted) {
     run.io.err(`stopped  ${line}  removed`)

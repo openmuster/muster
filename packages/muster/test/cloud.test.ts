@@ -130,6 +130,14 @@ describe('cloud runners', () => {
     expect(calls.slice(-2)).toEqual([['update', { networkPolicy: 'deny-all' }], ['delete']])
   })
 
+  it('vercel: a failed setup step is named without the credential or query a URL in it carries', async () => {
+    const made = { sandboxId: 'sbx_12', runCommand: async (command: any) => (command.detached ? {} : { exitCode: 1 }), update: async () => {}, delete: async () => {}, stop: async () => {} }
+    const failed = await vercel({ Sandbox: { create: async () => made } }).start({ ...request, setup: [['npm', 'install', '-g', 'https://ada:hunter2@pkgs.example.com/muster.tgz?sig=abc123']] }).catch((error) => error)
+    expect(failed.reason).toBe('runner_setup_failed')
+    expect(failed.message).toContain('https://pkgs.example.com/muster.tgz')
+    expect(failed.message).not.toMatch(/hunter2|ada|abc123/)
+  })
+
   it('vercel: a run can be waited on until mu run in the sandbox exits, and asked again after a dropped wait', async () => {
     let waits = 0
     const made = {

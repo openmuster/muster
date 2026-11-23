@@ -166,6 +166,15 @@ export const Sandbox = { async create(options) {
     expect(lines.filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--timeout' '1h'")
   })
 
+  it('vercel: a --ready worker lives two hours unless --timeout says otherwise', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--json'], { env: { ...board, ...sdk.env } })
+    expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(2 * 60 * 60_000)
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--timeout', '10m', '--json'], { env: { ...board, ...sdk.env } })
+    expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(20 * 60_000)
+  })
+
   it('vercel: a run that exits badly is a failure here too, and the sandbox is still removed', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir, { exit: 2 })

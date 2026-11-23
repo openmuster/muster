@@ -50,9 +50,9 @@ One length of time sets the rest. `--timeout`, 30 minutes when you don't
 pass one, is how long the agent works on the task. The sandbox lives ten
 minutes longer, to install muster and settle the task, so it is `mu run` in
 it that fails a task that ran out of time, never the platform cutting it off.
-A `--ready` worker's sandbox lives two hours at least, and ends as soon as
-the worker finds no task. The agent's token lasts ten minutes past the
-sandbox.
+A `--ready` worker's sandbox lives two hours when you pass no `--timeout`,
+and ends as soon as the worker finds no task. The agent's token lasts ten
+minutes past the sandbox, and an attached run revokes it as soon as it ends.
 
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never

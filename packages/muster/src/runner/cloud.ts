@@ -67,6 +67,17 @@ export const SANDBOX_ENV = ['NODE_EXTRA_CA_CERTS', 'NODE_USE_SYSTEM_CA', 'SSL_CE
 /** Vercel's image with Node, git and the coding agents' CLIs already in it. */
 export const VERCEL_IMAGE = 'vercel/sandbox/universal'
 
+/** A command's word as an error may show it: a URL without the credential or query it may carry. */
+const bare = (word: string) => {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(word)) return word
+  try {
+    const url = new URL(word)
+    return `${url.protocol}//${url.host}${url.pathname}`
+  } catch {
+    return '<url>'
+  }
+}
+
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 /**
@@ -122,7 +133,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         // What it printed stays in the sandbox: an install's output can name private packages and registries.
         if (done && typeof done.exitCode === 'number' && done.exitCode !== 0) {
           await end(sandbox)
-          throw new Failure('runner_setup_failed', `Setting up the sandbox failed: \`${[cmd, ...args].join(' ')}\` exited ${done.exitCode}.`, { hint: 'The sandbox was removed. MUSTER_INSTALL names another muster to install.' })
+          throw new Failure('runner_setup_failed', `Setting up the sandbox failed: \`${[cmd!, ...args].map(bare).join(' ')}\` exited ${done.exitCode}.`, { hint: 'The sandbox was removed. MUSTER_INSTALL names another muster to install.' })
         }
       }
       // What the setup needed is closed before anything the agent decides runs.
