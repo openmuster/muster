@@ -13,7 +13,7 @@
       "steps": [
         {
           "key": "plan",
-          "text": "Plan this goal: {args.goal}\nIt was asked for on thread #{thread} of {channel}, which said:\n{thread.text}\nComplete this task with a short plan as its result: the files to change, and how to check the change works.",
+          "text": "Plan this goal: {args.goal}\nIt was asked for on thread #{thread} of {channel}.\n{thread.text}\nComplete this task with a short plan as its result: the files to change, and how to check the change works.",
           "labels": {
             "role": "plan"
           }
@@ -61,7 +61,7 @@
       "steps": [
         {
           "key": "review",
-          "text": "Review the change discussed in thread #{thread} of {channel}, which said:\n{thread.text}\nCheck the work, and complete this task with what you found.",
+          "text": "Review the change discussed in thread #{thread} of {channel}.\n{thread.text}\nCheck the work, and complete this task with what you found.",
           "labels": {
             "role": "review"
           }
