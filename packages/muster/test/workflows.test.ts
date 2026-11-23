@@ -633,6 +633,7 @@ describe('the daemon starts a requested workflow', () => {
     const team = board({ backend: real })
     const daemon = board({ backend })
     const rec = recorder(undefined, () => time.now().getTime())
+    await team.createChannel({ path: 'work/secret', private: true })
     const root = await team.post({ channel: 'work/app', text: 'ship' })
     await runWorkflows(daemon, [release], rec.deps)
     return { team, daemon, rec, root, tick: () => runWorkflows(daemon, [release], rec.deps) }
@@ -649,6 +650,17 @@ describe('the daemon starts a requested workflow', () => {
     expect(await tick()).toEqual({ started: [], refused: [stuck.seq, next.seq], why: `release ${stuck.seq}: gave up after 5 tries: The board said bad_answer.` })
     expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start release: The board said bad_answer. (gave up after 5 tries)", "deploy isn't registered here"])
     expect(rec.spawned).toEqual([])
+  })
+
+  it("starts a private thread's run held once before its plan landed: the channel it made is its own", async () => {
+    let fails = 1
+    const { team, rec, tick } = await flaky('taskPlan', 'busy', () => fails-- > 0)
+    const secret = await team.post({ channel: 'work/secret', text: 'rotate the keys' })
+    const { seq } = await team.workflowRequest({ name: 'release', on: secret.id })
+    expect((await tick()).started).toEqual([])
+    expect(await tick()).toEqual({ started: [seq], refused: [] })
+    expect(rec.spawned).toHaveLength(2)
+    expect((await repliesOn(team, secret.id)).map((reply) => reply.text)).toEqual([`started release: 2 tasks in work/secret/release-${seq}`])
   })
 
   it('starts a request held twice normally on the third tick, and never starts its workers twice', async () => {

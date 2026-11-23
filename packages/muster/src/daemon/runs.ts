@@ -27,10 +27,12 @@ export type OpenRuns = {
    * daemon that starts again; this covers what comes before it.)
    */
   crews: Map<number, { text: string; failed: string } | null>
+  /** The private run channels this daemon made, by seq, so a request held before its plan landed isn't taken for someone else's. */
+  made: Set<number>
 }
 
 /** A new daemon's: nothing known yet, so its first tick rebuilds it from the board. */
-export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map() })
+export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map(), made: new Set() })
 
 /** How many ticks a request may be held before the daemon gives up on it, says so, and reads on. */
 export const MAX_TRIES = 5
@@ -224,6 +226,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
     }
     deps.runs.tries.delete(event.seq)
     deps.runs.crews.delete(event.seq)
+    deps.runs.made.delete(event.seq)
     await team.cursorSet(REQUESTS_CURSOR, event.seq)
     // Answered: from here its run, if it has one, is looked at until it is summed up.
     open.set(event.seq, event)
@@ -460,7 +463,8 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     // A run of a private thread is private: only a token that names its channel reads it. (A request
     // recorded before the board said whether its channel was private is taken to be.)
     const made = await writer.createChannel({ path: run, private: true })
-    if (!made.created) {
+    if (made.created) deps.runs.made.add(on.seq)
+    else if (!deps.runs.made.has(on.seq)) {
       // Made before: by this daemon, which then wrote its plan there, or by someone who saw what the run
       // would be called, as a channel that isn't private. Only the first is used.
       const mine = (await team.readChannel({ channel: run, labels: [`request=${on.seq}`], limit: LIMITS.readMax })).threads.some((each) => each.task !== null && byDaemon(each))
