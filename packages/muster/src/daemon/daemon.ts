@@ -7,6 +7,7 @@ import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { takeLock } from './lock.ts'
 import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
+import { loadWorkflows, workflowsPath, type Workflow } from './workflows.ts'
 import { runWatcher, type Deps, type Watcher, type WatchState } from './watchers.ts'
 
 export const watchersPath = () => join(configDir(), 'watchers.json')
@@ -42,15 +43,21 @@ export function loadWatchers(path = watchersPath()): Watcher[] {
 }
 
 /**
- * Everything the daemon runs from the operator's config: watchers and outgoing webhooks. `mu daemon check`
- * takes either by name, so one name can't be both.
+ * Everything the daemon runs from the operator's config: watchers, outgoing webhooks and registered
+ * workflows. `mu daemon check` takes a watcher or a hook by name, so one name can't be both, and a
+ * workflow keeps its name to itself too.
  */
-export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): { watchers: Watcher[]; hooks: Hook[]; arm: () => ArmedHook[] } {
+export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): { watchers: Watcher[]; hooks: Hook[]; workflows: Workflow[]; arm: () => ArmedHook[] } {
   const watchers = loadWatchers()
   const hooks = loadHooks()
   const both = hooks.find((hook) => watchers.some((watcher) => watcher.name === hook.name))
   if (both) throw new Failure('invalid_config', `A watcher in ${watchersPath()} and a hook in ${hooksPath()} are both named "${both.name}".`)
-  return { watchers, hooks, arm: () => armHooks(hooks, env) }
+  const workflows = loadWorkflows()
+  for (const workflow of workflows) {
+    if (watchers.some((watcher) => watcher.name === workflow.name)) throw new Failure('invalid_config', `A workflow in ${workflowsPath()} and a watcher in ${watchersPath()} are both named "${workflow.name}".`)
+    if (hooks.some((hook) => hook.name === workflow.name)) throw new Failure('invalid_config', `A workflow in ${workflowsPath()} and a hook in ${hooksPath()} are both named "${workflow.name}".`)
+  }
+  return { watchers, hooks, workflows, arm: () => armHooks(hooks, env) }
 }
 
 const WATCHER_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_URL']
