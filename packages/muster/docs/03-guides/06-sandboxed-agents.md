@@ -98,9 +98,11 @@ request to that host is refused.
 Without the variable, `mu run` warns and starts the agent anyway, which works
 only if the sandbox's image has a sign-in of its own.
 
-The Vercel runner starts from `vercel/sandbox/universal`, and signs in to
-Vercel the way `@vercel/sandbox` does: a linked project's `VERCEL_OIDC_TOKEN`,
-or a token with a team and project.
+The Vercel runner starts from `vercel/sandbox/universal`. It signs in to
+Vercel with an access token when `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and
+`VERCEL_PROJECT_ID` are all set, and otherwise with a linked project's
+`VERCEL_OIDC_TOKEN`, from `vercel env pull`. Only some of the three is an
+error. None of them enters the sandbox.
 
 ## Where the credential is
 
