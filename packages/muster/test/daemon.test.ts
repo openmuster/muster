@@ -342,7 +342,7 @@ describe('watchers', () => {
     expect(loadWatchers(path)).toEqual([])
     writeFileSync(path, JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }] }))
     expect(loadWatchers(path)).toEqual([{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }])
-    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]']) {
+    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]', '[{"name": "a", "tail": {"for": ""}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": "lead+"}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": 3}, "run": ["x"]}]']) {
       writeFileSync(path, bad)
       expect(() => loadWatchers(path)).toThrow(/watchers\.json|Watcher|watchers/)
     }
@@ -515,6 +515,20 @@ describe('checking a watcher', () => {
 
   it('reports who answered when the command wakes something that replies', async () => {
     const dir = setUp([process.execPath, BIN, 'reply', '{thread}', 'here'])
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s'])
+    daemon.child.kill('SIGTERM')
+    await daemon.done
+    expect([run.code, run.stderr]).toEqual([0, ''])
+    expect(run.stdout).toMatch(/^answered {2}#2 {2}by .*lead.* {2}in \d+s?/)
+  }, 30_000)
+
+  it('checks a watcher for a profile end to end, on a board where that profile never wrote', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work', for: 'lead' }, run: [process.execPath, BIN, 'reply', '{thread}', 'here'], as: 'lead', every: 1 }] }))
     await cli(dir, ['post', 'general', 'board exists'])
     const daemon = cliStart(dir, ['daemon', 'run'])
     await new Promise((resolve) => setTimeout(resolve, 1500))

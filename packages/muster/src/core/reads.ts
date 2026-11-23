@@ -118,12 +118,20 @@ type Compiled = {
   for: { id: string; principal: string; profile: string | null } | null
 }
 
+/** Checks what a `for` filter names: a profile name, or a whole actor ID whose profile part, if any, is one. */
+export function forName(value: string): string {
+  if (!/[:+]/.test(value)) return profileName(value)
+  if (value.includes('+')) profileName(value.slice(value.indexOf('+') + 1))
+  return value
+}
+
 /** Who a `for` filter is for. A bare name is one of the caller's profiles; anything else is a whole actor ID, with or without a profile. */
 function forTarget(value: string, caller: Caller): NonNullable<Compiled['for']> {
-  if (!/[:+]/.test(value)) return { id: `${caller.principal}+${profileName(value)}`, principal: caller.principal, profile: value }
+  forName(value)
+  if (!/[:+]/.test(value)) return { id: `${caller.principal}+${value}`, principal: caller.principal, profile: value }
   const plus = value.indexOf('+')
   if (plus === -1) return { id: value, principal: value, profile: null }
-  return { id: value, principal: value.slice(0, plus), profile: profileName(value.slice(plus + 1)) }
+  return { id: value, principal: value.slice(0, plus), profile: value.slice(plus + 1) }
 }
 
 function compile(filter: Filter, caller: Caller): Compiled {
