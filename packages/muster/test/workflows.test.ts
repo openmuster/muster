@@ -622,6 +622,48 @@ describe('the daemon starts a requested workflow', () => {
     }
   })
 
+  /** A board whose `method` throws `reason` while `failing()` says so, and its daemon, ticked once. */
+  const flaky = async (method: 'taskPlan' | 'post', reason: string, failing: () => boolean) => {
+    const time = clock()
+    const real = file({ memory: true, principal: OWNER, now: time.now })
+    const backend = { ...real, [method]: async (...args: unknown[]) => {
+      if (failing()) throw new Failure(reason, `The board said ${reason}.`)
+      return (real[method] as (...a: unknown[]) => unknown)(...args)
+    } } as typeof real
+    const team = board({ backend: real })
+    const daemon = board({ backend })
+    const rec = recorder(undefined, () => time.now().getTime())
+    const root = await team.post({ channel: 'work/app', text: 'ship' })
+    await runWorkflows(daemon, [release], rec.deps)
+    return { team, daemon, rec, root, tick: () => runWorkflows(daemon, [release], rec.deps) }
+  }
+
+  it('gives up on a request that is held tick after tick, says so after 5, and reads on', async () => {
+    const { team, rec, root, tick } = await flaky('taskPlan', 'bad_answer', () => true)
+    const stuck = await team.workflowRequest({ name: 'release', on: root.id })
+    const next = await team.workflowRequest({ name: 'deploy', on: root.id })
+    for (let i = 1; i < 5; i++) {
+      expect(await tick()).toEqual({ started: [], refused: [], why: 'The board said bad_answer.' })
+      expect(await team.cursorGet('workflow:requests')).toBe(stuck.seq - 1)
+    }
+    expect(await tick()).toEqual({ started: [], refused: [stuck.seq, next.seq], why: `release ${stuck.seq}: gave up after 5 tries: The board said bad_answer.` })
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start release: The board said bad_answer. (gave up after 5 tries)", "deploy isn't registered here"])
+    expect(rec.spawned).toEqual([])
+  })
+
+  it('starts a request held twice normally on the third tick, and never starts its workers twice', async () => {
+    // Held after its workers started: writing the run's first message fails twice.
+    let fails = 2
+    const { team, rec, root, tick } = await flaky('post', 'busy', () => fails-- > 0)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    expect((await tick()).started).toEqual([])
+    expect((await tick()).started).toEqual([])
+    expect(await tick()).toEqual({ started: [seq], refused: [] })
+    expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1', 'worker-2'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([`started release: 2 tasks in work/app/release-${seq}`])
+    expect(await openings(team, `work/app/release-${seq}`)).toHaveLength(1)
+  })
+
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {
     const exact = { ...release, channels: ['work'] }
     const { team, root, rec } = await ready([exact])

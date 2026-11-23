@@ -17,10 +17,23 @@ export type Spawner = (worker: { name: string; argv: string[]; cwd?: string }) =
  * seq. `null` until its first tick, which rebuilds it with one walk of the log from `workflow:reports`;
  * after that each tick only adds the requests it answers, so it never reads the log back again.
  */
-export type OpenRuns = { open: Map<number, BoardEvent> | null }
+export type OpenRuns = {
+  open: Map<number, BoardEvent> | null
+  /** How many ticks a request has been held by something that wasn't the board's answer, by seq. */
+  tries: Map<number, number>
+  /**
+   * The crews this daemon started, by seq, and how starting them ended, for a request held after its
+   * workers were started: a retry never starts them again. (The run's first message marks the same for a
+   * daemon that starts again; this covers what comes before it.)
+   */
+  crews: Map<number, { text: string; failed: string } | null>
+}
 
 /** A new daemon's: nothing known yet, so its first tick rebuilds it from the board. */
-export const openRuns = (): OpenRuns => ({ open: null })
+export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map() })
+
+/** How many ticks a request may be held before the daemon gives up on it, says so, and reads on. */
+export const MAX_TRIES = 5
 
 export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns }
 
@@ -193,12 +206,24 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         }
       }
       if (held !== null) {
-        // Not the board's answer to this request (busy, out of reach, a bug): read again next tick.
-        out.why = (held as Error).message
-        reached = event.seq - 1
-        break
+        // Not the board's answer to this request (busy, out of reach, a bug): read again next tick, up to
+        // MAX_TRIES ticks, so one request that never goes through can't hold every later one for good.
+        const message = (held as Error).message
+        const tries = (deps.runs.tries.get(event.seq) ?? 0) + 1
+        if (tries < MAX_TRIES) {
+          deps.runs.tries.set(event.seq, tries)
+          out.why = message
+          reached = event.seq - 1
+          break
+        }
+        out.why = `${name} ${event.seq}: gave up after ${MAX_TRIES} tries: ${message}`
+        // Said if the board will take it; passed over either way.
+        await say(event.seq, thread, `couldn't start ${name}: ${message} (gave up after ${MAX_TRIES} tries)`).catch(() => {})
+        out.refused.push(event.seq)
       }
     }
+    deps.runs.tries.delete(event.seq)
+    deps.runs.crews.delete(event.seq)
     await team.cursorSet(REQUESTS_CURSOR, event.seq)
     // Answered: from here its run, if it has one, is looked at until it is summed up.
     open.set(event.seq, event)
@@ -458,16 +483,22 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     (each) => each.task === null && byDaemon(each),
   )
   if (!opened) {
-    for (let i = 1; i <= workflow.workers.count; i++) {
-      try {
-        await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i, owner), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
-      } catch (error) {
-        // The ones already started keep running: say how many, as it is.
-        const reason = (error as Error).message
-        const text = i === 1 ? `couldn't start workers for ${workflow.name}: ${reason}` : `started ${i - 1} of ${workflow.workers.count} workers for ${workflow.name}, then: ${reason}`
-        return { text, failed: reason }
+    // Started on an earlier try of this request, which was then held: not started again.
+    if (!deps.runs.crews.has(on.seq)) {
+      let ended: { text: string; failed: string } | null = null
+      for (let i = 1; i <= workflow.workers.count && ended === null; i++) {
+        try {
+          await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i, owner), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })
+        } catch (error) {
+          // The ones already started keep running: say how many, as it is.
+          const reason = (error as Error).message
+          ended = { text: i === 1 ? `couldn't start workers for ${workflow.name}: ${reason}` : `started ${i - 1} of ${workflow.workers.count} workers for ${workflow.name}, then: ${reason}`, failed: reason }
+        }
       }
+      deps.runs.crews.set(on.seq, ended)
     }
+    const ended = deps.runs.crews.get(on.seq)
+    if (ended) return ended
     await writer.post({ channel: run, text: `${workflow.name}, asked for by ${actorId(on.by)} on #${on.thread}`, labels: { ...labels, thread: String(on.thread) }, idempotencyKey: `workflow-${on.seq}-run`, noSync: true })
   }
   return { text: `started ${workflow.name}: ${tasks.length} tasks in ${run}` }

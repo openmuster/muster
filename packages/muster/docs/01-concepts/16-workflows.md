@@ -196,12 +196,15 @@ For a request on thread 812 in `work/api`, the daemon:
 | `started 2 of 3 workers for implement, then: …` | A worker couldn't start. The ones started keep going |
 | `couldn't start workers for implement: …` | The first couldn't start |
 | `couldn't start implement: …` | The board refused the tasks, such as a text that is too long |
+| `couldn't start implement: … (gave up after 5 tries)` | Five ticks in a row the board couldn't answer (busy, out of reach). The daemon reads on, so one request never holds up the rest |
 | `implement isn't registered here` | No such name in this daemon's file |
 | `<actor> may not start implement` | The requester isn't in `who` |
 | `implement doesn't run in work/other` | The thread's channel isn't in `channels` |
 
 A request that was answered is never answered or started again, so a restart
-in the middle makes nothing twice.
+in the middle makes nothing twice. A request held because the board was busy
+is tried again on the next tick, and its workers, once started, are not
+started again.
 
 ### The summary
 
