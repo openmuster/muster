@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { loadDaemonConfig, tickOnce } from '../src/daemon/daemon.ts'
 import { append } from '../src/store/log.ts'
 import { openDb } from '../src/store/sqlite.ts'
-import { runWorkflows, type Spawner } from '../src/daemon/runs.ts'
+import { openRuns, runWorkflows, type Spawner } from '../src/daemon/runs.ts'
 import { loadWorkflows, type Workflow } from '../src/daemon/workflows.ts'
 import { randomBytes } from 'node:crypto'
 import { applyPolicy, board, boardPolicy, file, http, listen, mint } from '../src/index.ts'
@@ -261,7 +261,7 @@ describe('the daemon starts a requested workflow', () => {
       if (fail?.(calls)) throw new Error('spawn mu ENOENT')
       spawned.push(worker)
     }
-    return { spawned, deps: { spawn, now } }
+    return { spawned, deps: { spawn, now, runs: openRuns() } }
   }
   const argvFor = (workflow: Workflow, run: string, seq: number, i: number) => {
     const workers = workflow.workers
@@ -711,7 +711,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
   /** A board with one run started on it, its clock the board's own. */
   const started = async (workflow: Workflow = trio) => {
     const made = memoryBoard()
-    const deps = { spawn: async () => {}, now: () => made.time.now().getTime() }
+    const deps = { spawn: async () => {}, now: () => made.time.now().getTime(), runs: openRuns() }
     const root = await made.team.post({ channel: 'work/app', text: 'ship 1.2' })
     await runWorkflows(made.team, [workflow], deps)
     const { seq } = await made.team.workflowRequest({ name: workflow.name, on: root.id })
@@ -754,7 +754,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await reported(team, opening.id)).toBe(String(seq))
     // Said once: a second tick, and a daemon that starts again on the same board, say nothing more.
     expect(await tick()).toEqual({ started: [], refused: [] })
-    expect(await runWorkflows(board({ backend: team.backend }), [trio], { spawn: async () => {}, now: () => Date.now() })).toEqual({ started: [], refused: [] })
+    expect(await runWorkflows(board({ backend: team.backend }), [trio], { spawn: async () => {}, now: () => Date.now(), runs: openRuns() })).toEqual({ started: [], refused: [] })
     expect(await replies()).toHaveLength(2)
   })
 
@@ -853,7 +853,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     const one: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }], workers: { ...trio.workers, count: 2 } }
     let calls = 0
     // The second worker won't start, so the daemon makes the tasks and never writes the run's first message.
-    const deps = { spawn: async () => { if (++calls === 2) throw new Error('spawn mu ENOENT') }, now: () => time.now().getTime() }
+    const deps = { spawn: async () => { if (++calls === 2) throw new Error('spawn mu ENOENT') }, now: () => time.now().getTime(), runs: openRuns() }
     const root = await team.post({ channel: 'work/app', text: 'ship' })
     await runWorkflows(team, [one], deps)
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
@@ -941,17 +941,43 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await team.cursorGet('workflow:reports')).toBe(requests)
   })
 
-  it('never looks at a run before its cursor', async () => {
-    const { team, seq, tasks, tick, replies, complete } = await started(one)
+  it('a daemon that starts again never looks at a run before its cursor', async () => {
+    const { team, seq, tasks, replies, complete, deps } = await started(one)
     await complete(tasks[0]!.id, 'done')
     await team.cursorSet('workflow:reports', seq)
-    expect(await tick()).toEqual({ started: [], refused: [] })
+    // A new daemon rebuilds what is open from the cursor on, so the run before it isn't among them.
+    expect(await runWorkflows(team, [one], { ...deps, runs: openRuns() })).toEqual({ started: [], refused: [] })
     expect(await replies()).toHaveLength(1)
+  })
+
+  it('reads the log back once, when it starts: a tick with a run open reads only what came since, and a restart finds the run again', async () => {
+    const { team, seq, tasks, deps, replies, complete } = await started(one)
+    const afters: number[] = []
+    const counted: Board = { ...team, events: async (request) => (afters.push(request.after ?? 0), team.events(request)) }
+    const tick = () => runWorkflows(counted, [one], deps)
+    for (let i = 0; i < 3; i++) await team.post({ channel: 'random', text: `chat ${i}` })
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    expect(await tick()).toEqual({ started: [], refused: [] })
+    // Only new requests were read for, after the ones answered: never from before the run's request, which
+    // a read `after: seq - 1` or earlier would take in again.
+    expect(afters.length).toBeGreaterThan(0)
+    expect(afters.filter((after) => after < seq)).toEqual([])
+    expect(await team.cursorGet('workflow:reports')).toBe(seq - 1)
+    // A daemon that starts again walks from the reports cursor once, finds the run, and reports it.
+    await complete(tasks[0]!.id, 'done')
+    const fresh = { ...deps, runs: openRuns() }
+    afters.length = 0
+    expect(await runWorkflows(counted, [one], fresh)).toEqual({ started: [], refused: [], reported: [seq] })
+    expect(afters).toContain(seq - 1)
+    afters.length = 0
+    expect(await runWorkflows(counted, [one], fresh)).toEqual({ started: [], refused: [] })
+    expect(afters.filter((after) => after < seq)).toEqual([])
+    expect((await replies()).at(-1)).toMatch(/^release finished: 1 completed/)
   })
 
   it("doesn't pass a request the daemon hasn't read yet", async () => {
     const { team, time } = memoryBoard()
-    const deps = { spawn: async () => {}, now: () => time.now().getTime() }
+    const deps = { spawn: async () => {}, now: () => time.now().getTime(), runs: openRuns() }
     const root = await team.post({ channel: 'work/app', text: 'ship' })
     await runWorkflows(team, [one], deps)
     // More refusals than one tick reads, then a run: the first tick doesn't reach it.

@@ -12,7 +12,17 @@ import type { Workflow } from './workflows.ts'
  */
 export type Spawner = (worker: { name: string; argv: string[]; cwd?: string }) => void | Promise<void>
 
-export type RunDeps = { spawn: Spawner; now: () => number }
+/**
+ * What a daemon keeps between ticks: the requests it has answered whose runs aren't summed up yet, by
+ * seq. `null` until its first tick, which rebuilds it with one walk of the log from `workflow:reports`;
+ * after that each tick only adds the requests it answers, so it never reads the log back again.
+ */
+export type OpenRuns = { open: Map<number, BoardEvent> | null }
+
+/** A new daemon's: nothing known yet, so its first tick rebuilds it from the board. */
+export const openRuns = (): OpenRuns => ({ open: null })
+
+export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns }
 
 /** What a pass did. `reported` is there only when a run was summed up on its thread. */
 export type Ran = { started: number[]; refused: number[]; reported?: number[]; why?: string }
@@ -127,6 +137,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
     cursor = await team.head()
     await team.cursorSet(REQUESTS_CURSOR, cursor)
   }
+  const open = deps.runs.open ?? (deps.runs.open = await answeredSince(team, cursor))
   const page = await team.events({ after: cursor, filter: { types: ['workflow.requested'] }, limit: BATCH })
   const owner = (await team.whoami()).principal
   const writer = team.as(WORKFLOWS_PROFILE)
@@ -176,9 +187,11 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
       }
     }
     await team.cursorSet(REQUESTS_CURSOR, event.seq)
+    // Answered: from here its run, if it has one, is looked at until it is summed up.
+    open.set(event.seq, event)
   }
   if (reached > cursor) await team.cursorSet(REQUESTS_CURSOR, reached)
-  const done = await reportRuns(team, writer, workflows, owner, deps, cursor)
+  const done = await reportRuns(team, writer, workflows, owner, deps, open, Math.max(cursor, reached))
   if (done.reported.length > 0) out.reported = done.reported
   if (done.why !== undefined) out.why ??= done.why
   return out
@@ -230,53 +243,51 @@ function markStuck(tasks: RunTask[]): void {
 }
 
 /**
- * Says on the asking thread how each run went, once all its tasks have ended or its workflow's `timeout`
- * has passed since its first message was written. It walks the requests the daemon has answered, from
- * its own cursor on, and moves that cursor past those that need nothing more, so a tick's work is the
- * runs still open and no more. What a run is comes from its request and from what the board itself wrote
- * in its channel, never from labels or from the config: only the timeout is the config's. Each summary is
- * keyed and then marked in a reserved cursor, so it is said once, even by a daemon that stopped between.
+ * The requests answered since `workflow:reports`, up to `answered`: the runs that may still need a
+ * summary. One walk of the log, made when a daemon starts; ticks after it never read the log back.
  */
-async function reportRuns(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, start: number): Promise<{ reported: number[]; why?: string }> {
-  const reported: number[] = []
-  let why: string | undefined
-  let cursor = await team.cursorGet(REPORTS_CURSOR)
-  if (cursor === null) {
-    // New to the board: from where this daemon started reading requests.
-    cursor = start
-    await team.cursorSet(REPORTS_CURSOR, cursor)
+async function answeredSince(team: Board, answered: number): Promise<Map<number, BoardEvent>> {
+  const open = new Map<number, BoardEvent>()
+  let after = await team.cursorGet(REPORTS_CURSOR)
+  if (after === null) {
+    // New to the board: from where this daemon starts reading requests.
+    after = answered
+    await team.cursorSet(REPORTS_CURSOR, after)
   }
-  // Only requests already answered: one not yet read has no run yet, and must not be passed over.
-  const answered = (await team.cursorGet(REQUESTS_CURSOR)) ?? start
-  let after = cursor
-  let leading = true
-  let past = false
-  while (!past && after < answered) {
+  while (after < answered) {
     const page = await team.events({ after, filter: { types: ['workflow.requested'] }, limit: 200 })
-    for (const event of page.events) {
-      if (event.seq > answered) {
-        past = true
-        break
-      }
-      let done: boolean
-      try {
-        const state = await reportOne(team, writer, workflows, owner, deps, event)
-        if (state === 'reported') reported.push(event.seq)
-        done = state !== 'open'
-      } catch (error) {
-        // Tried again next tick; it holds the cursor, and holds up no other run.
-        why ??= `${(event.data as { name?: string }).name} ${event.seq}: ${(error as Error).message}`
-        done = false
-      }
-      if (leading && done) cursor = event.seq
-      else leading = false
-    }
-    if (page.events.length === 0 || page.cursor <= after) break
+    for (const event of page.events) if (event.seq <= answered) open.set(event.seq, event)
+    if (page.events.length === 0 || page.cursor <= after || page.events.at(-1)!.seq >= answered) break
     after = page.cursor
   }
-  // Nothing open anywhere in the walk: every request up to the answered ones needs nothing more, so the
-  // next tick starts there, not at the last request, and an idle tick reads only what came since.
-  if (leading) cursor = Math.max(cursor, answered)
+  return open
+}
+
+/**
+ * Says on the asking thread how each run went, once all its tasks have ended or can never start, or its
+ * `timeout` has passed since its first message was written. It looks only at the open runs the daemon
+ * keeps, drops each that needs nothing more, and moves `workflow:reports` to just before the oldest still
+ * open (or to `answered`, with none open), so a daemon that starts again rebuilds the same set. What a run
+ * is comes from its request and from what the board itself wrote in its channel, never from labels or from
+ * the config: only the timeout is the config's. Each summary is keyed and then marked in a reserved cursor,
+ * so it is said once, even by a daemon that stopped between.
+ */
+async function reportRuns(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, open: Map<number, BoardEvent>, answered: number): Promise<{ reported: number[]; why?: string }> {
+  const reported: number[] = []
+  let why: string | undefined
+  for (const seq of [...open.keys()].sort((x, y) => x - y)) {
+    const event = open.get(seq)!
+    try {
+      const state = await reportOne(team, writer, workflows, owner, deps, event)
+      if (state === 'reported') reported.push(seq)
+      if (state !== 'open') open.delete(seq)
+    } catch (error) {
+      // Tried again next tick; it stays open, and holds up no other run.
+      why ??= `${(event.data as { name?: string }).name} ${seq}: ${(error as Error).message}`
+    }
+  }
+  const oldest = Math.min(...open.keys())
+  const cursor = open.size === 0 ? answered : oldest - 1
   if (cursor > ((await team.cursorGet(REPORTS_CURSOR)) ?? 0)) await team.cursorSet(REPORTS_CURSOR, cursor)
   return { reported, ...(why !== undefined ? { why } : {}) }
 }

@@ -7,7 +7,7 @@ import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { takeLock } from './lock.ts'
 import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
-import { runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
+import { openRuns, runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
 import { loadWorkflows, workflowsPath, type Workflow } from './workflows.ts'
 import { runWatcher, type Deps, type Watcher, type WatchState } from './watchers.ts'
 
@@ -140,7 +140,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   const deps: Deps & HookDeps = { now: () => Date.now(), spawn: spawnCommand, fetch, ...options.deps }
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
-  const workflows: Workflows | undefined = options.workflows ? { list: options.workflows, deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now } } : undefined
+  const workflows: Workflows | undefined = options.workflows ? { list: options.workflows, deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now, runs: openRuns() } } : undefined
   try {
     while (!options.stop.aborted) {
       try {
