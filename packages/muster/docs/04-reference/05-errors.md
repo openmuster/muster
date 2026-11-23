@@ -46,6 +46,8 @@ claimed answers `task_ready`, with the claim to run first.
 | `too_many_labels` | Over 64 labels on a message, or over 64 unset in one change |
 | `nothing_to_label` | No label to set or unset |
 | `invalid_emoji` | Not an emoji name |
+| `invalid_workflow` | Not a workflow name: lowercase letters, numbers, `.`, `_` and `-` |
+| `invalid_args` | A workflow request's arguments: at most 10, named in lowercase and `_`, each value text up to 500 characters |
 | `label_conflict` | `--if` or `--if-unset` didn't hold. `data.labels` has them as they are |
 | `revision_conflict` | `--if-revision` named an old revision |
 | `newer_message` | Something landed after the `--after` message |

@@ -9,7 +9,7 @@ import { verify, type Claims } from './token.ts'
 
 /** What a client may call. `scheduleTick` is the ticker's, never a client's. */
 export const ROUTES = [
-  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel',
+  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
   'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head', 'cursorGet', 'cursorSet',
   'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
   'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',

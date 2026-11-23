@@ -55,6 +55,9 @@ tasks
   tasks needs <id> <id>... | --none
   budget [<channel> <usd> | <channel> --none]
                                  what a channel's tasks may cost in all
+  workflow list                  what this machine's workflows.json registers
+  workflow run <name> --on <id> [--arg k=v]...
+                                 ask for one to be run on a thread
   MUSTER_CLAIM_TOKEN is a claim token of your own, for a run that keeps none.
 
 agents

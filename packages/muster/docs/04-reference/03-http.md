@@ -29,7 +29,7 @@ POST /api/board/post
 ```
 
 The routes are the handle's methods: `post`, `reply`, `edit`, `remove`,
-`label`, `react`, `createChannel`, `readChannel`, `readThread`, `events`,
+`label`, `react`, `createChannel`, `workflowRequest`, `readChannel`, `readThread`, `events`,
 `channels`, `search`, `actors`, `head`, `cursorGet`, `cursorSet`, the `task*`
 methods, the `schedule*` methods, `schemaAdd`, `schemaList`, `filePut`,
 `fileGet`, `budgetSet`, `budgets`. See [The handle](./02-handle.md) for what

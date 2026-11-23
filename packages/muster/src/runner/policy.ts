@@ -10,7 +10,7 @@ export type NetworkPolicy = { allow: Record<string, Rule[]> }
  * is here because an agent doing a task needs it. A new route is closed to sandboxes until it is added.
  */
 export const SANDBOX_ROUTES = [
-  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel',
+  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
   'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head',
   'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
   'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',

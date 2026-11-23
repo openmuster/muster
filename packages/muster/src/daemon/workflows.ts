@@ -71,7 +71,7 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
     if (!Number.isInteger(w.count) || (w.count as number) < 1 || (w.count as number) > MAX_WORKERS) fail(`needs "workers.count" from 1 to ${MAX_WORKERS}.`)
     if (w.agent !== 'claude' && w.agent !== 'codex') fail('needs "workers.agent": "claude" or "codex".')
     if (typeof w.as !== 'string' || w.as === '') fail('needs "workers.as": the name the workers act as.')
-    if (w.runner !== undefined && w.runner !== 'local' && w.runner !== 'vercel') fail('has a "workers.runner" that is "local" or "vercel".')
+    if (w.runner !== undefined && w.runner !== 'local' && w.runner !== 'vercel') fail('needs a "workers.runner" of "local" or "vercel".')
     if (w.repo !== undefined && typeof w.repo !== 'string') fail('has a "workers.repo" that isn\'t a string.')
     if (w.cwd !== undefined && typeof w.cwd !== 'string') fail('has a "workers.cwd" that isn\'t a string.')
     if (w.push !== undefined && typeof w.push !== 'boolean') fail('has a "workers.push" that isn\'t true or false.')

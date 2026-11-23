@@ -11,6 +11,7 @@ import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Par
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
@@ -413,6 +414,29 @@ const commands: Record<string, Command> = {
       if (emoji === undefined) throw misuse('invalid_emoji', 'Name the emoji: mu react 812 eyes.')
       const message = await run.team.react({ id: id(parsed.positionals[0], 'the message to react to'), emoji, remove: on(parsed.flags, 'remove'), ...key(parsed.flags) })
       print(run, { message }, () => `${on(parsed.flags, 'remove') ? 'removed' : 'reacted'}  :${emoji.replace(/^:|:$/g, '')}:  #${message.id}`)
+    },
+  },
+
+  workflow: {
+    spec: { value: ['on'], many: ['arg'] },
+    async run(run, parsed) {
+      const verb = parsed.positionals[0]
+      if (verb === 'list') {
+        const workflows = loadWorkflows()
+        return print(run, { workflows }, () =>
+          workflows.length === 0
+            ? `no workflows in ${workflowsPath()}`
+            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}`).join('\n'),
+        )
+      }
+      if (verb === 'run') {
+        const name = parsed.positionals[1]
+        if (name === undefined) throw misuse('invalid_workflow', 'Name the workflow: mu workflow run release --on 812.')
+        const target = id(str(parsed.flags, 'on'), 'the thread to run it on (--on <id>)')
+        const sent = await run.team.workflowRequest({ name, on: target, args: pairs(list(parsed.flags, 'arg'), 'arg') })
+        return print(run, sent, () => `requested  ${name}  on #${target}  (seq ${sent.seq})`)
+      }
+      throw misuse('invalid_workflow', 'Use: mu workflow list, or mu workflow run <name> --on <id> [--arg k=v]...')
     },
   },
 

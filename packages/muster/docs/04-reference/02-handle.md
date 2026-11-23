@@ -50,6 +50,7 @@ await team.remove({ id: reply.id })
 | `remove` | `id`, `ifRevision?` | The tombstone |
 | `label` | `id`, `set?`, `unset?`, `if?`, `ifUnset?` | The message |
 | `react` | `id`, `emoji`, `remove?` | The message |
+| `workflowRequest` | `name`, `on`, `args?` | `{ seq }` |
 | `createChannel` | `path`, `private?` | `{ path, created }` |
 
 A message is `{ id, channel, thread, re, replyTo, by, text, labels, reactions,

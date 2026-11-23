@@ -6,6 +6,7 @@ import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
 import type * as schedules from '../core/schedules.ts'
 import type * as tasks from '../core/tasks.ts'
+import type * as workflows from '../core/workflows.ts'
 import type { Caller } from '../model.ts'
 
 type Op<F> = F extends (ctx: any, caller: Caller, request: infer R) => infer T ? (caller: Caller, request: R) => Promise<T> : never
@@ -49,6 +50,7 @@ export type Backend = {
   label: Op<typeof messages.label>
   react: Op<typeof messages.react>
   createChannel: Op<typeof messages.createChannel>
+  workflowRequest: Op<typeof workflows.request>
 
   readChannel: Op<typeof reads.readChannel>
   readThread: Op<typeof reads.readThread>
