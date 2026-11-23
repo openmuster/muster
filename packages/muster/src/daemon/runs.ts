@@ -224,10 +224,12 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         out.refused.push(event.seq)
       }
     }
+    await team.cursorSet(REQUESTS_CURSOR, event.seq)
+    // Forgotten only once the cursor has moved: if that write is held, the request is read again, and
+    // what it remembers is what keeps a partial start from spawning its workers twice.
     deps.runs.tries.delete(event.seq)
     deps.runs.crews.delete(event.seq)
     deps.runs.made.delete(event.seq)
-    await team.cursorSet(REQUESTS_CURSOR, event.seq)
     // Answered: from here its run, if it has one, is looked at until it is summed up.
     open.set(event.seq, event)
   }

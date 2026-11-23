@@ -676,6 +676,30 @@ describe('the daemon starts a requested workflow', () => {
     expect(await openings(team, `work/app/release-${seq}`)).toHaveLength(1)
   })
 
+  it('forgets a request only after its cursor moved: a partial start is never re-spawned when the cursor write is held', async () => {
+    const time = clock()
+    const real = file({ memory: true, principal: OWNER, now: time.now })
+    let held = 0
+    const backend = { ...real, cursorSet: async (caller: Parameters<typeof real.cursorSet>[0], name: string, seq: number) => {
+      if (name === 'workflow:requests' && held-- > 0) throw new Failure('busy', 'The board is busy: other writers held it too long.')
+      return real.cursorSet(caller, name, seq)
+    } } as typeof real
+    const team = board({ backend: real })
+    const daemon = board({ backend })
+    // Worker 2 of 2 won't start: a partial start.
+    const rec = recorder((call) => call === 2, () => time.now().getTime())
+    const root = await team.post({ channel: 'work/app', text: 'ship' })
+    await runWorkflows(daemon, [release], rec.deps)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    held = 1
+    await expect(runWorkflows(daemon, [release], rec.deps)).rejects.toThrow('busy')
+    expect(await team.cursorGet('workflow:requests')).toBeLessThan(seq)
+    await runWorkflows(daemon, [release], rec.deps)
+    // Worker 1 is spawned once across both ticks: a partial start is never re-spawned.
+    expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1'])
+    expect(await team.cursorGet('workflow:requests')).toBeGreaterThanOrEqual(seq)
+  })
+
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {
     const exact = { ...release, channels: ['work'] }
     const { team, root, rec } = await ready([exact])
