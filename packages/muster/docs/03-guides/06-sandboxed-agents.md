@@ -104,8 +104,15 @@ The agent needs `mu` and its own CLI where it runs.
   install. The agent's CLI has to be in the sandbox's image already:
   `vercel/sandbox/universal` has Claude Code, Codex, git, gh, npm, pnpm and
   bun.
-- **Your repository, on Vercel.** `--repo` is cloned when the sandbox is
-  made, into `/vercel/<name>`, and the agent starts there. Its dependencies
+- **A base, on Vercel.** Installing muster happens once per version, not per
+  run: the first run makes a kept sandbox named `muster-base-<hash>` with
+  muster installed and nothing else in it, no credential, repository or
+  environment, and every run after is forked from it. A run that finds the
+  base being made waits for it; one made for a newer muster removes the old.
+  `MUSTER_VERCEL_BASE=off` sets each run up from nothing instead. A kept base
+  stays in your Vercel project until a newer one replaces it.
+- **Your repository, on Vercel.** `--repo` is cloned into `/vercel/<name>`
+  as the run starts, before anything of it runs, and the agent starts there. Its dependencies
   are installed the way its lockfile says (pnpm, npm, yarn or bun, at the
   version `packageManager` pins), with no install scripts, the
   dependencies' own included. `--no-install` skips it. A failed install

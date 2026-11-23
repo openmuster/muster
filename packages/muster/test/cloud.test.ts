@@ -250,6 +250,93 @@ describe('cloud runners', () => {
     expect(plain.installed).toBeUndefined()
   })
 
+  /** A stand-in for the SDK with kept sandboxes: create, fork, get, list, and what each one holds. */
+  const keeping = () => {
+    const calls: any[] = []
+    const kept = new Map<string, { status: string; files: Set<string>; env: Record<string, string> }>()
+    const made = (name: string | undefined, files: Set<string>, env: Record<string, string>) => ({
+      name: name ?? `sbx-${calls.length}`,
+      runCommand: async (command: any) => {
+        calls.push(['run', name ?? 'fork', [command.cmd, ...command.args].join(' ')])
+        if (command.cmd === 'touch') files.add(command.args[0])
+        if (command.cmd === 'test') return { exitCode: files.has(command.args[1]) ? 0 : 1 }
+        return command.detached ? {} : { exitCode: 0, stdout: async () => '' }
+      },
+      update: async (options: any) => void calls.push(['update', name ?? 'fork', options.networkPolicy === 'deny-all' ? 'deny-all' : Object.keys(options.networkPolicy.allow)]),
+      stop: async () => {
+        calls.push(['stop', name ?? 'fork'])
+        if (name && kept.has(name)) kept.get(name)!.status = 'stopped'
+      },
+      delete: async () => {
+        calls.push(['delete', name ?? 'fork'])
+        if (name) kept.delete(name)
+      },
+    })
+    const Sandbox = {
+      create: async (options: any) => {
+        calls.push(['create', options.name ?? null, options.persistent, Object.keys(options.networkPolicy.allow), Object.keys(options.env)])
+        if (options.name) {
+          if (kept.has(options.name)) throw new Error('name taken')
+          kept.set(options.name, { status: 'running', files: new Set(), env: options.env })
+          return made(options.name, kept.get(options.name)!.files, options.env)
+        }
+        return made(undefined, new Set(), options.env)
+      },
+      fork: async (options: any) => {
+        calls.push(['fork', options.sourceSandbox, options.persistent, Object.keys(options.networkPolicy.allow)])
+        return made(undefined, new Set(kept.get(options.sourceSandbox)!.files), options.env)
+      },
+      get: async ({ name }: any) => {
+        const one = kept.get(name)
+        if (!one) throw new Error('404')
+        return { status: one.status, delete: async () => (calls.push(['delete', name]), kept.delete(name)) }
+      },
+      list: async ({ namePrefix }: any) => [...kept.keys()].filter((name) => name.startsWith(namePrefix)).map((name) => ({ name })),
+    }
+    return { calls, kept, Sandbox }
+  }
+
+  it('vercel: with a base, setup runs once in a kept sandbox that holds no credential, and each run is forked from it and clones the repository itself', async () => {
+    const { calls, kept, Sandbox } = keeping()
+    const runner = vercel({ Sandbox, setupHosts: ['github.com'], base: true })
+    await runner.start(request)
+    const [base] = [...kept.keys()]
+    expect(base).toMatch(/^muster-base-[0-9a-f]{12}$/)
+    // The base: kept, made under the setup's hosts alone and an empty environment, set up, marked, and stopped to save it.
+    expect(calls[0]).toEqual(['create', base, true, ['github.com'], []])
+    expect(calls.slice(1, 4)).toEqual([['run', base, 'npm install -g https://example.com/muster.tgz'], ['run', base, `touch /vercel/.muster-base-ready`], ['stop', base]])
+    // The run: forked, not kept, checked, the repository cloned, and the agent's policy before the agent.
+    expect(calls[4]).toEqual(['fork', base, false, ['github.com', 'codeload.github.com']])
+    expect(calls.slice(5, 7).map((call) => call[2])).toEqual(['test -f /vercel/.muster-base-ready', 'git clone --quiet -- https://github.com/acme/web.git /vercel/web'])
+    expect(calls.some((call) => call[0] === 'run' && call[1] === 'fork' && String(call[2]).startsWith('npm install'))).toBe(false)
+    // The next run forks the same base and sets nothing up again.
+    calls.length = 0
+    await runner.start(request)
+    expect(calls.filter((call) => call[0] === 'create')).toEqual([])
+    expect(calls[0]).toEqual(['fork', base, false, ['github.com', 'codeload.github.com']])
+    // Another version of muster makes another base, and the old one goes.
+    calls.length = 0
+    await runner.start({ ...request, setup: [['npm', 'install', '-g', 'https://example.com/muster-2.tgz']] })
+    expect([...kept.keys()]).toHaveLength(1)
+    expect([...kept.keys()][0]).not.toBe(base)
+    expect(calls).toContainEqual(['delete', base])
+  })
+
+  it('vercel: a base whose making was cut short is removed, and the run is set up the long way', async () => {
+    const { calls, kept, Sandbox } = keeping()
+    const runner = vercel({ Sandbox, setupHosts: ['github.com'], base: true })
+    await runner.start(request)
+    const [base] = [...kept.keys()]
+    kept.get(base!)!.files.clear()
+    calls.length = 0
+    await runner.start(request)
+    expect(calls).toContainEqual(['delete', base])
+    // Made fresh, with Vercel's own clone, and set up in it.
+    const fresh = calls.find((call) => call[0] === 'create' && call[1] === null)
+    expect(fresh).toBeDefined()
+    expect(calls).toContainEqual(['run', 'fork', 'npm install -g https://example.com/muster.tgz'])
+  })
+
   it('vercel: ending a run closes its way out and removes the sandbox, so nothing of it is kept', async () => {
     const calls: unknown[] = []
     const made = { name: 'sbx-5', runCommand: async () => {}, update: async (options: any) => void calls.push(['update', options.networkPolicy === 'deny-all' ? 'deny-all' : 'policy']), delete: async () => void calls.push(['delete']), stop: async () => void calls.push(['stop']) }

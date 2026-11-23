@@ -1514,7 +1514,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
       throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
     }
     // GitHub is open only while mu installs; the agent starts with it closed.
-    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env) })
+    // A kept base with muster installed is forked for each run, unless MUSTER_VERCEL_BASE=off.
+    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env), base: env.MUSTER_VERCEL_BASE !== 'off' })
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null

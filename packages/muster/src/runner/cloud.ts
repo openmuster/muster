@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Agent, PermissionMode } from './agents.ts'
 import { Failure } from '../failure.ts'
 import { gitRules, githubRepo } from './github.ts'
@@ -92,21 +93,35 @@ async function stdoutOf(done: Finished | void): Promise<string> {
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
 const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
 
+/** A sandbox as the SDK hands it back. */
+export type VercelMade = {
+  sandboxId?: string
+  name?: string
+  /** A finished command has its `exitCode`; a detached one can be waited on. Older stand-ins return nothing. */
+  runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; cwd?: string }): Promise<Finished | void>
+  /** A file in the sandbox, as a stream, or null when there is none. */
+  readFile?(file: { path: string }): Promise<NodeJS.ReadableStream | null>
+  /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
+  update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
+  stop(): Promise<unknown>
+  /** Removes the sandbox and what it kept. */
+  delete?(): Promise<unknown>
+}
+
+type Made = VercelMade
+
+/** What a new sandbox is made with. */
+type CreateOptions = { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; name?: string; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>
+
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
-  create(options: { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>): Promise<{
-    sandboxId?: string
-    name?: string
-    /** A finished command has its `exitCode`; a detached one can be waited on. Older stand-ins return nothing. */
-    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; cwd?: string }): Promise<Finished | void>
-    /** A file in the sandbox, as a stream, or null when there is none. */
-    readFile?(file: { path: string }): Promise<NodeJS.ReadableStream | null>
-    /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
-    update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
-    stop(): Promise<unknown>
-    /** Removes the sandbox and what it kept. */
-    delete?(): Promise<unknown>
-  }>
+  create(options: CreateOptions): Promise<Made>
+  /** A new sandbox from a stopped, kept one: what was saved in it is there. */
+  fork?(options: Omit<CreateOptions, 'source' | 'image' | 'name'> & { sourceSandbox: string }): Promise<Made>
+  /** A sandbox by its name. */
+  get?(options: { name: string } & Partial<VercelCredentials>): Promise<{ status?: string; delete?(): Promise<unknown> }>
+  /** Sandboxes whose names start with `namePrefix`. */
+  list?(options: { namePrefix: string } & Partial<VercelCredentials>): Promise<AsyncIterable<{ name?: string }> | Iterable<{ name?: string }>>
 }
 
 /**
@@ -128,6 +143,58 @@ const bare = (word: string) => {
   } catch {
     return '<url>'
   }
+}
+
+/** What a finished base holds: one whose making was cut short has no such file. */
+const BASE_READY = '/vercel/.muster-base-ready'
+const BUILDING = new Set(['pending', 'running', 'snapshotting', 'stopping'])
+
+/**
+ * The kept sandbox runs are forked from: the image with `setup` run in it, and nothing else, no
+ * credential, repository or environment. Named by what goes in it, so it is made once per version of
+ * muster, and a run that finds another making it waits. Making one removes the older ones. Null when
+ * there is none to fork, and the run is set up the long way.
+ */
+async function baseSandbox(options: { Sandbox: VercelSandbox; setupHosts?: string[]; image?: string; credentials?: VercelCredentials }, setup: string[][]): Promise<string | null> {
+  const S = options.Sandbox
+  const image = options.image ?? VERCEL_IMAGE
+  const name = `muster-base-${createHash('sha256').update(image).update(JSON.stringify(setup)).digest('hex').slice(0, 12)}`
+  const status = async () => (S.get ? ((await S.get({ ...options.credentials, name }).catch(() => null))?.status ?? null) : null)
+  if ((await status()) === null) {
+    let made: Made | undefined
+    try {
+      made = await S.create({ ...options.credentials, name, image, persistent: true, timeout: 15 * 60_000, env: {}, networkPolicy: { allow: Object.fromEntries((options.setupHosts ?? []).map((host) => [host, []])) } })
+    } catch {
+      // Another run is making it, under the same name: wait for it below.
+    }
+    if (made) {
+      try {
+        for (const [cmd, ...args] of setup) {
+          const done = await made.runCommand({ cmd: cmd!, args })
+          if (done && typeof done.exitCode === 'number' && done.exitCode !== 0) throw new Error('setup failed')
+        }
+        await made.runCommand({ cmd: 'touch', args: [BASE_READY] })
+        // Stopping a kept sandbox saves it: that is what forks start from.
+        await made.stop()
+      } catch {
+        await (made.delete?.() ?? made.stop()).catch(() => {})
+        return null
+      }
+      if (S.list && S.get) {
+        for await (const other of await S.list({ ...options.credentials, namePrefix: 'muster-base-' }).catch(() => [] as { name?: string }[])) {
+          if (other.name && other.name !== name) await S.get({ ...options.credentials, name: other.name }).then((kept) => kept.delete?.()).catch(() => {})
+        }
+      }
+      return name
+    }
+  }
+  for (let waited = 0; waited < 8 * 60_000; waited += 5000) {
+    const now = await status()
+    if (now === null) return null
+    if (!BUILDING.has(now)) return name
+    await new Promise((resolve) => setTimeout(resolve, 5000))
+  }
+  return null
 }
 
 /** Where Vercel clones `source`: beside the sandbox's home, under the repository's own name. */
@@ -161,7 +228,7 @@ const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
  * and nothing to steal.
  */
 /** Ends a sandbox so nothing of it is left: its way out is closed first, then it is removed, or stopped where it can't be. */
-async function end(sandbox: Awaited<ReturnType<VercelSandbox['create']>>): Promise<void> {
+async function end(sandbox: Made): Promise<void> {
   await sandbox.update?.({ networkPolicy: 'deny-all' }).catch(() => {})
   if (sandbox.delete) await sandbox.delete().catch(() => sandbox.stop())
   else await sandbox.stop()
@@ -171,7 +238,7 @@ async function end(sandbox: Awaited<ReturnType<VercelSandbox['create']>>): Promi
  * `setupHosts` are open while the setup commands run, which are ours, and closed before the agent
  * starts. `allowHosts` stay open to the agent, so each one is a way out of the sandbox: add few.
  */
-export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string; credentials?: VercelCredentials }): CloudRunner {
+export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<string, never[]>; setupHosts?: string[]; image?: string; credentials?: VercelCredentials; base?: boolean }): CloudRunner {
   return {
     name: 'vercel',
     async start(request) {
@@ -189,7 +256,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       if (model && request.model) {
         allow[model.host] = [...model.paths.map((regex) => ({ match: { path: { regex }, method: ['POST'] }, transform: [{ headers: { ...model.headers(request.model!.key), host: model.host } }] })), { response: { statusCode: 403 } }]
       }
-      const setup = request.setup ?? []
+      let setup = request.setup ?? []
       const dir = request.repo ? repoDir(request.repo) : undefined
       const install = Boolean(dir && request.install)
       // Setting up needs the network, and the credentials have no part in it: it runs under a policy with
@@ -202,14 +269,41 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
       const github = dir && request.github ? githubRepo(request.repo!) : null
       const cloning: Record<string, VercelRule[]> | null = github ? { ...hosts(options.setupHosts ?? []), 'codeload.github.com': [], ...gitRules(github, request.github!.token) } : null
       const during: Record<string, VercelRule[]> = install ? { '*': [] } : hosts([...(options.setupHosts ?? []), ...(dir ? CLONE_HOSTS : [])])
-      const sandbox = await options.Sandbox.create({
+      const first: Record<string, VercelRule[]> = cloning ?? (preparing ? during : allow)
+      const sandboxEnv = { ...env, ...(model ? model.env(PLACEHOLDER) : {}), ...request.env, MUSTER_TASK: String(request.task) }
+      // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
+      let sandbox: Made | undefined
+      if (options.base && options.Sandbox.fork && setup.length > 0) {
+        // Forked from a kept sandbox that holds what setup installs and nothing else, so setup runs once per
+        // version of it. The repository is then cloned here, under the same policy Vercel's clone would have.
+        const base = await baseSandbox(options, setup).catch(() => null)
+        if (base) {
+          sandbox = await options.Sandbox.fork({ ...options.credentials, sourceSandbox: base, networkPolicy: { allow: first }, persistent: false, env: sandboxEnv, ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}) })
+          const ready = await sandbox.runCommand({ cmd: 'test', args: ['-f', BASE_READY] })
+          if (ready && typeof ready.exitCode === 'number' && ready.exitCode !== 0) {
+            // A base whose making was cut short: it goes, and this run is set up the long way.
+            await end(sandbox)
+            await options.Sandbox.get?.({ ...options.credentials, name: base }).then((kept) => kept.delete?.()).catch(() => {})
+            sandbox = undefined
+          } else {
+            setup = []
+            if (request.repo) {
+              const cloned = await sandbox.runCommand({ cmd: 'git', args: ['clone', '--quiet', '--', request.repo, dir!] })
+              if (cloned && typeof cloned.exitCode === 'number' && cloned.exitCode !== 0) {
+                await end(sandbox)
+                throw new Failure('runner_setup_failed', `Cloning ${bare(request.repo)} in the sandbox failed (exit ${cloned.exitCode}).`, { hint: 'A private repository needs a GitHub App installed on it.' })
+              }
+            }
+          }
+        }
+      }
+      sandbox ??= await options.Sandbox.create({
         // Without these the SDK signs in with VERCEL_OIDC_TOKEN. They go to Vercel's API, never into the sandbox.
         ...options.credentials,
-        networkPolicy: { allow: cloning ?? (preparing ? during : allow) },
+        networkPolicy: { allow: first },
         image: options.image ?? VERCEL_IMAGE,
-        // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
         persistent: false,
-        env: { ...env, ...(model ? model.env(PLACEHOLDER) : {}), ...request.env, MUSTER_TASK: String(request.task) },
+        env: sandboxEnv,
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
