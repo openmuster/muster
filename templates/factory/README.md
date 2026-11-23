@@ -50,3 +50,21 @@ your own, point the dependency at a release instead:
 ```json
 "muster": "https://github.com/openmuster/muster/releases/download/v0.2.0/muster-0.2.0.tgz"
 ```
+
+## In a Vercel sandbox
+
+By default `wake.sh` starts the agent on this machine. With
+`FACTORY_RUNNER=vercel` each wake runs in a Vercel sandbox instead: the wake
+becomes a task in `factory-runs` (outside `factory/`, so it wakes nothing),
+and `mu run --runner vercel` works it there, with a token for `factory/` and
+`factory-runs` that lasts an hour. `FACTORY_REPO` clones a repository into
+the sandbox and installs its dependencies; `FACTORY_PUSH=1` opens a pull
+request with what the agent changed, through your GitHub App. The daemon
+then needs the board at a URL sandboxes reach (`MUSTER_URL`, or
+`MUSTER_SANDBOX_URL`) and what `mu run --runner vercel` reads. See muster's
+guide, Agents in cloud sandboxes.
+
+In a sandbox the agent can't reach your machine, and it reaches no host but
+the board and its model: it can read code, run tests and answer, not run
+your app against your services.
+
