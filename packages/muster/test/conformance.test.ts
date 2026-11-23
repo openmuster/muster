@@ -78,7 +78,9 @@ describe('mu run in a cloud sandbox', () => {
     const { readFileSync } = await import('node:fs')
     const lines = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
     expect(lines[0].env).toMatchObject({ MUSTER_URL: board.MUSTER_URL, MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '12' })
-    expect(Object.keys(lines[0].networkPolicy.allow).sort()).toEqual(['board.example.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+    // Made under the setup's policy: GitHub's release hosts, to install muster, and no credential, not even the board's host.
+    expect(Object.keys(lines[0].networkPolicy.allow).sort()).toEqual(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+    expect(JSON.stringify(lines[0].networkPolicy)).not.toContain('transform')
     // The sandbox installs this CLI's own release from its tarball, never a package looked up by name.
     const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
     expect(lines[1]).toEqual({ cmd: 'npm', args: ['install', '-g', `https://github.com/openmuster/muster/releases/download/v${version}/muster-${version}.tgz`] })
@@ -182,6 +184,23 @@ export const Sandbox = { async create(options) {
     expect(run.code).toBe(1)
     expect(JSON.parse(run.stdout)).toMatchObject({ exit: 2 })
     expect((await sdk.read()).some((e) => e.deleted)).toBe(true)
+  })
+
+  it('vercel: with --repo it installs the repository\'s dependencies in the checkout before the agent starts there, unless --no-install', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--json'], { env: { ...board, ...sdk.env } })
+    let lines = await sdk.read()
+    expect(lines[0].create.networkPolicy.allow).toEqual({ '*': [] })
+    expect(lines[0].create.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git' })
+    const install = lines.findIndex((e) => e.run?.args?.[1]?.includes('--ignore-scripts'))
+    expect(lines[install].run.cwd).toBe('/vercel/web')
+    expect(lines.findIndex((e) => Array.isArray(e.update))).toBeGreaterThan(install)
+    expect(lines.find((e) => e.run?.detached).run.cwd).toBe('/vercel/web')
+    await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--json'], { env: { ...board, ...sdk.env } })
+    lines = (await sdk.read()).slice(lines.length)
+    expect(Object.keys(lines[0].create.networkPolicy.allow).sort()).toEqual(['codeload.github.com', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+    expect(lines.some((e) => e.run?.args?.[1]?.includes('--ignore-scripts'))).toBe(false)
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {

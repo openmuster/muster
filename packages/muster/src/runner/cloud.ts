@@ -18,6 +18,8 @@ export type CloudRequest = {
   env?: Record<string, string>
   /** Commands that prepare the sandbox before the agent starts, such as installing the agent's CLI. */
   setup?: string[][]
+  /** Install the repository's dependencies from its lockfile, with no install scripts, before the agent starts. */
+  install?: boolean
   timeoutMs?: number
 }
 
@@ -30,6 +32,8 @@ export type CloudRun = {
    * connection while the run goes on, so it may be asked again. Absent where the platform can't tell.
    */
   wait?(): Promise<{ exitCode: number | null }>
+  /** How the repository's dependencies were installed, when asked: `pnpm`, `npm`, `yarn` or `bun`, `none` without a lockfile, or `failed (exit n)`. */
+  installed?: string
 }
 
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
@@ -48,7 +52,7 @@ export type VercelSandbox = {
     sandboxId?: string
     name?: string
     /** A finished command has its `exitCode`; a detached one can be waited on. Older stand-ins return nothing. */
-    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean }): Promise<{ exitCode?: number | null; wait?(): Promise<{ exitCode: number | null }> } | void>
+    runCommand(command: { cmd: string; args: string[]; env?: Record<string, string>; detached?: boolean; cwd?: string }): Promise<{ exitCode?: number | null; stdout?(): Promise<string>; wait?(): Promise<{ exitCode: number | null }> } | void>
     /** Replaces a running sandbox's policy. Used to close the hosts that only its setup needed. */
     update?(options: { networkPolicy: VercelPolicy | 'deny-all' }): Promise<unknown>
     stop(): Promise<unknown>
@@ -77,6 +81,29 @@ const bare = (word: string) => {
     return '<url>'
   }
 }
+
+/** Where Vercel clones `source`: beside the sandbox's home, under the repository's own name. */
+export const repoDir = (url: string) => `/vercel/${new URL(url).pathname.split('/').filter(Boolean).pop()!.replace(/\.git$/, '')}`
+
+/** What cloning a repository from GitHub reaches, at the sandbox's creation. */
+const CLONE_HOSTS = ['github.com', 'codeload.github.com']
+
+/**
+ * Installs a repository's dependencies the way its lockfile says, with the package manager it pins
+ * (a plain version) or the one in the image. No install script runs, the repository's dependencies'
+ * included: those are anyone's code, and setup reaches every host. Its last line says which it used.
+ */
+export const INSTALL = `set -e
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
+pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; /^$1@\\d+\\.\\d+\\.\\d+$/.test(m) ? m : ''" 2>/dev/null || true; }
+if [ -f pnpm-lock.yaml ]; then
+  v=$(pinned pnpm); if [ -n "$v" ]; then pm="npx -y $v"; else pm=pnpm; fi
+  $pm install --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false; echo installed pnpm
+elif [ -f yarn.lock ]; then
+  if [ -f .yarnrc.yml ]; then YARN_ENABLE_SCRIPTS=false corepack yarn install --immutable; else npx -y yarn@1 install --frozen-lockfile --ignore-scripts; fi; echo installed yarn
+elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci --ignore-scripts --no-audit --no-fund; echo installed npm
+elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --ignore-scripts; echo installed bun
+else echo installed none; fi`
 
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
@@ -115,12 +142,17 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         allow[model.host] = [...model.paths.map((regex) => ({ match: { path: { regex }, method: ['POST'] }, transform: [{ headers: { ...model.headers(request.model!.key), host: model.host } }] })), { response: { statusCode: 403 } }]
       }
       const setup = request.setup ?? []
-      const during: Record<string, VercelRule[]> = { ...allow }
-      if (setup.length) for (const host of options.setupHosts ?? []) during[host] ??= []
+      const dir = request.repo ? repoDir(request.repo) : undefined
+      const install = Boolean(dir && request.install)
+      // Setting up needs the network, and the credentials have no part in it: it runs under a policy with
+      // none of them, and the agent's replaces it before the agent starts. Installing a repository's
+      // dependencies needs whatever registries it names, so then every host is open, for the setup alone.
+      const preparing = setup.length > 0 || Boolean(dir)
+      const during: Record<string, VercelRule[]> = install ? { '*': [] } : Object.fromEntries([...(options.setupHosts ?? []), ...(dir ? CLONE_HOSTS : [])].map((host) => [host, []]))
       const sandbox = await options.Sandbox.create({
         // Without these the SDK signs in with VERCEL_OIDC_TOKEN. They go to Vercel's API, never into the sandbox.
         ...options.credentials,
-        networkPolicy: { allow: during },
+        networkPolicy: { allow: preparing ? during : allow },
         image: options.image ?? VERCEL_IMAGE,
         // Nothing of a run is kept: a saved sandbox would hold the repository and a policy with the credentials in it.
         persistent: false,
@@ -128,6 +160,10 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
         ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
       })
+      if (preparing && !sandbox.update) {
+        await end(sandbox)
+        throw new Failure('runner_too_old', "This @vercel/sandbox can't change a running sandbox's network policy, so the setup's hosts would stay open to the agent.", { hint: 'npm i @vercel/sandbox@latest' })
+      }
       for (const [cmd, ...args] of setup) {
         const done = await sandbox.runCommand({ cmd: cmd!, args })
         // What it printed stays in the sandbox: an install's output can name private packages and registries.
@@ -136,19 +172,20 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
           throw new Failure('runner_setup_failed', `Setting up the sandbox failed: \`${[cmd!, ...args].map(bare).join(' ')}\` exited ${done.exitCode}.`, { hint: 'The sandbox was removed. MUSTER_INSTALL names another muster to install.' })
         }
       }
-      // What the setup needed is closed before anything the agent decides runs.
-      if (setup.length && options.setupHosts?.length) {
-        if (!sandbox.update) {
-          await end(sandbox)
-          throw new Failure('runner_too_old', "This @vercel/sandbox can't change a running sandbox's network policy, so the setup's hosts would stay open to the agent.", { hint: 'npm i @vercel/sandbox@latest' })
-        }
-        await sandbox.update({ networkPolicy: { allow } })
+      // A failed install costs the agent its tests, not the run: it is said, and the agent starts.
+      let installed: string | undefined
+      if (install) {
+        const done = await sandbox.runCommand({ cmd: 'sh', args: ['-c', INSTALL], cwd: dir })
+        const said = done && typeof done.stdout === 'function' ? String(await done.stdout()).trim().split('\n').pop() ?? '' : ''
+        installed = done && typeof done.exitCode === 'number' && done.exitCode !== 0 ? `failed (exit ${done.exitCode})` : /^installed \w+$/.test(said) ? said.slice('installed '.length) : 'none'
       }
+      // What the setup needed is closed before anything the agent decides runs.
+      if (preparing) await sandbox.update!({ networkPolicy: { allow } })
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
-      // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag.
-      const agent = await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true })
+      // The prompt goes in on stdin through a shell, so no part of it is ever read as a flag. The agent starts in the repository.
+      const agent = await sandbox.runCommand({ cmd: 'sh', args: ['-c', `printf %s ${shellQuote(request.prompt)} | ${[bin, ...args].map(shellQuote).join(' ')}`], detached: true, ...(dir ? { cwd: dir } : {}) })
       const wait = agent && typeof agent.wait === 'function' ? agent.wait.bind(agent) : undefined
-      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox), ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
+      return { id: sandbox.name ?? sandbox.sandboxId ?? 'sandbox', stop: () => end(sandbox), ...(installed ? { installed } : {}), ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
     },
   }
 }
