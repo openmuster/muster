@@ -7,8 +7,8 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 > The Vercel runner has run against a real sandbox: a run stays attached and
 > removes its sandbox, the credentials stay out of it, a repository is cloned
 > and its dependencies installed, a base is forked, and a worker gives each
-> task its own sandbox. `--push` with a GitHub App has passed tests and not
-> yet run against GitHub. The Cloudflare runner and its Worker in
+> task its own sandbox, and `--push` opens a pull request through a GitHub
+> App. The Cloudflare runner and its Worker in
 > `templates/cloudflare-runner` have never been deployed. Treat both runners
 > as experimental.
 

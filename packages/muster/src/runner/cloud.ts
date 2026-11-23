@@ -228,7 +228,9 @@ export const INSTALL = `set -e
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
 pinned() { node -p "const m = (require('./package.json').packageManager || '').split('+')[0]; /^$1@\\d+\\.\\d+\\.\\d+$/.test(m) ? m : ''" 2>/dev/null || true; }
 if [ -f pnpm-lock.yaml ]; then
-  v=$(pinned pnpm); if [ -n "$v" ]; then pm="npx -y $v"; else pm=pnpm; fi
+  # The image's pnpm fetches the version package.json pins and keeps it, while the registry is still open,
+  # so the same \`pnpm\` works for the agent after setup closes it. Without a pnpm, the pinned one through npx.
+  if command -v pnpm >/dev/null; then pnpm --version >/dev/null; pm=pnpm; else v=$(pinned pnpm); pm="npx -y \${v:-pnpm}"; fi
   $pm install --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false; echo installed pnpm
 elif [ -f yarn.lock ]; then
   if [ -f .yarnrc.yml ]; then YARN_ENABLE_SCRIPTS=false corepack yarn install --immutable; else npx -y yarn@1 install --frozen-lockfile --ignore-scripts; fi; echo installed yarn
