@@ -7,6 +7,7 @@ import { openDb } from '../src/store/sqlite.ts'
 import { openRuns, runWorkflows, type Spawner } from '../src/daemon/runs.ts'
 import { loadWorkflows, type Workflow } from '../src/daemon/workflows.ts'
 import { randomBytes } from 'node:crypto'
+import { Failure } from '../src/failure.ts'
 import { applyPolicy, board, boardPolicy, file, http, listen, mint } from '../src/index.ts'
 import { cli, cliStart, clock, memoryBoard, reason, tempDir, type Board } from './helpers.ts'
 
@@ -592,6 +593,33 @@ describe('the daemon starts a requested workflow', () => {
     expect((await team.taskClaim({ ready: 'work', by: OWNER })).task.id).toBe(plain)
     expect((await team.taskClaim({ ready: 'work', by: `${OWNER}+other` })).task.id).toBe(other)
     expect(await reason(team.taskClaim({ ready: 'work', by: 'workflows' }))).toBe('invalid_by')
+  })
+
+  it('holds a request the board was too busy to answer, and answers it next tick: never passed over, never "couldn\'t start"', async () => {
+    for (const method of ['reply', 'taskPlan'] as const) {
+      const time = clock()
+      const real = file({ memory: true, principal: OWNER, now: time.now })
+      // The board's file is held by another writer, once.
+      let busy = 1
+      const backend = { ...real, [method]: async (...args: unknown[]) => {
+        if (busy-- > 0) throw new Failure('busy', 'The board is busy: other writers held it too long.')
+        return (real[method] as (...a: unknown[]) => unknown)(...args)
+      } } as typeof real
+      const team = board({ backend })
+      const rec = recorder(undefined, () => time.now().getTime())
+      const root = await team.post({ channel: 'work/app', text: 'ship' })
+      await runWorkflows(team, [release], rec.deps)
+      // A refusal to say, and a run to make.
+      const stranger = await board({ backend: { ...backend, self: async (profile) => ({ principal: 'local:user:eve', profile }) } }).workflowRequest({ name: 'release', on: root.id })
+      const asked = await team.workflowRequest({ name: 'release', on: root.id })
+      // A busy reply holds the first request; a busy plan, the second. Whatever came before it is answered.
+      const held = method === 'reply' ? stranger.seq : asked.seq
+      const before = method === 'reply' ? [] : [stranger.seq]
+      expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: before, why: 'The board is busy: other writers held it too long.' })
+      expect(await team.cursorGet('workflow:requests')).toBe(held - 1)
+      expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [asked.seq], refused: method === 'reply' ? [stranger.seq] : [] })
+      expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(['local:user:eve may not start release', `started release: 2 tasks in work/app/release-${asked.seq}`])
+    }
   })
 
   it('matches a channel exactly, or under a prefix that ends in "/"', async () => {

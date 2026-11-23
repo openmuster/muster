@@ -27,6 +27,10 @@ export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns }
 /** What a pass did. `reported` is there only when a run was summed up on its thread. */
 export type Ran = { started: number[]; refused: number[]; reported?: number[]; why?: string }
 
+/** A refusal that says nothing about the request, only that the board couldn't answer just now: it is read again next tick. */
+const TRANSIENT = new Set(['busy', 'network_error', 'bad_answer'])
+const isTransient = (error: unknown) => error instanceof Failure && TRANSIENT.has(error.reason)
+
 /** Where the daemon keeps its place among the board's workflow requests. */
 export const REQUESTS_CURSOR = 'workflow:requests'
 /** The profile the daemon writes a run as, so watchers and hooks can tell its writing from a person's. Reserved to the board itself. */
@@ -143,9 +147,10 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   const writer = team.as(WORKFLOWS_PROFILE)
   const say = async (seq: number, thread: number, text: string) => {
     // Keyed, so a request read twice is answered once, and synced like any reply: whoever asked may be
-    // on a platform. A thread that has gone since takes no answer.
+    // on a platform. A thread that has gone since takes no answer; a board that is busy or out of reach
+    // holds the request, so it is answered next tick and never passed over unanswered.
     await writer.reply({ to: thread, text, idempotencyKey: `workflow-${seq}-reply` }).catch((error) => {
-      if (!(error instanceof Failure)) throw error
+      if (!(error instanceof Failure) || isTransient(error)) throw error
     })
   }
   let reached = page.cursor
@@ -176,12 +181,20 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         }
       }
     } catch (error) {
-      if (error instanceof Failure && refusal === null) {
+      let held: unknown = error
+      if (error instanceof Failure && refusal === null && !isTransient(error)) {
         // The board's own answer, such as a task text too long to post: the same next time, so said and passed over.
-        await say(event.seq, thread, `couldn't start ${name}: ${error.message}`)
-        out.refused.push(event.seq)
-      } else {
-        out.why = (error as Error).message
+        try {
+          await say(event.seq, thread, `couldn't start ${name}: ${error.message}`)
+          out.refused.push(event.seq)
+          held = null
+        } catch (unsaid) {
+          held = unsaid
+        }
+      }
+      if (held !== null) {
+        // Not the board's answer to this request (busy, out of reach, a bug): read again next tick.
+        out.why = (held as Error).message
         reached = event.seq - 1
         break
       }
