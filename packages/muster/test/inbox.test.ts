@@ -153,10 +153,51 @@ describe('mu inbox', () => {
     expect(run.stdout).toBe('reply     #1  work  bob:\nreply     #1  work  bob: another\n')
   })
 
-  it('keeps each profile its own cursor-free view: another profile sees its own items', async () => {
-    const dir = await busy()
-    await cli(dir, ['inbox', '--as', 'lead'])
+  it('keeps a cursor for each profile: one reading its inbox leaves another its own items', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'here', '--as', 'lead'])
+    await cli(dir, ['post', 'work', 'here too', '--as', 'other'])
+    await cli(dir, ['post', 'work', '@lead one', '--as', 'bob'])
+    await cli(dir, ['post', 'work', '@other two', '--as', 'bob'])
+    expect((await cli(dir, ['inbox', '--as', 'lead'])).stdout).toMatch(/\+lead\] one\n$/)
+    expect((await cli(dir, ['inbox', '--as', 'lead'])).stdout).toBe('')
+    expect((await cli(dir, ['inbox', '--as', 'other'])).stdout).toMatch(/\+other\] two\n$/)
     expect((await cli(dir, ['inbox', '--as', 'other'])).stdout).toBe('')
+  })
+
+  it('with no profile the inbox is the principal\'s own, and has its own cursor', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'here'])
+    await cli(dir, ['post', 'work', 'lead is here', '--as', 'lead'])
+    await cli(dir, ['reply', '1', 'for the principal', '--as', 'bob'])
+    await cli(dir, ['post', 'work', '@lead for lead', '--as', 'bob'])
+    const first = await cli(dir, ['inbox'])
+    expect(first.stdout).toBe('reply     #1  work  bob: for the principal\n')
+    expect((await cli(dir, ['inbox'])).stdout).toBe('')
+    // lead's cursor is its own: it has not been read.
+    expect((await cli(dir, ['inbox', '--as', 'lead', '--peek'])).stdout).toContain('mention')
+  })
+
+  it('refuses a --limit that is not a whole number of at least 1', async () => {
+    const dir = tempDir()
+    for (const bad of ['abc', '0', '-1', '1.5']) {
+      const run = await cli(dir, ['inbox', '--as', 'lead', '--limit', bad, '--json'])
+      expect(run.code).toBe(2)
+      expect(JSON.parse(run.stderr).error.reason).toBe('invalid_limit')
+    }
+  })
+
+  it('exits 130 on Ctrl-C while waiting, with or without --json, and prints nothing', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'here', '--as', 'lead'])
+    for (const extra of [[], ['--json']]) {
+      const waiting = cliStart(dir, ['inbox', '--as', 'lead', '--wait', '30s', ...extra])
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      waiting.child.kill('SIGINT')
+      const ended = await waiting.done
+      expect(ended.code).toBe(130)
+      expect(ended.stdout).toBe('')
+    }
   })
 
   it('--limit holds the page and the next call carries on', async () => {

@@ -309,6 +309,7 @@ const commands: Record<string, Command> = {
       const limit = str(parsed.flags, 'limit')
       const wait = str(parsed.flags, 'wait')
       const peek = on(parsed.flags, 'peek')
+      if (limit !== undefined && !/^[1-9][0-9]*$/.test(limit)) throw misuse('invalid_limit', '--limit takes a whole number of at least 1.')
       const deadline = wait === undefined ? 0 : Date.now() + duration(wait, 'wait') * 1000
       const stored = await run.team.cursorGet('inbox')
       let after = stored ?? 0
@@ -318,9 +319,11 @@ const commands: Record<string, Command> = {
         after = page.cursor
         if (page.events.length > 0 || Date.now() >= deadline || run.io.stop.aborted) {
           if (!peek) await run.team.cursorSet('inbox', page.cursor)
+          // Stopped with nothing to show: the exit code says so, in either mode.
+          if (page.events.length === 0 && run.io.stop.aborted) return stopCode(run.io.stop)
           const items = page.events.map((event) => ({ kind: event.for, event }))
           if (run.json) return print(run, { items, cursor: page.cursor }, () => '')
-          if (page.events.length === 0) return run.io.stop.aborted ? stopCode(run.io.stop) : 0
+          if (page.events.length === 0) return 0
           const rows: string[] = []
           for (const event of page.events) {
             const data = event.data as Record<string, any>
