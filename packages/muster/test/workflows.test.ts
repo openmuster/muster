@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadDaemonConfig, tickOnce } from '../src/daemon/daemon.ts'
+import { append } from '../src/store/log.ts'
+import { openDb } from '../src/store/sqlite.ts'
 import { runWorkflows, type Spawner } from '../src/daemon/runs.ts'
 import { loadWorkflows, type Workflow } from '../src/daemon/workflows.ts'
 import { randomBytes } from 'node:crypto'
@@ -139,7 +141,7 @@ describe('workflow requests', () => {
     expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({ seq: sent.seq, type: 'workflow.requested', by: { principal: 'local:user:ada' }, channel: 'work', thread: root.id, data: { name: 'release', on: reply.id, args: { version: '1.2.0' } } })
     expect((await team.workflowRequest({ name: 'release', on: root.id })).seq).toBeGreaterThan(sent.seq)
-    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {}, profileHeld: false })
+    expect((await team.events({ after: 0, filter: { types: ['workflow.requested'] } })).events[1]!.data).toEqual({ name: 'release', on: root.id, args: {}, profileHeld: false, narrowed: false })
   })
 
   it('refuses a bad name, and bad args: a key, a value, too many keys, a value that is not text', async () => {
@@ -233,7 +235,7 @@ describe('mu workflow', () => {
     }
     // The server wrote it into the board's file, as the token's principal.
     const events = (await board({ dir: join(dir, 'board'), principal: 'local:user:ada' }).events({ after: 0, filter: { types: ['workflow.requested'] } })).events
-    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' }, profileHeld: false }])
+    expect(events.map((event) => event.data)).toEqual([{ name: 'release', on: expect.any(Number), args: { version: '2' }, profileHeld: false, narrowed: false }])
   }, 20_000)
 })
 
@@ -251,7 +253,7 @@ describe('the daemon starts a requested workflow', () => {
     workers: { count: 2, agent: 'claude', as: 'worker', cwd: '/srv/app' },
   }
   /** A spawner that takes notes. `fail` says, by call number from 1, which start throws. */
-  const recorder = (fail?: (call: number) => boolean) => {
+  const recorder = (fail?: (call: number) => boolean, now: () => number = () => Date.now()) => {
     const spawned: Parameters<Spawner>[0][] = []
     let calls = 0
     const spawn: Spawner = async (worker) => {
@@ -259,7 +261,7 @@ describe('the daemon starts a requested workflow', () => {
       if (fail?.(calls)) throw new Error('spawn mu ENOENT')
       spawned.push(worker)
     }
-    return { spawned, deps: { spawn, now: () => Date.now() } }
+    return { spawned, deps: { spawn, now } }
   }
   const argvFor = (workflow: Workflow, run: string, seq: number, i: number) => {
     const workers = workflow.workers
@@ -385,6 +387,46 @@ describe('the daemon starts a requested workflow', () => {
     } finally {
       await server.close()
     }
+  })
+
+  it("takes a principal alone in who for the owner's own board only, never for a narrowed token that carries its principal", async () => {
+    const time = clock()
+    const key = randomBytes(32)
+    const backend = file({ memory: true, principal: OWNER, now: time.now })
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    try {
+      const exp = Math.floor(time.now().getTime() / 1000) + 3600
+      // A CI or teammate token the owner made: the owner's principal, no profile, held to work/.
+      const ci = board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile: null, exp, can: { 'work/': ['read', 'post'] } } as never) }) })
+      const full = board({ backend: http({ url: server.url, token: mint(key, { sub: OWNER, profile: null, exp } as never) }) })
+      const team = board({ backend })
+      const mine = { ...release, who: [OWNER] }
+      const root = await team.post({ channel: 'work/app', text: 'ship' })
+      const rec = recorder(undefined, () => time.now().getTime())
+      await runWorkflows(team, [mine], rec.deps)
+      const narrowed = await ci.workflowRequest({ name: 'release', on: root.id })
+      const owner = await team.workflowRequest({ name: 'release', on: root.id })
+      const unnarrowed = await full.workflowRequest({ name: 'release', on: root.id })
+      expect(await runWorkflows(team, [mine], rec.deps)).toEqual({ started: [owner.seq, unnarrowed.seq], refused: [narrowed.seq] })
+      expect((await repliesOn(team, root.id)).map((reply) => reply.text)[0]).toBe(`${OWNER} may not start release`)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('counts a request recorded before the board said whether its caller was narrowed as narrowed', async () => {
+    const dir = tempDir()
+    const time = clock()
+    const team = board({ backend: file({ dir, principal: OWNER, now: time.now }) })
+    const mine = { ...release, who: [OWNER] }
+    const root = await team.post({ channel: 'work/app', text: 'ship' })
+    const rec = recorder(undefined, () => time.now().getTime())
+    await runWorkflows(team, [mine], rec.deps)
+    // As an older board wrote it: no `narrowed` in its data.
+    const db = openDb(join(dir, 'main.db'))
+    const legacy = db.write(() => append(db, { type: 'workflow.requested', by: { principal: OWNER, profile: null }, channel: 'work/app', thread: root.id, data: { name: 'release', on: root.id, args: {}, profileHeld: false } }, time.now().toISOString()))
+    db.close()
+    expect(await runWorkflows(team, [mine], rec.deps)).toEqual({ started: [], refused: [legacy.seq] })
   })
 
   it("keeps the daemon's profile to the board itself, so nobody can forge a run's marks", async () => {

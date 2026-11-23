@@ -40,8 +40,11 @@ export function request(ctx: Context, caller: Caller, req: WorkflowRequest): { s
   // board with nothing narrowed. A narrowed token held to no profile may send any name per request, so a
   // daemon matching `who` by profile must not believe it.
   const profileHeld = caller.profile !== null && (caller.can === undefined || caller.profileHeld === true)
+  // Whether the caller is held to channels: a token the owner made for CI or a teammate carries the
+  // owner's principal, so a daemon matching `who` by principal alone must not take it for the owner.
+  const narrowed = caller.can !== undefined
   return ctx.db.write(() => {
-    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args, profileHeld } }, ctx.now().toISOString())
+    const event = append(ctx.db, { type: 'workflow.requested', by: byOf(caller), channel: message.channel, thread: message.thread, data: { name: req.name, on: req.on, args, profileHeld, narrowed } }, ctx.now().toISOString())
     return { seq: event.seq }
   })
 }

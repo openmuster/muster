@@ -81,13 +81,15 @@ export function fillStep(text: string, values: { thread: number; channel: string
  * Whether a verified author is one `who` names. An entry with a `:` is a whole actor ID. A bare name is a
  * profile, and only under the principal of whoever runs this daemon: someone else's agent of that name is
  * someone else. A match that rests on a profile counts only when the board says the profile was held by
- * the caller's token (or the caller was the board itself), not named by the request.
+ * the caller's token (or the caller was the board itself), not named by the request. A match on a
+ * principal alone counts only for a caller held to no channels: every token the owner makes carries the
+ * owner's principal, so a narrowed one with no profile would otherwise pass for the owner.
  */
-export function mayStart(who: string[], by: By, owner: string, profileHeld: boolean): boolean {
+export function mayStart(who: string[], by: By, owner: string, held: { profileHeld: boolean; narrowed: boolean }): boolean {
   const id = actorId(by)
   return who.some((entry) => {
-    if (entry.includes(':')) return entry === id && (by.profile === null || profileHeld)
-    return profileHeld && by.principal === owner && by.profile === entry
+    if (entry.includes(':')) return entry === id && (by.profile === null ? !held.narrowed : held.profileHeld)
+    return held.profileHeld && by.principal === owner && by.profile === entry
   })
 }
 
@@ -134,13 +136,14 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   }
   let reached = page.cursor
   for (const event of page.events) {
-    const { name, args, profileHeld } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean }
+    const { name, args, profileHeld, narrowed } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean; narrowed?: boolean }
     const channel = event.channel!
     const thread = event.thread!
     const workflow = workflows.find((each) => each.name === name)
     const refusal = !workflow
       ? `${name} isn't registered here`
-      : !mayStart(workflow.who, event.by, owner, profileHeld === true)
+      : // A request recorded before the board said whether its caller was narrowed counts as narrowed.
+        !mayStart(workflow.who, event.by, owner, { profileHeld: profileHeld === true, narrowed: narrowed !== false })
         ? `${actorId(event.by)} may not start ${name}`
         : !runsIn(workflow.channels, channel)
           ? `${name} doesn't run in ${channel}`

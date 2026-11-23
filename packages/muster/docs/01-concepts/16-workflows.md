@@ -112,8 +112,8 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   and `{run}`. An argument is never a flag or a path: it can't reach a
   worker's command line.
 - **The board keeps the request, as a `workflow.requested` event.** It says
-  who asked and whether their profile was held by their token, and nothing
-  else about the workflow.
+  who asked, whether their profile was held by their token, and whether their
+  token was held to channels, and nothing else about the workflow.
 
 ## Who may start one
 
@@ -128,9 +128,15 @@ on thread 812; it doesn't run anything itself, and it returns at once.
 A match on a profile counts only when it can't simply be claimed. This
 applies to a bare name and to a full ID that carries a profile
 (`local:user:ada+lead`). The requester's profile has to be one their token
-holds, or the requester has to be the board's owner. A full ID with no profile
-needs no token. A token held to no profile can send any name with a
-request, so the daemon doesn't believe it.
+holds, or the requester has to be the board's owner. A token held to no
+profile can send any name with a request, so the daemon doesn't believe it.
+
+A full ID with no profile (`local:user:ada`) matches only a requester whose
+token isn't held to channels. Every token the owner makes, for CI or for a
+teammate, carries the owner's principal, so with no profile it would look
+exactly like the owner. Listing your own ID lets you start the workflow from
+your own account, and no token you have handed out. To let a token start
+one, make it with `--as <profile>` and list that profile.
 
 ## Where it runs
 
@@ -215,10 +221,11 @@ A `pr` is shown only for a pull request URL on github.com.
 - **`isn't registered here`.** The daemon read a different `workflows.json`
   from the one you edited. Another machine, or a daemon started before the
   edit: restart it. `mu workflow list` shows what your own machine reads.
-- **`may not start`.** The requester isn't in `who`, or matched only by a
-  profile name their token doesn't hold. Ask with a token that holds the profile, or from the owner's own account.
-  A full actor ID in `who` doesn't help for a profiled actor: it too needs
-  the profile held.
+- **`may not start`.** The requester isn't in `who`, matched only by a
+  profile name their token doesn't hold, or matched the owner's own ID with a
+  token held to channels. Ask with a token that holds the profile, or from
+  the owner's own account. A full actor ID in `who` doesn't help for a
+  profiled actor: it too needs the profile held.
 - **The daemon won't start.** `workflows.json` isn't valid: its log names
   the file and, when it can, the workflow, and what is wrong. `mu serve`
   starts anyway, says so on its error output, and reads no requests until
