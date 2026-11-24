@@ -46,6 +46,17 @@ export type Ran = { started: number[]; refused: number[]; reported?: number[]; w
 const TRANSIENT = new Set(['busy', 'network_error', 'bad_answer'])
 const isTransient = (error: unknown) => error instanceof Failure && TRANSIENT.has(error.reason)
 
+/**
+ * An error as a thread is told it. The board's own answer is said as it is. Anything else (a worker that
+ * wouldn't start, a bug) is this machine's, and its words can name paths and users here: a reply is read
+ * by everyone on the thread and synced to platforms, so it gets the error's code and the daemon's log the rest.
+ */
+const said = (error: unknown): string => {
+  if (error instanceof Failure) return error.message
+  const code = (error as { code?: unknown } | null)?.code
+  return `${typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : 'an error on the daemon\'s machine'} (the daemon's log says more)`
+}
+
 /** Where the daemon keeps its place among the board's workflow requests. */
 export const REQUESTS_CURSOR = 'workflow:requests'
 /** The profile the daemon writes a run as, so watchers and hooks can tell its writing from a person's. Reserved to the board itself. */
@@ -220,7 +231,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         }
         out.why = `${name} ${event.seq}: gave up after ${MAX_TRIES} tries: ${message}`
         // Said if the board will take it; passed over either way.
-        await say(event.seq, thread, `couldn't start ${name}: ${message} (gave up after ${MAX_TRIES} tries)`).catch(() => {})
+        await say(event.seq, thread, `couldn't start ${name}: ${said(held)} (gave up after ${MAX_TRIES} tries)`).catch(() => {})
         out.refused.push(event.seq)
       }
     }
@@ -498,7 +509,7 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
         } catch (error) {
           // The ones already started keep running: say how many, as it is.
           const reason = (error as Error).message
-          ended = { text: i === 1 ? `couldn't start workers for ${workflow.name}: ${reason}` : `started ${i - 1} of ${workflow.workers.count} workers for ${workflow.name}, then: ${reason}`, failed: reason }
+          ended = { text: i === 1 ? `couldn't start workers for ${workflow.name}: ${said(error)}` : `started ${i - 1} of ${workflow.workers.count} workers for ${workflow.name}, then: ${said(error)}`, failed: reason }
         }
       }
       deps.runs.crews.set(on.seq, ended)

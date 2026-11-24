@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Context } from '../core/context.ts'
@@ -208,15 +208,17 @@ export function file(options: FileOptions = {}): Backend {
       if (existsSync(target)) throw new Failure('exists', `There is already a file at ${target}.`, { hint: 'Name a new file: a backup never writes over one.' })
       const filesTo = target.replace(/\.db$/, '') + '.files'
       if (existsSync(filesTo)) throw new Failure('exists', `There is already something at ${filesTo}.`, { hint: 'Name a new file: a backup never writes over one.' })
-      ctx().db.raw.exec(`vacuum into '${target.replaceAll("'", "''")}'`)
-      // A copy of every message, wherever it was put: its owner's alone to read, like the board.
+      // A copy of every message, wherever it is put: made empty and its owner's alone to read before
+      // SQLite writes into it, so it is never readable by others, not even while it is written.
       ownerOnly(target)
+      ctx().db.raw.exec(`vacuum into '${target.replaceAll("'", "''")}'`)
       // Files are stored by what they hold and never change, so copying them after the database is enough:
       // every file the copy names is there, and one stored since is harmless.
       const from = files.filesDir(ctx())
       if (from && existsSync(from)) {
-        cpSync(from, filesTo, { recursive: true })
+        mkdirSync(filesTo, { mode: 0o700 })
         chmodSync(filesTo, 0o700)
+        cpSync(from, filesTo, { recursive: true })
         return { path: target, files: filesTo }
       }
       return { path: target }
