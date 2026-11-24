@@ -77,7 +77,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_claim_token` | A claim token you choose is 32 to 200 characters of base64url |
 | `invalid_needs` | Not a task, canceled, too many, or it would wait for itself |
 | `invalid_from` | Not an owner's ID |
-| `invalid_by` | Not an actor's whole ID |
+| `invalid_by` | Not an actor's whole ID, or `--by` with a task named by its ID instead of `--ready` |
 | `invalid_kind` | Not a hold kind |
 | `reserved_kind` | A kind only the board uses: `edited`, `failing` |
 | `invalid_state` | Not a task state |

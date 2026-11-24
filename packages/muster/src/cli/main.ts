@@ -664,6 +664,8 @@ const commands: Record<string, Command> = {
   run: {
     spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
+      // Checked here, on what was typed: a cloud worker passes its flags on to each task it runs by ID.
+      refuseByWithoutReady(parsed)
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
       // A Vercel worker keeps its own loop here, a sandbox per task.
@@ -786,7 +788,7 @@ const commands: Record<string, Command> = {
   },
 
   token: {
-    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync'] },
+    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync', 'all'] },
     async run(run, parsed) {
       const verb = parsed.positionals[0]
       const tokens = run.team.backend.tokens
@@ -814,10 +816,14 @@ const commands: Record<string, Command> = {
         print(run, { token: made.token, id: made.record.id, trust: made.trust, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
         return
       }
-      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] [--can <channel>=<permissions>]... [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
-      const me = await run.team.whoami()
+      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
       const can: Record<string, string[]> = {}
       for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
+      // A token held to no channel reaches every one, as its owner does: that is asked for by name, never had by leaving --can out.
+      const all = on(parsed.flags, 'all')
+      if (all && Object.keys(can).length > 0) throw misuse('invalid_token', '--all is a token with your full access, and --can holds one to channels: pass one or the other.')
+      if (!all && Object.keys(can).length === 0) throw misuse('invalid_token', "Name the channels the token reaches with --can <channel>=<permissions>, or pass --all for a token with your full access.", "mu token create --as fixer --can 'work/=read,post,react,label'")
+      const me = await run.team.whoami()
       const ttl = duration(str(parsed.flags, 'ttl') ?? (me.mode === 'file' ? '30d' : '2h'), 'ttl')
       const made = await tokens.create({ profile: me.profile, can, ttl, ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}) })
       print(run, { token: made.token, id: made.record.id, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
@@ -1076,7 +1082,15 @@ function keep(run: Run, me: Holder, task: number, claim: { token: string; until:
   }
 }
 
+/** `--by` narrows which ready task is taken. A task named by its ID is that task, whoever made it, so --by there would be ignored: it is refused. */
+function refuseByWithoutReady(parsed: Parsed) {
+  if (str(parsed.flags, 'by') !== undefined && str(parsed.flags, 'ready') === undefined) {
+    throw misuse('invalid_by', '--by narrows which ready task you take: use it with --ready <channel>.', 'A task named by its ID is that task, whoever made it: leave --by out.')
+  }
+}
+
 async function claimWith(run: Run, parsed: Parsed, target: string | undefined, me: Holder, pid: number | undefined) {
+  refuseByWithoutReady(parsed)
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
   const from = list(parsed.flags, 'from')

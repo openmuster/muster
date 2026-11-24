@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -429,6 +429,22 @@ export const Sandbox = { async create(options) {
     const again = await cli(dir, ['tasks', 'claim', '--ready', 'swarm/web', '--by', `${me}+workflows`, '--json'])
     expect(JSON.parse(again.stderr).error.reason).toBe('nothing_ready')
     expect(JSON.parse((await cli(dir, ['read', String(injected), '--json'])).stdout).task.state).toBe('ready')
+  })
+
+  it('refuses --by on a claim by ID, here and in a sandbox, before anything is claimed or started', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
+    const id = String(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'by someone else', '--as', 'other', '--json'])).stdout).task.id)
+    const by = ['--by', `${me}+workflows`, '--json']
+    for (const argv of [['tasks', 'claim', id], ['run', id, '--agent', 'claude', '--cwd', dir], ['run', id, '--runner', 'vercel', '--agent', 'claude']]) {
+      const refused = await cli(dir, [...argv, ...by], { env: local })
+      expect([refused.code, JSON.parse(refused.stderr).error.reason]).toEqual([2, 'invalid_by'])
+    }
+    expect(JSON.parse((await cli(dir, ['read', id, '--json'])).stdout).task.state).toBe('ready')
+    // No sandbox was made.
+    expect(existsSync(join(dir, 'sdk.log'))).toBe(false)
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {

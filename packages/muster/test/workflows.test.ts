@@ -195,10 +195,10 @@ describe('mu workflow', () => {
 
   it('token create --as workflows is refused: that profile is the daemon\'s own', async () => {
     const dir = tempDir()
-    const made = await cli(dir, ['token', 'create', '--as', 'workflows', '--json'])
+    const made = await cli(dir, ['token', 'create', '--as', 'workflows', '--all', '--json'])
     expect(made.code).not.toBe(0)
     expect(JSON.parse(made.stderr).error.reason).toBe('invalid_profile')
-    expect((await cli(dir, ['token', 'create', '--as', 'lead', '--json'])).code).toBe(0)
+    expect((await cli(dir, ['token', 'create', '--as', 'lead', '--all', '--json'])).code).toBe(0)
   })
 
   it("list shows this machine's workflows.json; run requests one on a thread and prints it", async () => {
@@ -651,6 +651,24 @@ describe('the daemon starts a requested workflow', () => {
     expect(await tick()).toEqual({ started: [], refused: [stuck.seq, next.seq], why: `release ${stuck.seq}: gave up after 5 tries: The board said bad_answer.` })
     expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start release: The board said bad_answer. (gave up after 5 tries)", "deploy isn't registered here"])
     expect(rec.spawned).toEqual([])
+  })
+
+  it('says its workers started when it gives up after starting them: never "couldn\'t start"', async () => {
+    // Writing the run's first message, after the workers started, fails every tick.
+    const { team, rec, root, tick } = await flaky('post', 'bad_answer', () => true)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    for (let i = 1; i < 5; i++) expect((await tick()).started).toEqual([])
+    expect(await tick()).toEqual({ started: [], refused: [seq], why: `release ${seq}: gave up after 5 tries: The board said bad_answer.` })
+    expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1', 'worker-2'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["started 2 workers for release; couldn't confirm the run: The board said bad_answer. (gave up after 5 tries)"])
+  })
+
+  it('says its workers started when the board refuses what comes after them', async () => {
+    const { team, rec, root, tick } = await flaky('post', 'text_too_long', () => true)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    expect(await tick()).toEqual({ started: [], refused: [seq] })
+    expect(rec.spawned).toHaveLength(2)
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["started 2 workers for release; couldn't confirm the run: The board said text_too_long."])
   })
 
   it("starts a private thread's run held once before its plan landed: the channel it made is its own", async () => {

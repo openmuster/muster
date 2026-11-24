@@ -208,10 +208,14 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
       }
     } catch (error) {
       let held: unknown = error
+      // Workers this request spawned keep running whatever went wrong after: a reply never says it didn't start.
+      const crew = deps.runs.crews.get(event.seq)
+      const begun = !deps.runs.crews.has(event.seq) ? null : crew ? crew.text : `started ${workflow?.workers.count} workers for ${name}`
+      const failed = (why: string) => (begun === null ? `couldn't start ${name}: ${why}` : `${begun}; couldn't confirm the run: ${why}`)
       if (error instanceof Failure && refusal === null && !isTransient(error)) {
         // The board's own answer, such as a task text too long to post: the same next time, so said and passed over.
         try {
-          await say(event.seq, thread, `couldn't start ${name}: ${error.message}`)
+          await say(event.seq, thread, failed(error.message))
           out.refused.push(event.seq)
           held = null
         } catch (unsaid) {
@@ -231,7 +235,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         }
         out.why = `${name} ${event.seq}: gave up after ${MAX_TRIES} tries: ${message}`
         // Said if the board will take it; passed over either way.
-        await say(event.seq, thread, `couldn't start ${name}: ${said(held)} (gave up after ${MAX_TRIES} tries)`).catch(() => {})
+        await say(event.seq, thread, failed(`${said(held)} (gave up after ${MAX_TRIES} tries)`)).catch(() => {})
         out.refused.push(event.seq)
       }
     }

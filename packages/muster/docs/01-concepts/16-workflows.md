@@ -197,6 +197,7 @@ For a request on thread 812 in `work/api`, the daemon:
 | `couldn't start workers for implement: …` | The first couldn't start |
 | `couldn't start implement: …` | The board refused the tasks, such as a text that is too long |
 | `couldn't start implement: … (gave up after 5 tries)` | Five ticks in a row the board couldn't answer (busy, out of reach). The daemon reads on, so one request never holds up the rest |
+| `started 3 workers for implement; couldn't confirm the run: …` | The workers started, then the board refused or couldn't take the run's first message. They keep going; `mu tasks work/api/implement-41` shows how far they got |
 | `implement isn't registered here` | No such name in this daemon's file |
 | `<actor> may not start implement` | The requester isn't in `who` |
 | `implement doesn't run in work/other` | The thread's channel isn't in `channels` |
