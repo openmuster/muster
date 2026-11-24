@@ -118,7 +118,7 @@ describe('events for one profile', () => {
   it('refuses an empty target, a trailing +, and a profile part that is not a profile name', async () => {
     const { team } = memoryBoard()
     await team.post({ channel: 'work', text: 'here' })
-    for (const bad of ['', 'local:user:ada+', 'lead+', 'Lead', 'local:user:ada+Not Ok']) {
+    for (const bad of ['', 'local:user:ada+', 'lead+', '+lead', 'Lead', 'local:user:ada+Not Ok']) {
       expect(await reason(team.events({ after: 0, filter: { for: bad } }))).toBe('invalid_profile')
     }
     // A principal on its own is a whole actor ID, and fine.
@@ -325,7 +325,7 @@ describe('mu inbox', () => {
   it('refuses a --for that is not a profile, with the reason other profile flags give', async () => {
     const dir = tempDir()
     await cli(dir, ['post', 'work', 'here'])
-    for (const bad of ['', 'lead+', 'Not Ok']) {
+    for (const bad of ['', 'lead+', '+lead', 'Not Ok']) {
       const run = await cli(dir, ['wait', '--for', bad, '--timeout', '1s', '--json'])
       expect(run.code).toBe(2)
       expect(JSON.parse(run.stderr).error.reason).toBe('invalid_profile')

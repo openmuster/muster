@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -181,6 +181,28 @@ export const Sandbox = { async create(options) {
     expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(2 * 60 * 60_000)
     await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--timeout', '10m', '--json'], { env: { ...board, ...sdk.env } })
     expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(20 * 60_000)
+  })
+
+  it('a --ready worker in one sandbox takes there only what --label, --from and --by let it take here', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const narrow = ['--label', 'workflow=review', '--label', 'request=7', '--from', 'local:user:bob', '--from', 'local:user:cy', '--by', 'local:user:ada+workflows']
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', ...narrow, '--json'], { env: { ...board, ...sdk.env } })
+    expect((await sdk.read()).filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--ready' 'work/' '--loop' '--wait' '2m' '--label' 'workflow=review' '--label' 'request=7' '--from' 'local:user:bob' '--from' 'local:user:cy' '--by' 'local:user:ada+workflows'")
+    const got: any[] = []
+    const worker = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        got.push(JSON.parse(body))
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ id: 'cf-run-1' }))
+      })
+    })
+    await new Promise<void>((resolve) => worker.listen(0, '127.0.0.1', resolve))
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'fixer', ...narrow, '--json'], { env: { ...board, MUSTER_CF_WORKER: `http://127.0.0.1:${(worker.address() as { port: number }).port}`, MUSTER_CF_SECRET: 's' } })
+    worker.close()
+    expect(got[0].command).toEqual(['mu', 'run', '--ready', 'work/', '--loop', '--wait', '2m', ...narrow, '--as', 'fixer', '--bypass-permissions', '--agent', 'claude'])
   })
 
   it('vercel: a run that exits badly is a failure here too, and the sandbox is still removed', async () => {
@@ -429,6 +451,22 @@ export const Sandbox = { async create(options) {
     const again = await cli(dir, ['tasks', 'claim', '--ready', 'swarm/web', '--by', `${me}+workflows`, '--json'])
     expect(JSON.parse(again.stderr).error.reason).toBe('nothing_ready')
     expect(JSON.parse((await cli(dir, ['read', String(injected), '--json'])).stdout).task.state).toBe('ready')
+  })
+
+  it('refuses --by on a claim by ID, here and in a sandbox, before anything is claimed or started', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
+    const id = String(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'by someone else', '--as', 'other', '--json'])).stdout).task.id)
+    const by = ['--by', `${me}+workflows`, '--json']
+    for (const argv of [['tasks', 'claim', id], ['run', id, '--agent', 'claude', '--cwd', dir], ['run', id, '--runner', 'vercel', '--agent', 'claude']]) {
+      const refused = await cli(dir, [...argv, ...by], { env: local })
+      expect([refused.code, JSON.parse(refused.stderr).error.reason]).toEqual([2, 'invalid_by'])
+    }
+    expect(JSON.parse((await cli(dir, ['read', id, '--json'])).stdout).task.state).toBe('ready')
+    // No sandbox was made.
+    expect(existsSync(join(dir, 'sdk.log'))).toBe(false)
   })
 
   it('vercel: --detach starts it and returns, leaving the sandbox to its timeout', async () => {

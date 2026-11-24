@@ -103,12 +103,30 @@ rest to anyone who shares a machine, or whose server's output is kept.
 
 ### Changed
 
+- `mu token create` no longer makes a token that reaches every channel when
+  `--can` is left out. Name the channels with `--can`, or pass `--all` for a
+  token with your full access, as before; the two together are refused.
+  **A script that runs `mu token create` with no `--can` needs `--all`.**
+  `mu token list` shows such a token as `everything`. The token `mu serve`
+  prints is unchanged.
+- `mu tasks claim <id>`, `mu tasks run <id>` and `mu run <id>` refuse `--by`
+  (`invalid_by`). It only narrows `--ready`, and was ignored with an ID.
+
 - The board's file is at store version 7 (it notes deliveries waiting on a
   platform). A board made by an older muster is upgraded when opened, and
   can't then be opened by an older one. Back it up first with `mu backup`.
 
 ### Fixed
 
+- `mu run --ready` on Cloudflare, or on Vercel without `--loop`, left
+  `--label`, `--from` and `--by` out of the `mu run` it started in the
+  sandbox, so the worker there took tasks they would have kept it from, and
+  none of the owners `--from` named. They are now passed on.
+- A workflow whose workers had started, and whose start then failed or was
+  given up on, was answered `couldn't start` on its thread. It now says the
+  workers started and that the run couldn't be confirmed.
+- A `for` filter of `+<profile>`, an actor ID with nobody before the `+`,
+  was taken and matched nothing. It is refused as `invalid_profile`.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
