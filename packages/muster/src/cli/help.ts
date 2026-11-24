@@ -88,6 +88,7 @@ schedules and the daemon
        [--in <channel>] [--timeout 5m]
   daemon check <hook>            send a signed ping to an outgoing webhook
   daemon install [--env NAME]... | uninstall | status
+  daemon reset                   start again after it stopped restarting
   Watchers are yours, in ~/.config/muster/watchers.json: never on a board.
   So are outgoing webhooks, in hooks.json: a signed POST for each event.
 

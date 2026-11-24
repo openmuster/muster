@@ -5,7 +5,8 @@ import { loadWatchers, runDaemon, tickOnce } from '../src/daemon/daemon.ts'
 import { plist } from '../src/daemon/launchd.ts'
 import { takeLock } from '../src/daemon/lock.ts'
 import { checkWrite } from '../src/daemon/check.ts'
-import { gateSaysNo, type Deps, type Watcher, type WatchState } from '../src/daemon/watchers.ts'
+import { DELIVERY_ATTEMPTS, SLOWEST, gateSaysNo, type Deps, type Watcher, type WatchState } from '../src/daemon/watchers.ts'
+import { RESTART_LIMIT, RESTART_WINDOW, STEADY_AFTER, begin, ended, readGuard, reset, steady } from '../src/daemon/guard.ts'
 import { board } from '../src/index.ts'
 import { BIN, cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
 
@@ -459,6 +460,240 @@ describe("a watcher's environment", () => {
     expect(env).toMatch(/^PASSED_ON=fine$/m)
     expect(env).toMatch(/^MUSTER_THREAD=1$/m)
   }, 20_000)
+})
+
+describe('a watcher whose command keeps failing', () => {
+  it('is slowed once it has failed more times in a row than one event is tried, and one success puts it back', async () => {
+    let failing = true
+    const made = memoryBoard()
+    const runs: number[] = []
+    const deps: Deps = {
+      now: () => made.time.now().getTime(),
+      spawn: async () => {
+        runs.push(made.time.now().getTime())
+        return { code: failing ? 1 : 0, stdout: '' }
+      },
+    }
+    const watchers: Watcher[] = [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'], every: 1 }]
+    const states = new Map<string, WatchState>()
+    const at = async (ms: number) => {
+      made.time.advance(ms)
+      return (await tickOnce(made.team, watchers, states, deps)).watched.lead!
+    }
+    await at(1000)
+    for (let i = 0; i < 20; i++) await made.team.post({ channel: 'work/api', text: `event ${i}` })
+    // The five tries of one event come every second, as before.
+    for (let i = 0; i < DELIVERY_ATTEMPTS - 1; i++) expect((await at(1000)).failed).toHaveLength(1)
+    // The fifth gives up on that event, and the next event fails at once: six failures in a row.
+    expect((await at(1000)).slowed).toBe(4)
+    expect(runs).toHaveLength(6)
+    // Past that, a tick a second runs nothing until the wait is over, and each failure doubles it.
+    for (let i = 0; i < 3; i++) expect(await at(1000)).toEqual({ woke: [], failed: [], gated: [] })
+    expect(runs).toHaveLength(6)
+    expect((await at(1000)).slowed).toBe(8)
+    expect(runs).toHaveLength(7)
+    // The times of the ticks that ran it: the gaps double, up to ten minutes, and never shrink while it fails.
+    const ranAt = [made.time.now().getTime()]
+    for (let i = 0; i < 3600 && runs.length < 20; i++) {
+      const before = runs.length
+      await at(1000)
+      if (runs.length > before) ranAt.push(made.time.now().getTime())
+    }
+    const gaps = ranAt.slice(1).map((time, i) => time - ranAt[i]!)
+    expect(gaps.slice(0, 3)).toEqual([8_000, 16_000, 32_000])
+    expect(gaps.at(-1)).toBe(SLOWEST)
+    expect(Math.max(...gaps)).toBe(SLOWEST)
+    failing = false
+    made.time.advance(SLOWEST)
+    expect((await at(0)).woke.length).toBeGreaterThan(0)
+    expect((await at(1000)).slowed).toBeUndefined()
+  })
+
+  it("isn't woken again by its own note that it gave up", async () => {
+    const { team, ran, tick } = harness({}, () => ({ code: 9 }))
+    await tick()
+    const bad = await team.post({ channel: 'work/api', text: 'cannot be delivered' })
+    for (let i = 0; i < DELIVERY_ATTEMPTS; i++) await tick()
+    expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
+    for (let i = 0; i < 20; i++) await tick()
+    expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
+    expect(ran).toHaveLength(DELIVERY_ATTEMPTS)
+  })
+})
+
+describe('the restart guard', () => {
+  const path = () => join(tempDir(), 'daemon', 'main.json')
+
+  it(`stops the daemon on the ${RESTART_LIMIT}th start within ${RESTART_WINDOW / MIN} minutes, and keeps it stopped`, () => {
+    const at = path()
+    let now = Date.parse('2026-01-01T00:00:00Z')
+    for (let i = 1; i < RESTART_LIMIT; i++) {
+      expect(begin(at, now)).toBeNull()
+      now += 30_000
+    }
+    const parked = begin(at, now)
+    expect(parked).toMatchObject({ at: '2026-01-01T00:02:00.000Z', why: expect.stringMatching(/started 5 times in 10 minutes .* stopped restarting/) })
+    expect(readGuard(at).parked).toEqual(parked)
+    // Stopped is stopped: an hour on, it still won't start.
+    expect(begin(at, now + 60 * MIN)).toEqual(parked)
+    expect(reset(at)).toEqual(parked)
+    expect(begin(at, now + 61 * MIN)).toBeNull()
+  })
+
+  it('counts only the starts within the window', () => {
+    const at = path()
+    let now = 0
+    for (let i = 0; i < 20; i++) {
+      expect(begin(at, now)).toBeNull()
+      now += RESTART_WINDOW / (RESTART_LIMIT - 1)
+    }
+  })
+
+  it("doesn't count a start that ended cleanly, nor one that stayed up", () => {
+    const at = path()
+    let now = 0
+    for (let i = 0; i < 10; i++) {
+      expect(begin(at, now)).toBeNull()
+      ended(at, now)
+      now += 1000
+    }
+    expect(readGuard(at).starts).toEqual([])
+    for (let i = 1; i < RESTART_LIMIT; i++) expect(begin(at, now++)).toBeNull()
+    steady(at)
+    for (let i = 1; i < RESTART_LIMIT; i++) expect(begin(at, now++)).toBeNull()
+    expect(begin(at, now++)).not.toBeNull()
+  })
+
+  it('a clean exit takes off its own start only, never the running daemon\'s', () => {
+    const at = path()
+    expect(begin(at, 1)).toBeNull()
+    expect(begin(at, 2)).toBeNull()
+    ended(at, 2)
+    expect(readGuard(at).starts).toEqual([1])
+  })
+
+  it('the daemon calls steady once, after a tick that worked, when it has been up long enough', async () => {
+    const { team, time } = memoryBoard()
+    const stop = new AbortController()
+    let steadied = 0
+    let ticks = 0
+    const log: string[] = []
+    const done = runDaemon({
+      team,
+      lock: join(tempDir(), 'main.db.tick.lock'),
+      watchers: [],
+      stop: stop.signal,
+      log: (line) => log.push(line),
+      interval: 1,
+      deps: {
+        now: () => {
+          ticks += 1
+          return time.now().getTime()
+        },
+      },
+      steady: { after: STEADY_AFTER, then: () => (steadied += 1) },
+    })
+    const ticked = async (more: number) => {
+      const from = ticks
+      for (let wait = 0; wait < 200 && ticks < from + more; wait++) await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    await ticked(3)
+    expect(steadied).toBe(0)
+    time.advance(STEADY_AFTER)
+    await ticked(3)
+    expect(steadied).toBe(1)
+    time.advance(STEADY_AFTER)
+    await ticked(3)
+    stop.abort()
+    await done
+    expect([steadied, log]).toEqual([1, []])
+    expect(ticks).toBeGreaterThan(2)
+  })
+
+  it('a tick that keeps failing is logged once and then at 2, 4, 8 in a row, not every second', async () => {
+    const { team } = memoryBoard()
+    const stop = new AbortController()
+    const log: string[] = []
+    let steadied = 0
+    const broken = { ...team, scheduleTick: async () => { throw new Error('The board at x can\'t be read: file is not a database.') } } as typeof team
+    const done = runDaemon({ team: broken, lock: join(tempDir(), 'main.db.tick.lock'), watchers: [], stop: stop.signal, log: (line) => log.push(line), interval: 1, deps: { now: () => Date.now() + 10 * STEADY_AFTER }, steady: { after: 0, then: () => (steadied += 1) } })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    stop.abort()
+    await done
+    expect(log[0]).toBe("error     The board at x can't be read: file is not a database.")
+    expect(log.slice(1)).toEqual(log.slice(1).map((_, i) => `error     The board at x can't be read: file is not a database.  (${2 ** (i + 1)} ticks in a row)`))
+    expect(log.length).toBeLessThan(12)
+    // A daemon that only fails never counts as having stayed up.
+    expect(steadied).toBe(0)
+  })
+
+  /** A board folder that is a file: the daemon can't open it, and exits 1 before it ticks, every time. */
+  const crashing = () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'board'), 'not a folder')
+    const calls = join(dir, 'launchctl.calls')
+    const fake = join(dir, 'launchctl')
+    writeFileSync(fake, `#!/bin/sh\necho "$@" >> ${calls}\n[ "$1" = print ] && [ ! -f ${dir}/loaded ] && exit 113\nexit 0\n`)
+    chmodSync(fake, 0o755)
+    return { dir, calls, env: { MUSTER_LAUNCHCTL: fake } }
+  }
+
+  it('end to end: a daemon that crashes on start stops restarting, says so in status and check, and reset lets it start again', async () => {
+    const { dir, calls, env } = crashing()
+    for (let i = 1; i < RESTART_LIMIT; i++) expect((await cli(dir, ['daemon', 'run'], { env })).code).toBe(1)
+    const status = await cli(dir, ['daemon', 'status'], { env })
+    expect(status.stdout).toMatch(/^restarts {2}4 quick starts in 10 minutes; it stops at 5$/m)
+    const stopped = await cli(dir, ['daemon', 'run'], { env })
+    expect(stopped.code).toBe(0)
+    expect(stopped.stderr).toMatch(/^error: The daemon started 5 times in 10 minutes and never stayed up 2 minutes, so it has stopped restarting\.\n.*\n {2}Fix it, then: mu daemon reset\n$/)
+    // Stopped, it doesn't even try: the board is never opened again.
+    expect((await cli(dir, ['daemon', 'run'], { env })).stderr).not.toMatch(/EEXIST|ENOTDIR/)
+    expect((await cli(dir, ['daemon', 'status'], { env })).stdout).toMatch(/^stopped {3}since \S+: The daemon started 5 times .* Fix it, then: mu daemon reset$/m)
+    expect(JSON.parse((await cli(dir, ['daemon', 'status', '--json'], { env })).stdout).parked).toMatchObject({ why: expect.stringContaining('stopped restarting') })
+    // Not installed: reset clears it and says how to start it by hand.
+    const cleared = await cli(dir, ['daemon', 'reset'], { env })
+    expect(cleared.stdout).toMatch(/^reset {5}stopped since \S+\nnot installed: start it with mu daemon run\n$/)
+    expect((await cli(dir, ['daemon', 'status'], { env })).stdout).toMatch(/^restarts {2}0 quick starts/m)
+    expect((await cli(dir, ['daemon', 'run'], { env })).code).toBe(1)
+    // Installed: reset starts the service again.
+    writeFileSync(join(dir, 'loaded'), '')
+    expect((await cli(dir, ['daemon', 'reset'], { env })).stdout).toBe('reset     it had not stopped\nstarted   dev.muster.daemon.main\n')
+    expect(readFileSync(calls, 'utf8')).toMatch(/^kickstart gui\/\d+\/dev\.muster\.daemon\.main$/m)
+  }, 30_000)
+
+  it('check says the daemon stopped restarting, not only that nothing ticks', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work' }, run: ['true'], every: 1 }] }))
+    await cli(dir, ['post', 'general', 'board exists'])
+    let now = Date.now()
+    for (let i = 0; i < RESTART_LIMIT; i++) begin(join(dir, 'config', 'daemon', 'main.json'), now++)
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--json'])
+    expect(run.code).toBe(1)
+    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'daemon_stopped', next: ['mu daemon reset'] })
+  })
+
+  it('a daemon stopped and started cleanly many times is never stopped by the guard', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'board exists'])
+    for (let i = 0; i < RESTART_LIMIT + 1; i++) {
+      const daemon = cliStart(dir, ['daemon', 'run'])
+      // Stopped once it is up and ticking, as launchd stops it at logout.
+      for (let wait = 0; wait < 100 && !/watchers/.test(daemon.output()); wait++) await new Promise((resolve) => setTimeout(resolve, 100))
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      daemon.child.kill('SIGTERM')
+      expect((await daemon.done).code).toBe(0)
+    }
+    expect(readGuard(join(dir, 'config', 'daemon', 'main.json'))).toEqual({ starts: [] })
+  }, 30_000)
+
+  it('installing again clears it', async () => {
+    const { dir, env } = crashing()
+    let now = Date.now()
+    for (let i = 0; i < RESTART_LIMIT; i++) begin(join(dir, 'config', 'daemon', 'main.json'), now++)
+    expect((await cli(dir, ['daemon', 'install'], { env })).code).toBe(0)
+    expect(readGuard(join(dir, 'config', 'daemon', 'main.json'))).toEqual({ starts: [] })
+  })
 })
 
 describe('checking a watcher', () => {

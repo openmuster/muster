@@ -101,7 +101,15 @@ export type DaemonOptions = {
   deps?: Partial<Deps & HookDeps> & { spawnWorker?: RunDeps['spawn'] }
   /** Milliseconds between ticks. A tick is cheap; a long sleep would only delay what is due. */
   interval?: number
+  /**
+   * Called once, after a tick that worked, when the daemon has been up `after` milliseconds by `deps.now`.
+   * `mu daemon run` uses it to forget its recent starts: a run that stays up was not part of a storm.
+   */
+  steady?: { after: number; then: () => void }
 }
+
+/** The longest pause between ticks that keep failing. A board that can't be read is tried again, slowly. */
+export const FAILING_PAUSE = 60_000
 
 /** What a tick needs to send outgoing webhooks: the hooks, and what each has been through since the daemon started. */
 export type Hooks = { list: ArmedHook[]; states: Map<string, HookState>; deps: HookDeps; notes?: Set<number> }
@@ -141,16 +149,28 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
   const workflows: Workflows | undefined = options.workflows ? { list: options.workflows, deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now, runs: openRuns() } } : undefined
+  const began = deps.now()
+  let steadied = !options.steady
+  // Ticks that failed in a row, and the last error said: the same error is logged once, then at 2, 4, 8... in a row.
+  let failing = 0
+  let said = ''
   try {
     while (!options.stop.aborted) {
       try {
         const did = await tickOnce(options.team, options.watchers, states, deps, hooks, workflows)
+        failing = 0
+        said = ''
+        if (!steadied && deps.now() - began >= options.steady!.after) {
+          steadied = true
+          options.steady!.then()
+        }
         for (const id of did.schedules.sent) options.log(`sent      schedule ${id}`)
         for (const id of did.schedules.skipped) options.log(`skipped   schedule ${id}`)
         for (const id of did.schedules.canceled) options.log(`canceled  schedule ${id}  its token was revoked`)
         for (const [name, result] of Object.entries(did.watched)) {
           if (result.woke.length) options.log(`woke      ${name}  ${result.woke.length}`)
           if (result.failed.length) options.log(`failed    ${name}  at ${result.failed[0]}`)
+          if (result.slowed) options.log(`slowed    ${name}  its command keeps failing: next run in ${result.slowed}s`)
         }
         for (const [name, result] of Object.entries(did.hooked)) {
           if (result.sent.length) options.log(`sent      hook ${name}  ${result.sent.length}`)
@@ -162,10 +182,15 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
         if (did.workflows?.reported?.length) options.log(`reported  workflow  ${did.workflows.reported.join(' ')}`)
         if (did.workflows?.why) options.log(`failed    workflow  ${did.workflows.why}`)
       } catch (error) {
-        options.log(`error     ${(error as Error).message}`)
+        const message = (error as Error).message
+        failing += 1
+        if (message !== said) options.log(`error     ${message}`)
+        else if ((failing & (failing - 1)) === 0) options.log(`error     ${message}  (${failing} ticks in a row)`)
+        said = message
       }
+      const interval = options.interval ?? 1000
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(done, options.interval ?? 1000)
+        const timer = setTimeout(done, failing ? Math.min(FAILING_PAUSE, Math.max(interval, interval * 2 ** failing)) : interval)
         function done() {
           clearTimeout(timer)
           options.stop.removeEventListener('abort', done)

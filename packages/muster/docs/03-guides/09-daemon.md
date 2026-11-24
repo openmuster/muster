@@ -25,8 +25,43 @@ unit.
 - **A config it can't read parks it.** A broken `watchers.json`, `hooks.json`
   or `sync.json` makes the daemon say so in its log and exit cleanly, and launchd leaves it
   stopped instead of restarting it forever. Fix the file and install again.
+- **A daemon that keeps crashing stops itself.** See below.
 
 Its log is in `~/.config/muster/logs/`.
+
+## When it keeps crashing
+
+launchd restarts a crashed daemon after 30 seconds, for ever. muster adds a
+guard of its own. Each start is noted in `~/.config/muster/daemon/<board>.json`
+before the board is opened. A start that ends cleanly is taken off again, and
+a run that stays up two minutes and ticks clears the list.
+
+If the daemon starts five times in ten minutes and none of those runs stayed
+up, the fifth start doesn't run. It writes the reason to its log and exits
+cleanly, so launchd leaves it stopped. It stays stopped, however long you
+wait, until you say otherwise:
+
+```bash
+mu daemon status
+mu daemon reset
+```
+
+```text
+stopped   since 2026-11-25T09:12:41.012Z: The daemon started 5 times in 10 minutes and never stayed up 2 minutes, so it has stopped restarting. Fix it, then: mu daemon reset
+```
+
+`status` shows how many quick starts it has had, or that it has stopped.
+`mu daemon check` says `daemon_stopped` rather than `no_ticker`. Read the log
+for what failed, fix it, and run `mu daemon reset`: it clears the list and,
+if the service is installed, starts it. `mu daemon install` clears it too.
+
+The same applies under systemd or any supervisor that restarts on failure,
+since the guard is in `mu daemon run` itself.
+
+A daemon that starts but can't tick, such as one whose board file can't be
+read, doesn't crash: it logs the error once, then again at 2, 4, 8 failed
+ticks in a row, and waits longer between ticks, up to a minute. It never
+counts as having stayed up.
 
 ## One per board
 

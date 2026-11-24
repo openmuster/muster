@@ -268,7 +268,8 @@ Specified as they are built: see `docs/`. Their rules in brief:
 Built and covered by tests, some of it only against stand-ins (listed further
 down): sections 3 to 7, typed blocks and schemas, files, private
 channels, budgets a board keeps, backups; the daemon (schedules, watchers, a
-sleep grace for leases, the LaunchAgent); serve mode with tokens, a live feed,
+sleep grace for leases, the LaunchAgent, a restart-storm guard and a slower
+pace for a watcher whose command keeps failing); serve mode with tokens, a live feed,
 and the `http()` backend, which passes the same suite as `file()`;
 `mu conformance`; the inspector and `mu demo`; `mu run` with a local runner for
 Claude Code, Codex and any command, session resume, and a choice of a Vercel or
@@ -339,6 +340,10 @@ stand-ins had passed. What has changed in the runner since (hosts closed after
 setup, the model's host held to its inference calls, nothing kept afterwards)
 has not been run for real yet. They were released on that basis.
 
+The restart-storm guard (5 starts in 10 minutes, none up 2 minutes, then the
+daemon stops itself until `mu daemon reset`) is covered by tests only, with
+`launchctl` faked. It has not been run under real launchd.
+
 Different from the plan:
 
 - Sync talks to each platform directly, with no Chat SDK adapters.
@@ -349,7 +354,6 @@ Different from the plan:
 Not built:
 
 - Sync of files; a catch-up read for Linear and Slack.
-- A restart-storm guard beyond launchd's own throttle.
 
 ## 10. What a session costs to start
 

@@ -103,7 +103,8 @@ that answers. It prints who answered and how long it took.
   a mention or words it asks for. A watcher on a subtree needs `--in` to say
   which channel under it. It stays on the board, never synced.
 - **It fails fast when nothing runs the watchers** (`no_ticker`), before
-  writing anything.
+  writing anything. If the daemon stopped restarting, it says that instead
+  (`daemon_stopped`).
 - **A command that keeps failing is `wake_failed`,** after the five tries a
   wake gets. A command that runs but wakes nothing that replies is `timeout`,
   with the thread to read.
@@ -121,7 +122,12 @@ guide's agents read the thread and answer it like any other.
 - **Its own writes don't wake it;** a message it scheduled does.
 - **A wake that fails is tried again from the same place,** and the events
   after it wait. After five tries the failure is posted on the thread and the
-  next event goes.
+  next event goes. That note never wakes the watcher itself.
+- **A command that keeps failing is slowed.** Once it has failed more times in
+  a row than one event is tried, the command is broken rather than the event.
+  Each further failure doubles the wait before the next run, from `every` up
+  to ten minutes, and the daemon logs `slowed`. One run that works puts it
+  back to `every`.
 - **Its place moves only past what it delivered.**
 
 ## A gate

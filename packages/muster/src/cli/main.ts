@@ -15,6 +15,7 @@ import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import { takeLock } from '../daemon/lock.ts'
+import * as guard from '../daemon/guard.ts'
 import { answer as answerMcp } from './mcp.ts'
 import * as launchd from '../daemon/launchd.ts'
 import { configDir } from './claims.ts'
@@ -100,6 +101,8 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
     const free = takeLock(lock)
     if (free) {
       free.release()
+      const { parked } = guard.readGuard(guard.guardPath(run.io.env.MUSTER_BOARD ?? 'main'))
+      if (parked) throw new Failure('daemon_stopped', parked.why, { hint: `Stopped since ${parked.at}. Its log says what failed: ${join(configDir(), 'logs')}.`, next: ['mu daemon reset'] })
       throw new Failure('no_ticker', 'Nothing is running the watchers for this board.', { next: ['mu daemon run', 'mu daemon install'] })
     }
   }
@@ -1003,7 +1006,9 @@ const commands: Record<string, Command> = {
         run.io.out(`watchers  ${watchers.length}`)
         if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
         if (workflows.length) run.io.out(`workflows ${workflows.length}`)
-        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out })
+        // A run that stays up, and ticks, clears the restart guard's count: the starts before it were not a storm.
+        const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guard.guardPath(name)) }
+        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
       }
@@ -1019,6 +1024,8 @@ const commands: Record<string, Command> = {
           if (run.io.env[key] === undefined) throw misuse('missing_env', `${key} isn't set, so there is nothing to give the daemon.`)
           env[key] = run.io.env[key]!
         }
+        // Installing again is trying again: a daemon the restart guard stopped starts afresh.
+        guard.reset(guard.guardPath(name))
         const path = launchd.install({ board: name, program, ...(run.io.env.MUSTER_DIR ? { dir: run.io.env.MUSTER_DIR } : {}), env, log, home: run.io.env.HOME ?? homedir() })
         return print(run, { installed: path, log }, () => [`installed  ${path}`, `log        ${log}`, 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
       }
@@ -1026,18 +1033,33 @@ const commands: Record<string, Command> = {
         const removed = launchd.uninstall({ board: name, home: run.io.env.HOME ?? homedir() })
         return print(run, removed, () => (removed.wasLoaded ? `removed  ${removed.path}` : 'not installed'))
       }
+      if (verb === 'reset') {
+        const parked = guard.reset(guard.guardPath(name))
+        const installed = launchd.loaded(name)
+        if (installed) launchd.start(name)
+        return print(run, { reset: parked !== null, started: installed }, () =>
+          [
+            parked ? `reset     stopped since ${parked.at}` : 'reset     it had not stopped',
+            installed ? `started   ${launchd.label(name)}` : 'not installed: start it with mu daemon run',
+          ].join('\n'),
+        )
+      }
       if (verb === 'status') {
+        // Read before the config, which may be what stopped it and may not load.
+        const kept = guard.readGuard(guard.guardPath(name))
+        const recent = kept.starts.filter((at) => run.now() - at < guard.RESTART_WINDOW).length
         const { watchers, hooks } = loadDaemonConfig(run.io.env)
         const running = launchd.loaded(name)
-        return print(run, { installed: running, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
+        return print(run, { installed: running, parked: kept.parked ?? null, starts: recent, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
           [
             `service   ${running ? 'loaded' : 'not installed'}`,
+            kept.parked ? `stopped   since ${kept.parked.at}: ${kept.parked.why} Fix it, then: mu daemon reset` : `restarts  ${recent} quick starts in ${guard.RESTART_WINDOW / 60_000} minutes; it stops at ${guard.RESTART_LIMIT}`,
             `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
             `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
           ].join('\n'),
         )
       }
-      throw misuse('unknown_command', `Unknown daemon command "${verb}".`, 'One of: run, check, install, uninstall, status.')
+      throw misuse('unknown_command', `Unknown daemon command "${verb}".`, 'One of: run, check, install, uninstall, status, reset.')
     },
   },
 
@@ -1848,9 +1870,34 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
   }
   if (name === 'mcp') return fail(io, json, misuse('not_a_terminal_command', 'mu mcp is started by an agent, as an MCP server on its pipes.', 'Add it to your agent: command "mu", argument "mcp".'))
   const command = commands[name]!
-  let team: Board | null = null
   try {
     const parsed = parse(argv.slice(1), command.spec)
+    // The restart guard counts each start of the daemon before anything that can fail is opened: the
+    // board, the sync config. A start that ends cleanly is taken off again; one that crashed stays counted.
+    if (name === 'daemon' && parsed.positionals[0] === 'run') {
+      const path = guard.guardPath(io.env.MUSTER_BOARD ?? 'main')
+      const at = Date.now()
+      const parked = guard.begin(path, at)
+      if (parked) {
+        io.err(`error: ${parked.why}`)
+        io.err(`  Stopped since ${parked.at}. What made it fail is earlier in this log.`)
+        io.err('  Fix it, then: mu daemon reset')
+        return 0
+      }
+      const code = await dispatch(name, command, parsed, io, json)
+      if (code === 0) guard.ended(path, at)
+      return code
+    }
+    return await dispatch(name, command, parsed, io, json)
+  } catch (error) {
+    return fail(io, json, error)
+  }
+}
+
+/** Opens the board the command asks for, runs it, and closes the board. */
+async function dispatch(name: string, command: (typeof commands)[string], parsed: Parsed, io: Io, json: boolean): Promise<number> {
+  let team: Board | null = null
+  try {
     const as = str(parsed.flags, 'as') ?? (io.env.MUSTER_PROFILE || undefined)
     const dir = str(parsed.flags, 'dir') ?? io.env.MUSTER_DIR
     const boardName = str(parsed.flags, 'board') ?? io.env.MUSTER_BOARD

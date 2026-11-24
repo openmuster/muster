@@ -21,6 +21,8 @@ export type Watcher = {
 }
 
 export const DELIVERY_ATTEMPTS = 5
+/** The longest a watcher whose command keeps failing waits between runs: ten minutes, or its own `every` if longer. */
+export const SLOWEST = 10 * 60_000
 
 export type Spawned = { code: number | null; stdout: string }
 export type Deps = {
@@ -29,7 +31,23 @@ export type Deps = {
   spawn: (command: string[], env: Record<string, string>, allow?: readonly string[]) => Promise<Spawned>
 }
 
-export type WatchState = { last: number; attempts: number }
+/**
+ * What a watcher has been through since the daemon started. `failures` counts failed runs of its command
+ * in a row, across events; `notes` are the IDs of the messages it wrote to say it gave up, which never wake it.
+ */
+export type WatchState = { last: number; attempts: number; failures?: number; notes?: Set<number> }
+
+/**
+ * Milliseconds between a watcher's runs. Its `every`, until its command has failed more times in a row
+ * than one event is tried. Past that the command is broken, not the event, and each failure doubles
+ * the wait, up to `SLOWEST`. One run that works puts it back to `every`.
+ */
+export function pause(watcher: Watcher, state: WatchState): number {
+  const every = (watcher.every ?? 30) * 1000
+  const over = (state.failures ?? 0) - DELIVERY_ATTEMPTS
+  if (over < 0) return every
+  return Math.min(Math.max(SLOWEST, every), Math.max(every, 1000) * 2 ** (over + 1))
+}
 
 const fill = (part: string, event: FeedEvent) =>
   part
@@ -54,9 +72,9 @@ export function gateSaysNo(stdout: string): boolean {
  * and moves the cursor only past what it delivered. A wake that keeps failing is recorded on its
  * thread after five tries, so one bad thread never holds the rest.
  */
-export async function runWatcher(team: Board, watcher: Watcher, state: WatchState, deps: Deps): Promise<{ woke: number[]; failed: number[]; gated: number[] }> {
-  const out = { woke: [] as number[], failed: [] as number[], gated: [] as number[] }
-  if (deps.now() - state.last < (watcher.every ?? 30) * 1000) return out
+export async function runWatcher(team: Board, watcher: Watcher, state: WatchState, deps: Deps): Promise<{ woke: number[]; failed: number[]; gated: number[]; slowed?: number }> {
+  const out: { woke: number[]; failed: number[]; gated: number[]; slowed?: number } = { woke: [], failed: [], gated: [] }
+  if (deps.now() - state.last < pause(watcher, state)) return out
   state.last = deps.now()
   const me = watcher.as ? team.as(watcher.as) : team
   const name = `watch:${watcher.name}`
@@ -67,7 +85,9 @@ export async function runWatcher(team: Board, watcher: Watcher, state: WatchStat
   const latest = new Map<string, FeedEvent>()
   for (const event of page.events) {
     const own = watcher.as !== undefined && event.by.profile === watcher.as && !(event.data as { schedule?: unknown }).schedule
-    if (!own) latest.set(String(event.thread ?? `c:${event.channel}`), event)
+    // Its own note that it gave up is the daemon talking: waking for it would fail the same way, for ever.
+    const note = event.type === 'message.posted' && event.message !== undefined && state.notes?.has(event.message.id)
+    if (!own && !note) latest.set(String(event.thread ?? `c:${event.channel}`), event)
   }
   let reached = page.cursor
   for (const event of [...latest.values()].sort((a, b) => a.seq - b.seq)) {
@@ -79,10 +99,12 @@ export async function runWatcher(team: Board, watcher: Watcher, state: WatchStat
     const ran = await deps.spawn(watcher.run.map((part) => fill(part, event)), env, watcher.env)
     if (ran.code === 0) {
       state.attempts = 0
+      state.failures = 0
       out.woke.push(event.seq)
       continue
     }
     state.attempts += 1
+    state.failures = (state.failures ?? 0) + 1
     if (state.attempts < DELIVERY_ATTEMPTS) {
       // Stop before this event: the cursor stays behind it, and the next run tries it again.
       reached = event.seq - 1
@@ -92,9 +114,11 @@ export async function runWatcher(team: Board, watcher: Watcher, state: WatchStat
     state.attempts = 0
     out.failed.push(event.seq)
     if (event.thread !== null) {
-      await me.reply({ to: event.thread, text: `watcher "${watcher.name}" couldn't deliver a wake-up after ${DELIVERY_ATTEMPTS} tries (exit ${ran.code ?? 'none'}).`, noSync: true }).catch(() => {})
+      const note = await me.reply({ to: event.thread, text: `watcher "${watcher.name}" couldn't deliver a wake-up after ${DELIVERY_ATTEMPTS} tries (exit ${ran.code ?? 'none'}).`, noSync: true }).catch(() => null)
+      if (note) (state.notes ??= new Set()).add(note.id)
     }
   }
   if (reached > cursor) await me.cursorSet(name, reached)
+  if ((state.failures ?? 0) >= DELIVERY_ATTEMPTS) out.slowed = pause(watcher, state) / 1000
   return out
 }

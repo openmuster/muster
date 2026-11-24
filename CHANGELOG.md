@@ -7,6 +7,18 @@ versions are affected.
 
 ### Added
 
+- The daemon stops crash-looping. If `mu daemon run` starts five times in ten
+  minutes and none of those runs stayed up two minutes, the fifth start writes
+  why to its log and exits cleanly, so launchd (or systemd) leaves it stopped.
+  `mu daemon status` shows it, `mu daemon check` says `daemon_stopped`, and
+  `mu daemon reset` clears it and starts the service again. Installing again
+  clears it too. A clean stop never counts, and a run that stays up clears the
+  count.
+- A watcher whose command keeps failing is slowed. After more failures in a
+  row than one event is tried, each failure doubles the wait before its next
+  run, up to ten minutes, and the daemon logs `slowed`. One run that works
+  puts it back to `every`.
+
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
@@ -109,6 +121,12 @@ rest to anyone who shares a machine, or whose server's output is kept.
 
 ### Fixed
 
+- A watcher with no `as` profile was woken by its own note that it gave up on
+  a thread, and so tried the same failing command five more times, then wrote
+  another note, for ever. Its own notes no longer wake it.
+- A daemon whose board couldn't be read logged the same error every second.
+  It now logs it once and then at 2, 4, 8 failed ticks in a row, and waits up
+  to a minute between tries.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

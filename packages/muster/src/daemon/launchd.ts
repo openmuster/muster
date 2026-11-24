@@ -81,6 +81,11 @@ export function uninstall(options: { board: string; home?: string; uid?: number 
   return { path, wasLoaded }
 }
 
+/** Starts the loaded service now. A clean exit leaves it loaded and stopped, so this is how it is tried again. */
+export function start(board: string, uid = process.getuid!()) {
+  launchctl(['kickstart', `gui/${uid}/${label(board)}`])
+}
+
 export function loaded(board: string, uid = process.getuid!()): boolean {
   try {
     launchctl(['print', `gui/${uid}/${label(board)}`])
