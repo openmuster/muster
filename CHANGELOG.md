@@ -45,6 +45,19 @@ versions are affected.
   downtime are read for up to two threads a channel. Edits and deletes made
   meanwhile are not read. Covered by tests against a faked Slack API only. See
   [Slack](./packages/muster/docs/02-sync/04-slack.md#after-downtime).
+- The daemon stops crash-looping. If `mu daemon run` starts five times in ten
+  minutes and none of those runs stayed up two minutes, the fifth start writes
+  why to its log and stays up doing nothing, so launchd (or systemd) has
+  nothing to restart. An hour later it tries again as a first start.
+  `mu daemon status` shows it, `mu daemon check` says `daemon_stopped`, and
+  `mu daemon reset` clears it so it starts now. Installing again clears it
+  too. A clean stop never counts, a run that stays up clears the count, and a
+  board at a URL that can't be reached yet is waited for, not counted.
+- A watcher whose command keeps failing is slowed. After more failures in a
+  row than one event is tried, each failure doubles the wait before its next
+  run, up to ten minutes, and the daemon logs `slowed`. One run that works
+  puts it back to `every`.
+
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
@@ -221,6 +234,12 @@ rest to anyone who shares a machine, or whose server's output is kept.
 - GitHub's catch-up asks for each page from the newest change read, so an
   issue changed during the read isn't skipped. An answer that isn't a list
   counts as a refusal.
+- A watcher with no `as` profile was woken by its own note that it gave up on
+  a thread, and so tried the same failing command five more times, then wrote
+  another note, for ever. Its own notes no longer wake it.
+- A daemon whose board couldn't be read logged the same error every second.
+  It now logs it once and then at 2, 4, 8 failed ticks in a row, and waits up
+  to 30 seconds between tries.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
