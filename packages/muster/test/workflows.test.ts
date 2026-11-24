@@ -222,7 +222,7 @@ describe('mu workflow', () => {
   it('run works over HTTP, against mu serve', async () => {
     const dir = tempDir()
     await cli(dir, ['post', 'work', 'ship'])
-    const serving = cliStart(dir, ['serve', '--port', '0'])
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
     try {
       for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
       const env = { MUSTER_URL: /MUSTER_URL=(\S+)/.exec(serving.output())![1]!, MUSTER_TOKEN: /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]! }
@@ -810,7 +810,7 @@ describe('the daemon starts a requested workflow', () => {
     const owner = board({ dir: join(dir, 'board') })
     const me = (await owner.whoami()).principal
     const serve = async (until: (err: string) => boolean | Promise<boolean>) => {
-      const serving = cliStart(dir, ['serve', '--port', '0'])
+      const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
       let err = ''
       serving.child.stderr!.on('data', (chunk) => (err += chunk))
       let done = false

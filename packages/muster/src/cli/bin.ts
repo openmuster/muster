@@ -26,6 +26,7 @@ const code = await main(process.argv.slice(2), {
   err: (text) => void process.stderr.write(text + '\n'),
   stdin: () => readFileSync(0, 'utf8'),
   env: process.env,
+  tty: process.stdout.isTTY === true,
   stop: stop.signal,
 })
 process.exitCode = code

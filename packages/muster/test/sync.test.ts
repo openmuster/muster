@@ -574,7 +574,7 @@ describe('sync: config and the webhook route', () => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
     writeFileSync(join(dir, 'config', 'sync.json'), JSON.stringify({ gh: { type: 'github', secret: 'env:GH_SECRET', repos: { 'acme/web': 'web' } } }))
-    const serving = cliStart(dir, ['serve', '--port', '0'], { GH_SECRET: SECRET })
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'], { GH_SECRET: SECRET })
     for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
     const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
     const body = JSON.stringify({ action: 'opened', issue: issue(3, 'From a real webhook', ''), repository: repo, sender: { login: 'nico' } })

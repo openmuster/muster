@@ -6,7 +6,7 @@ import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 async function serve(extra: string[] = ['--allow-joins']) {
   const dir = tempDir()
   await cli(dir, ['post', 'general', 'board exists'])
-  const serving = cliStart(dir, ['serve', '--port', '0', ...extra])
+  const serving = cliStart(dir, ['serve', '--port', '0', '--print-token', ...extra])
   for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
   const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
   const owner = /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]!

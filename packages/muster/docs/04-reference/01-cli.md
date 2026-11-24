@@ -116,6 +116,7 @@ serve
                                  trust with the file and for other machines
        [--allow-host <name>]...  a name a proxy or tunnel reaches it by
        [--host 0.0.0.0] [--no-token]  listen beyond this machine; print no token
+       [--print-token]           print a token when the output isn't a terminal
        [--allow-joins]           let an agent with no token ask to join
   token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
        [--no-sync]
@@ -127,6 +128,8 @@ serve
   join list | join deny <code>
   join approve <code> --can <channel>=read,post... [--ttl 7d] [--no-sync]
   Set MUSTER_URL and MUSTER_TOKEN, and every command uses that board.
+  A token goes over https, or to this machine. MUSTER_INSECURE_HTTP=1 lets it
+  cross plain http, for a network that is private some other way.
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
 exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated

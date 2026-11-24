@@ -310,7 +310,7 @@ describe('serve', () => {
     const dir = tempDir()
     await cli(dir, ['post', 'general', 'from the file'])
     const start = async () => {
-      const serving = cliStart(dir, ['serve', '--port', '0'])
+      const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
       for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
       const env = { MUSTER_URL: /MUSTER_URL=(\S+)/.exec(serving.output())![1]!, MUSTER_TOKEN: /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]! }
       return { serving, env }
