@@ -10,8 +10,10 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
-  // Keep Workers Logs, so an error in the search route is visible.
+  // Keep Workers Logs, so an error in the search route is visible. Not a line per request: who read
+  // which page, and what they searched for, is nobody's to keep.
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": { "invocation_logs": false }
   }
 }

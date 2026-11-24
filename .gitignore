@@ -8,3 +8,11 @@ coverage/
 # copied in from the repo root when the package is packed
 packages/muster/README.md
 packages/muster/LICENSE
+
+# Secrets people keep beside a project: never committed, and never copied into an image.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem

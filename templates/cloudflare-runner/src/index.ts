@@ -1,11 +1,11 @@
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
 import { authorized, usable } from './auth.ts'
 import { type BoardProps, type ModelProps, type RepoProps, boardHeaders, modelPasses, repoPasses, repoProps } from './gates.ts'
-import { capStream, decide, execRequest, exitCode, readCapped } from './lifecycle.ts'
+import { capStream, decide, ended, execRequest, exitCode, readCapped } from './lifecycle.ts'
 
 type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; timeoutMs?: number; attach?: boolean }
 type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
-type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance }
+type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance; LOG_TAIL?: string }
 
 /** Where Cloudflare puts the certificate its intercepts present. It exists once an HTTPS intercept is registered. */
 const CA = '/etc/cloudflare/certs/cloudflare-containers-ca.crt'
@@ -114,7 +114,8 @@ export class Run extends DurableObject<Env> {
         if (sha && branch) checkout = { sha, branch }
       }
     } catch (error) {
-      await this.end(`setup failed: ${(error as Error).message}`)
+      // What the command printed goes back to whoever started the run, in the error below: not into the Worker's logs.
+      await this.end('setup failed')
       throw error
     }
     // The clone is done: the repository's host is closed before anything of it runs.
@@ -248,7 +249,7 @@ export class Run extends DurableObject<Env> {
       await this.ctx.storage.put('closed', true)
     } catch (error) {
       // A run that can't be closed is never read from: it ends.
-      await this.end(`closing failed: ${(error as Error).message}`)
+      await this.end('closing failed')
     }
   }
 
@@ -266,14 +267,15 @@ export class Run extends DurableObject<Env> {
     return new TextDecoder().decode(stdout)
   }
 
-  /** Ends the run: the tail of the agent's output goes to the Worker's logs, then the container and this object's state go. */
+  /** Ends the run: why and the agent's exit code go to the Worker's logs (and the tail of its output with LOG_TAIL=1), then the container and this object's state go. */
   private async end(why: string): Promise<void> {
     const container = this.ctx.container!
+    const code = (await this.ctx.storage.get<number | null>('exitCode')) ?? null
     await this.ctx.storage.deleteAlarm()
     await this.ctx.storage.deleteAll()
     let tail = ''
-    if (container.running) tail = await this.capture(['sh', '-c', `tail -c 2000 ${LOG} 2>/dev/null`]).catch(() => '')
-    console.log(JSON.stringify({ event: 'run.ended', why, tail }))
+    if (this.env.LOG_TAIL === '1' && container.running) tail = await this.capture(['sh', '-c', `tail -c 2000 ${LOG} 2>/dev/null`]).catch(() => '')
+    console.log(JSON.stringify(ended(why, code, tail, this.env.LOG_TAIL)))
     if (container.running) await container.destroy()
   }
 }
@@ -286,8 +288,14 @@ export default {
     const url = new URL(request.url)
     if (request.method === 'POST' && url.pathname === '/runs') {
       const id = crypto.randomUUID()
-      const started = await env.RUNS.get(env.RUNS.idFromName(id)).start((await request.json()) as Start)
-      return Response.json({ id, ...started })
+      try {
+        const started = await env.RUNS.get(env.RUNS.idFromName(id)).start((await request.json()) as Start)
+        return Response.json({ id, ...started })
+      } catch (error) {
+        // Why a run didn't start is for whoever asked, who holds the secret: answered, not thrown, so what a
+        // setup command printed isn't in the Worker's logs as an exception.
+        return new Response(`The run didn't start: ${(error as Error).message}`, { status: 502 })
+      }
     }
     // A run is named by the ID start gave it, and nothing else reaches one.
     const route = /^\/runs\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/(stop|close|exec|file))?$/.exec(url.pathname)

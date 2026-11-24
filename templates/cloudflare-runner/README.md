@@ -25,8 +25,12 @@ token added there, then closed before the agent starts.
 
 Each run is a Durable Object. It checks the run every minute, which keeps the
 container alive, and removes the container when the agent exits or the run's
-time is up. The tail of the agent's output goes to the Worker's logs
-(`wrangler tail`).
+time is up. Why a run ended and its exit code go to the Worker's logs
+(`wrangler tail`), and nothing the run printed: that can be anything the agent
+read. To see why a run failed, set the `LOG_TAIL` variable to `"1"` in
+`wrangler.jsonc` and deploy: the last 2000 bytes each run prints are then
+logged too, and kept by Cloudflare as long as your logs are. Per-request logs
+are off (`invocation_logs`), since every request carries the runner's secret.
 
 A run started with `attach` (`mu run --push`) is kept after its agent exits,
 for up to 15 minutes, so `mu run` can read what it changed. Each route takes
@@ -63,5 +67,5 @@ build stops until you name the agent's:
 docker build --build-arg AGENT_VERSION=<version> .   # npm view @anthropic-ai/claude-code version
 ```
 
-`MUSTER_VERSION` and `AGENT_PACKAGE` are build arguments too: swap the agent's
+`MUSTER_VERSION` (with `MUSTER_SHA256`, its tarball's checksum from that release's `SHA256SUMS`) and `AGENT_PACKAGE` are build arguments too: swap the agent's
 CLI for the one you run.

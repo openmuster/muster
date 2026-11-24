@@ -9,7 +9,7 @@ import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
 import { boardHeaders, modelPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
-import { KEEP_MS, capStream, decide, execRequest, exitCode, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
+import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
 import { boardPolicy } from '../src/runner/policy.ts'
 import { claude } from '../src/runner/agents.ts'
 
@@ -147,5 +147,16 @@ describe('the factory template', () => {
     const prompt = readFileSync(join(dir, 'prompt.txt'), 'utf8')
     expect(prompt).toContain('you write under the\nname `factory`')
     expect(prompt).toContain('Thread 812 changed. Open it with: mu read 812')
+  })
+})
+
+describe('what the runner Worker logs when a run ends', () => {
+  it('says why it ended and how the agent exited, and what the run printed only when the owner asked for it', () => {
+    const printed = 'cloning https://github.com/acme/private.git ... the customer list is in /workspace/repo/customers.csv'
+    expect(ended('done', 0, printed, undefined)).toEqual({ event: 'run.ended', why: 'done', exitCode: 0 })
+    expect(ended('setup failed', null, printed, '0')).toEqual({ event: 'run.ended', why: 'setup failed', exitCode: null })
+    expect(JSON.stringify(ended('timed out', null, printed, ''))).not.toContain('customer')
+    // LOG_TAIL=1 on the Worker: the end of what the run printed is kept in Cloudflare's logs with it.
+    expect(ended('done', 1, printed, '1')).toEqual({ event: 'run.ended', why: 'done', exitCode: 1, tail: printed })
   })
 })

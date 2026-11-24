@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
     "start": "next start",
     "typecheck": "fumadocs-mdx && tsc --noEmit",
     "test": "vitest run",
-    "preview:cf": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy:cf": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
+    "preview:cf": "NEXT_TELEMETRY_DISABLED=1 opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy:cf": "NEXT_TELEMETRY_DISABLED=1 opennextjs-cloudflare build && opennextjs-cloudflare deploy"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "1.20.13",

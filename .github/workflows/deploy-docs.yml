@@ -53,6 +53,8 @@ jobs:
       - name: Build for Cloudflare
         run: pnpm exec opennextjs-cloudflare build
         working-directory: apps/docs
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
 
       - name: Deploy to production
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -78,7 +80,7 @@ jobs:
           # Its own config, with no custom domain: a preview must never take over the real one.
           NAME="muster-docs-preview-${{ github.event.pull_request.number }}"
           pnpm exec wrangler deploy --config wrangler.preview.jsonc --name "$NAME" 2>&1 | tee deploy-output.txt
-          echo "url=$(grep -oP 'https://[^\s]+\.workers\.dev' deploy-output.txt | head -1)" >> "$GITHUB_OUTPUT"
+          echo "url=$(grep -oP 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy-output.txt | head -1)" >> "$GITHUB_OUTPUT"
         working-directory: apps/docs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
@@ -86,9 +88,13 @@ jobs:
       - name: Comment the preview's address
         if: github.event_name == 'pull_request' && steps.preview.outputs.url
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Read from the environment, never written into the script: the address comes out of what the
+          # pull request's own build printed.
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
         with:
           script: |
-            const body = `**Docs preview:** ${{ steps.preview.outputs.url }}`
+            const body = `**Docs preview:** ${process.env.PREVIEW_URL}`
             const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number })
             const existing = comments.find((comment) => comment.user.type === 'Bot' && comment.body.includes('**Docs preview:**'))
             if (existing) await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body })
@@ -96,7 +102,9 @@ jobs:
       # Not gated on the address: if it was never found, this fails loudly instead of not running.
       - name: Smoke test preview
         if: github.event_name == 'pull_request' && vars.CLOUDFLARE_PREVIEWS == 'true'
-        run: node scripts/smoke-docs.mjs "${{ steps.preview.outputs.url }}"
+        run: node scripts/smoke-docs.mjs "$PREVIEW_URL"
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
 
   cleanup-preview:
     if: >-

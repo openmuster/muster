@@ -413,7 +413,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
     doFetch(`${base}${path}`, { method: init.method, redirect: 'error', headers: { authorization: `Bearer ${options.secret}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) })
   const call = async <T>(path: string, body: unknown): Promise<T> => {
     const response = await send(path, { method: 'POST', body })
-    if (!response.ok) throw new Error(`the runner Worker answered ${response.status}`)
+    // Why it refused, as far as it says, cut short: it is the Worker's word, read by whoever started the run.
+    if (!response.ok) throw new Error(`the runner Worker answered ${response.status}${response.status === 502 ? `: ${(await response.text().catch(() => '')).slice(0, 600)}` : ''}`)
     return (await response.json()) as T
   }
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
