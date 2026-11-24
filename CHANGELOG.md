@@ -155,6 +155,10 @@ rest to anyone who shares a machine, or whose server's output is kept.
   container each time the last one returned, which was at once, so it kept
   starting them until the board refused to make more tokens. It is now a
   worker with one container per task.
+- A `mu run --ready --loop --push` worker with no `--repo`, a repository
+  not on github.com, or no GitHub App set claimed each ready task and then
+  failed it. It is now refused before it claims anything, on Vercel and on
+  Cloudflare.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

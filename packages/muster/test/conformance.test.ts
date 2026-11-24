@@ -534,6 +534,22 @@ export const Sandbox = { async create(options) {
     expect(JSON.stringify(seen)).not.toContain('ghs_write')
   })
 
+  it('a --ready --loop --push worker with nothing to push to is refused before it claims a task, on either cloud', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' }
+    const task = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'only', '--json'])).stdout).task.id
+    for (const runner of ['vercel', 'cloudflare']) {
+      const reasonOf = async (args: string[], more: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', runner, '--agent', 'claude', '--as', 'agent-1', '--push', '--json', ...args], { env: { ...env, ...more } })).stderr).error.reason
+      expect(await reasonOf([])).toBe('invalid_repo')
+      expect(await reasonOf(['--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
+      expect(await reasonOf(['--repo', 'https://github.com/acme/web.git'], {})).toBe('runner_not_configured')
+    }
+    // Nothing was claimed, so nothing was failed, and no sandbox was made.
+    expect(JSON.parse((await cli(dir, ['read', String(task), '--json'])).stdout).task.state).toBe('ready')
+    expect((await import('node:fs')).existsSync(join(dir, 'sdk.log'))).toBe(false)
+  })
+
   it('vercel: a --ready --loop worker with --label and --by takes only the ready tasks that carry it, made by that actor', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir)

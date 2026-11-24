@@ -1500,7 +1500,8 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
   const profile = str(parsed.flags, 'as') ?? run.io.env.MUSTER_PROFILE
   if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
-  // A runner that can't start is said once, before any task is claimed for it.
+  // A runner that can't start, or a --push with nothing to push to, is said once, before any task is claimed for it.
+  repoAndPush(parsed, run.io.env)
   await cloudRunner(where, run.io.env)
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
   // As a worker here would: --label narrows which ready tasks it takes, and --by to whose.
@@ -1555,6 +1556,22 @@ async function cloudRunner(where: string, env: Run['io']['env']): Promise<CloudR
   } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
 }
 
+/** The repository a cloud run clones, and with --push what pushing needs: checked before anything is claimed, started or loaded. */
+function repoAndPush(parsed: Parsed, env: Run['io']['env']) {
+  const asked = str(parsed.flags, 'repo')
+  const repo = asked === undefined ? undefined : repoUrl(asked)
+  const gh = repo ? githubRepo(repo) : null
+  const push = on(parsed.flags, 'push')
+  if (push) {
+    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
+    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
+  }
+  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
+  const app = gh ? githubApp(env) : undefined
+  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  return { repo, gh, push, app }
+}
+
 async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string], held: { claimToken?: string } = {}): Promise<number> {
   const env = run.io.env
   // Where the sandbox reaches the board. MUSTER_SANDBOX_URL is for a machine that has the board itself and
@@ -1569,20 +1586,10 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   if (given !== undefined) agentToken(given)
   else if (!named) throw new Failure('agent_token_missing', 'A cloud run needs to know who the agent is: pass --as <name>, and a token is made for it.', { hint: 'Your own token is never passed on. Or set MUSTER_AGENT_TOKEN to one you made.' })
   // Checked before anything is started or loaded: a bad address should cost nothing.
-  const asked = str(parsed.flags, 'repo')
-  const repo = asked === undefined ? undefined : repoUrl(asked)
-  const gh = repo ? githubRepo(repo) : null
-  const push = on(parsed.flags, 'push')
-  if (push) {
-    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
-    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
-    if (str(parsed.flags, 'ready') !== undefined) {
-      throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
-    }
+  if (on(parsed.flags, 'push') && str(parsed.flags, 'ready') !== undefined) {
+    throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
   }
-  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
-  const app = gh ? githubApp(env) : undefined
-  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  const { repo, gh, push, app } = repoAndPush(parsed, env)
   const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
   // To clone: read only, and only while Vercel clones. A public repository the App isn't on is cloned without one.
   let cloneToken: string | undefined
