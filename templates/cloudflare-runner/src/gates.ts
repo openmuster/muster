@@ -60,3 +60,21 @@ export function repoProps(clone: string, auth?: string): RepoProps {
   if (url.protocol !== 'https:' || url.username || url.password) throw new Error('repo must be an https clone URL with no credential in it')
   return { host: url.host, path: url.pathname.replace(/\/$/, ''), ...(auth ? { auth } : {}) }
 }
+
+/**
+ * The hosts a dependency install reads from: npm's registry (npm, pnpm, yarn 1, and corepack fetching
+ * pnpm or yarn), yarn's alias of it that yarn lockfiles name, and where corepack fetches yarn 2 and later.
+ */
+export const REGISTRY_HOSTS = ['registry.npmjs.org', 'registry.yarnpkg.com', 'repo.yarnpkg.com']
+
+/**
+ * Whether a request may go to a registry while dependencies install: reading only, with nothing added.
+ * A scoped package is asked for as `/@scope%2fname`, so an encoded slash passes here; dot segments don't.
+ */
+export function registryPasses(request: { url: string; method: string }, hosts: string[] = REGISTRY_HOSTS): boolean {
+  const url = new URL(request.url)
+  if (url.protocol !== 'https:' || !hosts.includes(url.host)) return false
+  const path = rawPath(request.url)
+  if (path === null || /\\|\/\.\.?(\/|$)|%2e/i.test(path)) return false
+  return ['GET', 'HEAD'].includes(request.method.toUpperCase())
+}

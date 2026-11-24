@@ -7,6 +7,19 @@ versions are affected.
 
 ### Added
 
+- `mu run --runner cloudflare --repo` installs the repository's dependencies
+  from its lockfile, with the same script as on Vercel: pnpm, npm or yarn,
+  with no install scripts, for at most three minutes. The Worker opens the
+  npm registry hosts to read, and nothing else, for the install alone: the
+  board and the model are closed while it runs, since it runs the
+  repository's own code. After it the registries close, whatever it left
+  running is killed, and the agent starts. A start that would take longer
+  than 4 minutes gives the install less time, or skips it with
+  `failed (timeout)`, so the CLI always gets the run's ID. A failed install gets the `deps` label
+  and a reply, and the agent starts. `--no-install` skips it. Redeploy
+  `templates/cloudflare-runner` and rebuild its image to use it. Covered by
+  tests, not run live.
+
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
