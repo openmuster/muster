@@ -273,7 +273,7 @@ and the `http()` backend, which passes the same suite as `file()`;
 `mu conformance`; the inspector and `mu demo`; `mu run` with a local runner for
 Claude Code, Codex and any command, session resume, and a choice of a Vercel or
 Cloudflare sandbox; sync for GitHub, Linear and Slack in both directions, with
-edits, deletes, a filter for incoming text, and a catch-up read from GitHub and Linear;
+edits, deletes, a filter for incoming text, and a catch-up read from GitHub, Linear and Slack;
 skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
 each.
 
@@ -348,7 +348,7 @@ Different from the plan:
 
 Not built:
 
-- Sync of files; a catch-up read for Slack.
+- Sync of files.
 - A restart-storm guard beyond launchd's own throttle.
 
 ## 10. What a session costs to start
