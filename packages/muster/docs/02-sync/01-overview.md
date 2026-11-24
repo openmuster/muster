@@ -123,7 +123,8 @@ case "$text" in *ghp_*) exit 1 ;; esac
 printf %s "$text"
 ```
 
-It runs with `PATH` and `HOME` only.
+It runs with `PATH` and `HOME` only. It sees a message's text, not the names
+of a platform's labels or assignees, which come in as labels.
 
 ## After downtime
 

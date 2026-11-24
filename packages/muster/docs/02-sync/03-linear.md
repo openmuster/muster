@@ -50,11 +50,14 @@ Under `tag.` and `assignee.` the thread says what Linear says now, and the
 rules are the ones for [GitHub](./02-github.md#what-it-is-filed-under): the
 key is the name cut to fit, the value is the name in lowercase, what you set
 by hand under those two goes at the issue's next update, at most 40 are kept,
-and nothing goes back. That holds for a thread started on the board too, once
-it has opened its issue.
+and nothing goes back. `priority` and `project` are Linear's as well: one you
+set by hand on a synced thread is replaced, or taken off when the issue has
+none. All of this holds for a thread started on the board too, once it has
+opened its issue.
 
-Not imported: an assignee's email, and a label or assignee change to an issue
-the board has never seen, which waits until the issue next comes in whole.
+Not imported: an assignee's email. A change to an issue the board has never
+seen, one made before sync was set up, is dropped: its thread starts only
+when an issue is created.
 
 ## What goes back
 

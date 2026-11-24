@@ -238,6 +238,9 @@ export function linear(options: LinearOptions): Provider {
    * project. Linear leaves an empty assignee or project out rather than sending `null`, so one that is
    * missing with no ID either is empty, and one named by its ID alone is left as it was. Its labels are
    * the whole list when the payload has one, and none when it lists no label IDs.
+   *
+   * How a payload is read here, and the profile-handle pattern, follow `propertiesOf` and `handleOf` in
+   * @vercel/board's `sync/linear.ts` (Apache-2.0, Copyright Vercel, Inc.).
    */
   const filing = (data: Record<string, any>): Required<Pick<Inbound, 'labels' | 'unset' | 'owns'>> => {
     const labels: Record<string, string> = {}

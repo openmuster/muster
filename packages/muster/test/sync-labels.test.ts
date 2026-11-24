@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { board, file, github, linear } from '../src/index.ts'
+import type { Provider } from '../src/sync/types.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -157,5 +158,42 @@ describe('sync: what a GitHub issue or pull request is filed under', () => {
     const labels = (await board({ backend: second }).readChannel({ channel: 'web' })).threads[0]!.message.labels
     expect(labels).toEqual({ kind: 'issue', state: 'open', ref: 'acme/web#7', source: 'gh', 'tag.security': 'security' })
     second.close()
+  })
+})
+
+describe('sync: labels a platform sends are held to the rules for your own', () => {
+  it("a thread that is nearly full takes what fits and no more, and keeps what was on it", async () => {
+    const { team, gh } = setup()
+    await gh('issues', { action: 'opened', issue: ghIssue(), repository: repo, sender: { login: 'nico' } })
+    const root = (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message
+    // Four from sync (kind, state, ref, source) and fifty-six by hand: four places left.
+    await team.label({ id: root.id, set: Object.fromEntries(Array.from({ length: 56 }, (_, index) => [`mine.${index}`, 'x'])) })
+    await gh('issues', { action: 'labeled', issue: ghIssue({ labels: Array.from({ length: 10 }, (_, index) => ({ name: `t${index}` })), assignees: [] }), repository: repo, sender: { login: 'nico' } })
+    const labels = (await team.readThread({ id: root.id })).message.labels
+    expect(Object.keys(labels)).toHaveLength(64)
+    expect(Object.keys(labels).filter((key) => key.startsWith('tag.'))).toEqual(['tag.t0', 'tag.t1', 'tag.t2', 'tag.t3'])
+    expect(labels['mine.55']).toBe('x')
+  })
+
+  it("a key or a value the board wouldn't take from a person is left out, on a new thread and on a later change, and the rest of the event still lands", async () => {
+    const time = clock()
+    // A stand-in platform that sends whatever its body says, as a provider with a fault in it might.
+    const odd: Provider = {
+      type: 'odd',
+      verify() {},
+      parse: ({ body }) => [JSON.parse(body)],
+      channelFor: () => 'odd',
+      placeFor: () => null,
+      mirrors: () => false,
+      deliver: async () => ({ external: 'none' }),
+    }
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync: { odd } })
+    const team = board({ backend })
+    const bad = { 'board.task': 'ready', [`k${'x'.repeat(70)}`]: 'long key', 'Upper': 'case', lines: 'two\nlines', big: 'v'.repeat(300) }
+    const event = { author: 'u', place: 'p', thread: 't-1' }
+    await backend.syncReceive('odd', { headers: {}, body: JSON.stringify({ ...event, id: 'e-1', kind: 'root', external: 't-1', text: 'a thread', labels: { ...bad, fine: 'yes' } }) })
+    await backend.syncReceive('odd', { headers: {}, body: JSON.stringify({ ...event, id: 'e-2', kind: 'labels', external: 'e-2', labels: { ...bad, later: 'yes' }, unset: ['board.task'], owns: ['board.'] }) })
+    const root = (await team.readChannel({ channel: 'odd' })).threads[0]!.message
+    expect(root.labels).toEqual({ fine: 'yes', later: 'yes', source: 'odd' })
   })
 })

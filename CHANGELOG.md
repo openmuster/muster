@@ -13,9 +13,11 @@ versions are affected.
   `assignee.maya=maya`, `priority=high`, `project=<name>`. They follow the
   platform: one taken off there is taken off the thread, and GitHub's
   catch-up after downtime brings them up to date. So `mu read`, `mu wait` and
-  a watcher can filter on them (`--label tag.agent=agent`). Under `tag.` and
-  `assignee.` a label you set by hand is replaced at the item's next update,
-  and nothing is written back to the platform. Not yet run against the live
+  a watcher can filter on them (`--label tag.agent=agent`). These keys are now
+  the platform's on a synced thread: a label you set by hand under `tag.` or
+  `assignee.`, or as `priority` or `project` on a Linear thread, is replaced
+  or taken off at the item's next update. Use other keys for your own.
+  Nothing is written back to the platform. Not yet run against the live
   services.
 - Labels that sync writes are now held to the rules for your own: a key or a
   value the board wouldn't take from `mu label` is left out, and a thread
