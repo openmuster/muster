@@ -1,4 +1,4 @@
-import type { Message } from '../model.ts'
+import type { Attachment, Message } from '../model.ts'
 
 /** What a platform sent, as the parts a provider needs to check and read it. */
 export type Received = { headers: Record<string, string | undefined>; body: string }
@@ -25,14 +25,24 @@ export type Inbound = {
    * an issue opened before sync, or while the board was down). The board starts the thread from it first.
    */
   parent?: { author: string; text: string; labels: Record<string, string> }
+  /** Files the message carries on the platform, still to be fetched. Never holds a credential. */
+  files?: Remote[]
+  /** What fetching them gave: files on the board, and a line for each one that was not taken. */
+  fetched?: { attachments: Attachment[]; notes: string[]; tries: number }
 }
+
+/** A file on the platform, as an event names it. `id` is the platform's own, when it has one. */
+export type Remote = { url: string; name: string; id?: string; type?: string; size?: number; skip?: string }
 
 /**
  * What a platform made of a board message. A new thread also says what an imported one would carry as
  * labels (which issue it became, its kind, its state), so a thread started on the board reads like one
  * that came in.
  */
-export type Delivery = { external: string; thread?: string; labels?: Record<string, string> }
+export type Delivery = { external: string; thread?: string; labels?: Record<string, string>; files?: string[] }
+
+/** A board file's bytes, for a provider sending it out: null when the board no longer has it. */
+export type ReadFile = (id: string) => Buffer | null
 
 /** A platform: how to check that a webhook is its own, read it, and send a message back. */
 export type Provider = ProviderExtras & {
@@ -49,7 +59,7 @@ export type Provider = ProviderExtras & {
   /** Whether board replies in a synced thread go back to the platform. */
   mirrors(place: string): boolean
   /** Posts a board message on the platform. `threadExternal` is null for a new root. */
-  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch): Promise<Delivery>
+  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch, read: ReadFile): Promise<Delivery>
 }
 
 /** What a provider may also do. Each is optional: a platform that can't simply doesn't. */
@@ -60,6 +70,8 @@ export type ProviderExtras = {
   remove?(external: string, place: string, fetcher: typeof fetch): Promise<void>
   /** What happened on the platform since a time, for when webhooks were missed while the board was down. */
   catchUp?(since: string, fetcher: typeof fetch): Promise<Inbound[]>
+  /** Fetches a file an event named, from the platform's own file host only. Throws a Failure: `file_refused` is final. */
+  download?(file: Remote, fetcher: typeof fetch): Promise<{ bytes: Buffer; type?: string }>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */
   filter?(text: string): string | null
 }

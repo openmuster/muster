@@ -47,6 +47,19 @@ own comments and issues by the IDs Linear gave them, so they don't come back.
 What the board sent is not imported back, and neither are comments by the
 user named in `bot`.
 
+## Files
+
+- **In:** a file uploaded to Linear is a markdown link to
+  `uploads.linear.app` in an issue's description or a comment. The board
+  fetches each with the key and attaches it to the message; the link stays
+  in the text. A link to anywhere else is only text.
+- **Out:** each file on a board message is uploaded to Linear's storage, and
+  a link to it is added to the comment or the new issue's description. An
+  image shows inline.
+
+The key needs no more access than it has for comments: read to fetch files,
+write to upload them. See [Files](./01-overview.md#files) for the limits.
+
 ## Set it up
 
 1. Create a key: Settings, Security & access, Personal API keys, with read

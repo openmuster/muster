@@ -157,6 +157,9 @@ export function apply(db: Db, event: BoardEvent) {
 
     case 'sync.delivered':
       raw.prepare('insert or ignore into links (message, key, external, thread_external, place) values (?, ?, ?, ?, ?)').get(data.id, data.key, data.external, data.thread ?? null, data.place ?? null)
+      // Files the board put on the platform with it, under a key of their own, so a lookup by message never finds
+      // one: their copy coming back is known by its ID and not imported.
+      for (const id of (data.files ?? []) as string[]) raw.prepare('insert or ignore into links (message, key, external, thread_external, place) values (?, ?, ?, null, null)').get(data.id, `${data.key}/files`, `file:${id}`)
       break
 
     case 'budget.set':

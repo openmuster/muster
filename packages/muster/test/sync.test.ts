@@ -346,8 +346,8 @@ describe('sync: Linear', () => {
       return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${auth.length}` } } } })
     }) as typeof fetch
     const target = { place: 'ENG', threadExternal: 'issue:iss-1' }
-    const message = { text: 'hi' } as Parameters<ReturnType<typeof linear>['deliver']>[0]
-    for (const token of ['lin_api_key', 'lin_oauth_token', 'Bearer lin_oauth_token']) await linear({ secret: SECRET, token, teams: { ENG: 'eng' } }).deliver(message, target, fetcher)
+    const message = { text: 'hi', attachments: [] } as unknown as Parameters<ReturnType<typeof linear>['deliver']>[0]
+    for (const token of ['lin_api_key', 'lin_oauth_token', 'Bearer lin_oauth_token']) await linear({ secret: SECRET, token, teams: { ENG: 'eng' } }).deliver(message, target, fetcher, () => null)
     expect(auth).toEqual(['lin_api_key', 'Bearer lin_oauth_token', 'Bearer lin_oauth_token'])
   })
 })

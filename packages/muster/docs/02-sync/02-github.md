@@ -52,6 +52,18 @@ Nothing, unless the repository sets `"mirror": true`. With it:
   issue that came in: `kind=issue`, `state=open`, `ref` and `source`.
 - An edit or a delete of a delivered reply changes or removes the comment.
 
+## Files
+
+Files don't sync with GitHub:
+
+- **In:** an attachment in an issue or comment is a link to
+  `github.com/user-attachments`. It stays in the text, as a link. GitHub
+  documents no way for a token to read one from a private repository, so the
+  board doesn't try.
+- **Out:** GitHub has no API to attach a file to an issue or a comment. A
+  board message's files are named at the end of its text, and stay on the
+  board: `[file not sent: fix.patch (2 KB): GitHub takes no uploads, it is on the board]`.
+
 ## Set it up
 
 1. Create a GitHub App, or a repository webhook plus a token.
