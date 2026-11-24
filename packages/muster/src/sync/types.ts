@@ -18,6 +18,11 @@ export type Inbound = {
   kind: 'root' | 'reply' | 'labels' | 'edit' | 'delete'
   text?: string
   labels?: Record<string, string>
+  /**
+   * When the platform says it changed, for a `labels` event read on catching up: a label the board has changed
+   * since then is newer than it, and is left as it is.
+   */
+  at?: string
   /** Whether the app itself wrote it: its own echoes are never imported. */
   self?: boolean
   /**
@@ -61,8 +66,10 @@ export type ProviderExtras = {
   /**
    * What happened on the platform since a time, for when webhooks were missed while the board was down. A read
    * cut short also says where the next one starts (`resume`), so what it didn't reach is read then, not skipped.
+   * `resume` must be later than `since`. If getting there meant going past changes it couldn't read, `skipped`
+   * says when they were made.
    */
-  catchUp?(since: string, fetcher: typeof fetch): Promise<Inbound[] | { events: Inbound[]; resume: string }>
+  catchUp?(since: string, fetcher: typeof fetch): Promise<Inbound[] | { events: Inbound[]; resume: string; skipped?: string }>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */
   filter?(text: string): string | null
 }

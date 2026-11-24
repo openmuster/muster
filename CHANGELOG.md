@@ -129,6 +129,19 @@ rest to anyone who shares a machine, or whose server's output is kept.
   and what was past that was never read. It now reads up to ten pages of
   each, oldest change first, and the next start goes on from where it
   stopped.
+- Catch-up runs on every tick until a read gets to the end, not once per
+  process. A `mu serve` restarted while the daemon kept running is now caught
+  up on the daemon's next tick. A refused read waits five minutes, a deadline
+  stored on the board. A read cut short goes on a minute later.
+- Catch-up starts five minutes before the last event received, for a
+  platform's clock that is behind the board's.
+- A state read on catching up no longer replaces a newer one that a webhook
+  brought while the read was out.
+- More changes at one moment than a catch-up can read no longer stall it.
+  It goes past that moment, and the daemon logs what may have been skipped.
+- GitHub's catch-up asks for each page from the newest change read, so an
+  issue changed during the read isn't skipped. An answer that isn't a list
+  counts as a refusal.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

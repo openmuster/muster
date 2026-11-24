@@ -49,7 +49,7 @@ user named in `bot`.
 
 ## Catching up
 
-When the ticker starts, and a token is set, it asks Linear for the issues in
+After downtime, and when a token is set, the ticker asks Linear for the issues in
 the mapped teams updated since the last event it received, then the comments
 on them. An issue created while the board was down arrives whole, with its
 title, description and labels, and its comments as replies. A state change
@@ -59,10 +59,11 @@ starts a thread too. What the board already has, by webhook or because it
 sent it, isn't imported again.
 
 Edits and removals made while the board was down are not read; nor are they
-for GitHub. One start reads up to 500 issues and 500 comments, oldest change
-first, in pages of 50. If there are more, the next start goes on from the
-newest change it read. If Linear refuses, a rate limit among the reasons, the
-next start asks again from the same point.
+for GitHub. One read takes up to 500 issues and 500 comments, oldest change
+first, in pages of 50. If there are more, the next read goes on a minute
+later from the newest change it read. If Linear refuses, a rate limit among
+the reasons, it is asked again from the same point five minutes later. See
+[After downtime](./01-overview.md#after-downtime) for the rest.
 
 ## Set it up
 

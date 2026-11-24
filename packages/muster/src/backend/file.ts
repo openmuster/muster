@@ -57,7 +57,6 @@ export function file(options: FileOptions = {}): Backend {
   let db: Db | null = null
   let checkpointed = 0
   let ticked = 0
-  let caughtUp = false
   let held = false
   /** Once per process, before the first webhook or catch-up: where catching up starts is what was received before. */
   const hold = () => {
@@ -237,14 +236,13 @@ export function file(options: FileOptions = {}): Backend {
     syncTick: async () => {
       const sync = options.sync ?? {}
       if (Object.keys(sync).length === 0) return { imported: 0, delivered: 0, failed: 0 }
-      // Once per process: what the platforms sent while nothing here was listening.
-      if (!caughtUp) {
-        caughtUp = true
-        await catchUp(ctx(), sync, options.fetch ?? fetch)
-      }
+      // What the platforms sent while nothing here was listening: noted once per process, read on every tick until
+      // a read gets to the end, so one that was refused or cut short, or noted by `mu serve`, is still read.
+      hold()
+      const caught = await catchUp(ctx(), sync, options.fetch ?? fetch)
       const inbound = importPending(ctx(), sync)
       const outbound = await deliverPending(ctx(), sync, options.fetch ?? fetch)
-      return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed }
+      return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed, ...(caught.skipped.length ? { skipped: caught.skipped } : {}) }
     },
     close() {
       db?.close()

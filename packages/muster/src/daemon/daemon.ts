@@ -112,7 +112,7 @@ export type Workflows = { list: Workflow[]; deps: RunDeps }
 /** One pass: send what is due, run each watcher, each outgoing webhook, then requested workflows. Returns what it did, for logs and tests. */
 export async function tickOnce(team: Board, watchers: Watcher[], states: Map<string, WatchState>, deps: Deps, hooks?: Hooks, workflows?: Workflows) {
   const schedules = await team.scheduleTick()
-  await team.backend.syncTick()
+  const synced = await team.backend.syncTick()
   const watched: Record<string, Awaited<ReturnType<typeof runWatcher>>> = {}
   for (const watcher of watchers) {
     let state = states.get(watcher.name)
@@ -127,7 +127,7 @@ export async function tickOnce(team: Board, watchers: Watcher[], states: Map<str
   }
   // Read even with none registered: a request for one this daemon hasn't got is answered, never left unsaid.
   const ran: Ran | null = workflows ? await runWorkflows(team, workflows.list, workflows.deps) : null
-  return { schedules, watched, hooked, workflows: ran }
+  return { schedules, watched, hooked, workflows: ran, synced }
 }
 
 /**
@@ -157,6 +157,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
           if (result.failed.length) options.log(`failed    hook ${name}  at ${result.failed[0]}  ${result.why}`)
           if (result.dropped.length) options.log(`dropped   hook ${name}  ${result.dropped.join(' ')}  ${result.why}`)
         }
+        for (const note of did.synced.skipped ?? []) options.log(`skipped   sync ${note}`)
         if (did.workflows?.started.length) options.log(`started   workflow  ${did.workflows.started.join(' ')}`)
         if (did.workflows?.refused.length) options.log(`refused   workflow  ${did.workflows.refused.join(' ')}`)
         if (did.workflows?.reported?.length) options.log(`reported  workflow  ${did.workflows.reported.join(' ')}`)

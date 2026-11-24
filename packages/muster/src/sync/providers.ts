@@ -18,6 +18,32 @@ async function send(fetcher: typeof fetch, url: string, init: RequestInit): Prom
 /** GitHub catch-up reads at most this many pages of 100 of each list per repo. */
 const GITHUB_CATCHUP_PAGES = 10
 
+/** Past a catch-up's page cap, how many more pages it reads while all of it changed at one time. */
+const CATCHUP_EXTRA_PAGES = 5
+
+/** Of several lists cut short, the next catch-up starts where the one read least far got to. */
+const soonest = (cuts: { resume: string; skipped?: string }[]) => {
+  const first = [...cuts].sort((a, b) => Date.parse(a.resume) - Date.parse(b.resume))[0]!
+  const skipped = cuts.flatMap((cut) => (cut.skipped ? [cut.skipped] : []))
+  return { resume: first.resume, ...(skipped.length ? { skipped: skipped.sort()[0]! } : {}) }
+}
+
+const newestOf = (times: number[]) => Math.max(...times.filter((time) => !Number.isNaN(time)))
+
+/**
+ * Where the next catch-up starts after one cut short, given when the changes it read were made. It goes back to
+ * the newest of them, so others made at that same time are read again, not skipped. Unless that is no later than
+ * where this one started: then so many changed at one time that reading them again would never move on, so it
+ * goes past that time and says so (`skipped`). A platform whose `since` takes what changed at that time
+ * (`inclusive`) has times to the second (`step`).
+ */
+function cutShort(times: number[], since: string, inclusive: boolean, step: number): { resume: string; skipped?: string } {
+  const newest = newestOf(times)
+  const again = inclusive ? newest : newest - 1
+  if (again > Date.parse(since)) return { resume: new Date(again).toISOString() }
+  return { resume: new Date(newest + (inclusive ? step : 0)).toISOString(), skipped: new Date(newest).toISOString() }
+}
+
 export type GitHubOptions = {
   secret: string
   /** A token that may comment. Needed only where a repo mirrors. */
@@ -134,21 +160,32 @@ export function github(options: GitHubOptions): Provider {
       if (!options.token) return []
       const out: Inbound[] = []
       const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
-      const resumes: string[] = []
+      const cuts: { resume: string; skipped?: string }[] = []
+      const when = (list: any[]) => list.map((each) => Date.parse(String(each.updated_at)))
       /**
-       * A list oldest change first, up to the page cap. Cut short, the next catch-up starts from the newest change
-       * read, less a millisecond: one made in that same millisecond is read again, not skipped.
+       * A list oldest change first, up to the page cap. Each page after the first is asked for from the newest change
+       * read so far, not by its number: something changed during the read moves to the end, not past a page already
+       * read. Only a whole page changed in the same second goes by number, and that may run a few pages past the cap.
        */
       const read = async (path: string) => {
         const out: any[] = []
-        for (let page = 1; page <= GITHUB_CATCHUP_PAGES; page++) {
-          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(since)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
-          if (!Array.isArray(got)) break
+        let from = since
+        let page = 1
+        for (let asked = 1; asked <= GITHUB_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; asked++) {
+          if (asked > GITHUB_CATCHUP_PAGES && page === 1) break
+          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
+          // Not a list is not "nothing changed": refused, the next catch-up asks from the same point.
+          if (!Array.isArray(got)) throw new Failure('platform_refused', 'GitHub did not answer with a list.')
           out.push(...got)
           if (got.length < 100) return out
+          const newest = newestOf(when(got))
+          if (!Number.isFinite(newest)) throw new Failure('platform_refused', 'GitHub listed changes without when they were made.')
+          if (newest > Date.parse(from)) {
+            from = new Date(newest).toISOString()
+            page = 1
+          } else page++
         }
-        const newest = Math.max(...out.map((each) => Date.parse(String(each.updated_at))).filter((time) => !Number.isNaN(time)))
-        if (Number.isFinite(newest)) resumes.push(new Date(newest - 1).toISOString())
+        cuts.push(cutShort(when(out), since, true, 1000))
         return out
       }
       for (const repo of Object.keys(options.repos)) {
@@ -162,7 +199,7 @@ export function github(options: GitHubOptions): Provider {
           parents.set(String(item.number), { author: root.author, text: root.text ?? '', labels: root.labels ?? {} })
           // Its state now: a close or a merge missed while down. Importing it on a thread that already says so changes nothing.
           // The list doesn't say who closed or merged it, so it is put down to the sync, not to whoever opened it.
-          out.push({ ...root, author: '', self: false, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
+          out.push({ ...root, author: '', self: false, ...(item.updated_at ? { at: String(item.updated_at) } : {}), id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
         }
         const comments = await read(`${repo}/issues/comments?`)
         for (const comment of comments) {
@@ -173,8 +210,7 @@ export function github(options: GitHubOptions): Provider {
         }
       }
       // Cut short, the next catch-up starts where the list read least far got to; what is read again is known already.
-      resumes.sort()
-      return resumes.length ? { events: out, resume: resumes[0]! } : out
+      return cuts.length ? { events: out, ...soonest(cuts) } : out
     },
     mirrors(place) {
       const { to } = mapping(place)
@@ -291,7 +327,7 @@ export function linear(options: LinearOptions): Provider {
        * so they are read from the end backwards. Cut short, it says where the next catch-up starts: the newest
        * change it read, less a millisecond, so one made in that same millisecond is read again, not skipped.
        */
-      const read = async (field: 'issues' | 'comments', nodes: string, filter: Record<string, unknown>): Promise<{ nodes: Record<string, any>[]; resume?: string }> => {
+      const read = async (field: 'issues' | 'comments', nodes: string, filter: Record<string, unknown>): Promise<{ nodes: Record<string, any>[]; cut?: { resume: string; skipped?: string } }> => {
         const type = field === 'issues' ? 'IssueFilter' : 'CommentFilter'
         const list = async (variables: Record<string, unknown>, args: string, page: string) => {
           const answer = await postAs(`query($filter: ${type}, $cursor: String) { ${field}(filter: $filter, ${args}) { nodes { ${nodes} } pageInfo { ${page} } } }`, variables, fetcher)
@@ -303,7 +339,11 @@ export function linear(options: LinearOptions): Provider {
         const out: Record<string, any>[] = []
         let cursor: string | null = null
         let more = false
-        for (let page = 0; page < LINEAR_CATCHUP_PAGES; page++) {
+        const when = (list: Record<string, any>[]) => list.map((node) => Date.parse(String(node.updatedAt)))
+        const from = Date.parse((filter.updatedAt as { gt: string }).gt)
+        // Past the cap, on only while all of it changed in the same millisecond, so the next start couldn't move on.
+        for (let page = 0; page < LINEAR_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; page++) {
+          if (page >= LINEAR_CATCHUP_PAGES && newestOf(when(out)) - 1 > from) break
           const got: any =
             field === 'issues'
               ? await list({ filter, cursor }, `first: ${LINEAR_CATCHUP_PAGE}, after: $cursor, sort: [{ updatedAt: { order: Ascending } }]`, 'hasNextPage endCursor')
@@ -321,7 +361,7 @@ export function linear(options: LinearOptions): Provider {
         // and moving on would skip it. Refused, the next start asks again from the same point.
         const older = await list({ filter: { ...filter, updatedAt: { gt: (filter.updatedAt as { gt: string }).gt, lt: new Date(Math.min(...times)).toISOString() } }, cursor: null }, 'first: 1', 'hasNextPage')
         if (older.nodes.length > 0) throw new Failure('platform_refused', `Linear did not list ${field} oldest first.`)
-        return { nodes: out, resume: new Date(Math.max(...times) - 1).toISOString() }
+        return { nodes: out, cut: cutShort(times, (filter.updatedAt as { gt: string }).gt, false, 0) }
       }
       const issueFields = 'id identifier title description creator { id } team { key } state { name } updatedAt'
       const changed = { updatedAt: { gt: since } }
@@ -334,7 +374,7 @@ export function linear(options: LinearOptions): Provider {
         out.push(root)
         // Its state now: a move missed while down. Importing it on a thread that already says so changes nothing.
         // Linear doesn't say here who moved it, so it is put down to the sync, not to whoever opened the issue.
-        if (root.labels?.state) out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, labels: { state: root.labels.state } })
+        if (root.labels?.state) out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, ...(issue.updatedAt ? { at: String(issue.updatedAt) } : {}), kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, labels: { state: root.labels.state } })
       }
       for (const comment of comments.nodes) {
         if (!comment.issue?.id) continue
@@ -344,8 +384,8 @@ export function linear(options: LinearOptions): Provider {
         out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} } })
       }
       // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
-      const resumes = [issues.resume, comments.resume].filter((at): at is string => at !== undefined).sort()
-      return resumes.length ? { events: out, resume: resumes[0]! } : out
+      const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)
+      return cuts.length ? { events: out, ...soonest(cuts) } : out
     },
     async deliver(message, target, fetcher) {
       const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)
