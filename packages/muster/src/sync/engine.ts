@@ -274,17 +274,29 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
  * Asks each platform that can say what happened while the board wasn't listening, and puts it in the
  * inbox like any webhook. An event already imported changes nothing, so asking twice is safe.
  */
-export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ fetched: number }> {
-  let fetched = 0
+/**
+ * Notes where each platform's catch-up starts, the last event received, unless one is noted already. A process
+ * calls it before it takes a webhook or catches up, so a webhook that comes first doesn't move it past the gap.
+ * It stays until a catch-up from it reads to the end; one that fails leaves it.
+ */
+export function holdCatchUp(ctx: Context, sync: Sync) {
   for (const [key, provider] of Object.entries(sync)) {
     if (!provider.catchUp) continue
-    // A catch-up that failed left where it was to start from: a webhook since then doesn't move it past the gap.
+    const last = ctx.db.raw.prepare('select max(received) as at from inbox where key = ?').get(key) as { at: string | null }
+    // Nothing ever received means nothing to catch up from: a new sync starts with what comes next.
+    if (last.at) ctx.db.write(() => ctx.db.raw.prepare("insert or ignore into cursors (name, profile, seq) values (?, '', ?)").get(`catchup:${key}`, Date.parse(last.at!)))
+  }
+}
+
+export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ fetched: number }> {
+  let fetched = 0
+  holdCatchUp(ctx, sync)
+  for (const [key, provider] of Object.entries(sync)) {
+    if (!provider.catchUp) continue
     const name = `catchup:${key}`
     const pending = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(name) as { seq: number } | undefined
-    const last = pending ? { at: new Date(pending.seq).toISOString() } : (ctx.db.raw.prepare('select max(received) as at from inbox where key = ?').get(key) as { at: string | null })
-    // Nothing ever received means nothing to catch up from: a new sync starts with what comes next.
-    if (!last.at) continue
-    if (!pending) ctx.db.write(() => ctx.db.raw.prepare("insert or ignore into cursors (name, profile, seq) values (?, '', ?)").get(name, Date.parse(last.at!)))
+    if (!pending) continue
+    const last = { at: new Date(pending.seq).toISOString() }
     let events: Inbound[]
     let resume: string | undefined
     try {

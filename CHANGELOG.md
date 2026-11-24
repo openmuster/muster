@@ -120,7 +120,11 @@ rest to anyone who shares a machine, or whose server's output is kept.
 - A catch-up that failed, for GitHub or Linear, no longer loses its place.
   The next start asked from the last event received, so a webhook that came
   in after the failure moved it past what was missed. It now asks again from
-  where the failed one started.
+  where the failed one started. A webhook that arrives after a restart but
+  before the first catch-up no longer moves it either.
+- GitHub's catch-up put a close or merge it read down to whoever opened the
+  issue. It is now put down to the sync (`gh`): GitHub's list doesn't say
+  who did it.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

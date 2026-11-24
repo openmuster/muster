@@ -561,6 +561,9 @@ describe('sync: GitHub threads the board never saw opened', () => {
     expect((await team.readThread({ id: issues[1]!.message.id })).replies.map((reply) => reply.text)).toEqual(['first comment on #8'])
     const pulls = (await team.readChannel({ channel: 'web/prs' })).threads
     expect(pulls.map((thread) => thread.message.labels)).toEqual([{ kind: 'pr', state: 'merged', ref: 'acme/web#9', source: 'gh' }])
+    // GitHub's list doesn't say who closed #7: the close is put down to the sync, not to nico, who opened it.
+    const closed = (await team.events({ after: 0, filter: { types: ['labels.changed'] } })).events
+    expect(closed.map((event) => [event.by.principal, (event.data as { set: Record<string, string> }).set])).toEqual([['gh', { state: 'closed' }]])
     second.close()
   })
 
@@ -760,6 +763,28 @@ describe('sync: Linear catch-up after downtime', () => {
   }
 
   const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString()
+
+  it('a webhook that reaches a restarted board before its first catch-up does not move where catching up starts', async () => {
+    const { time, open, first, state, asked } = await downtime()
+    first.close()
+    const fresh = issueNode('iss-2', 'Opened while down')
+    state.issues = [fresh]
+    state.comments = [commentNode('c-1', 'said while down', fresh)]
+    time.advance(3_600_000)
+    const second = open()
+    // `mu serve` is up and Linear's next webhook lands before the ticker's first tick.
+    const after = { type: 'Issue', action: 'create', data: { id: 'iss-3', identifier: 'ENG-3', title: 'Opened after', team: { key: 'ENG' }, creatorId: 'u-ada', state: { name: 'Todo' } } }
+    await webhook(second, after)
+    state.issues = [fresh, issueNode('iss-3', 'Opened after', { creator: { id: 'u-ada' }, updatedAt: '2026-01-01T01:00:00.000Z' })]
+    await second.syncTick()
+    await second.syncTick()
+    expect(startedFrom(asked, 0)).toEqual(['issues 2026-01-01T00:00:00.000Z', 'comments 2026-01-01T00:00:00.000Z'])
+    const team = board({ backend: second })
+    const threads = (await team.readChannel({ channel: 'eng' })).threads
+    expect(threads.map((thread) => thread.message.text).sort()).toEqual(['Opened after', 'Opened while down', 'Seen before the downtime'])
+    expect((await team.readThread({ id: threads.find((thread) => thread.message.text === 'Opened while down')!.message.id })).replies.map((reply) => reply.text)).toEqual(['said while down'])
+    second.close()
+  })
 
   it('more changes than one catch-up reads: it reads the oldest, and the next start goes on from there, skipping nothing', async () => {
     const { time, open, first, state, asked } = await downtime()

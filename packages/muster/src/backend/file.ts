@@ -15,7 +15,7 @@ import { profileName, type Caller } from '../model.ts'
 import { sameProcess } from '../process.ts'
 import { ensureSchema } from '../store/schema.ts'
 import { openDb, ownerOnly, type Db } from '../store/sqlite.ts'
-import { catchUp, deliverPending, importPending, receive, type Sync } from '../sync/engine.ts'
+import { catchUp, deliverPending, holdCatchUp, importPending, receive, type Sync } from '../sync/engine.ts'
 import { boardKey } from '../serve/token.ts'
 import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
 import { dbJoins } from '../serve/joins.ts'
@@ -58,6 +58,13 @@ export function file(options: FileOptions = {}): Backend {
   let checkpointed = 0
   let ticked = 0
   let caughtUp = false
+  let held = false
+  /** Once per process, before the first webhook or catch-up: where catching up starts is what was received before. */
+  const hold = () => {
+    if (held) return
+    held = true
+    holdCatchUp(ctx(), options.sync ?? {})
+  }
   const open = (): Db => {
     if (db) return db
     const path = where()
@@ -223,7 +230,10 @@ export function file(options: FileOptions = {}): Backend {
       }
       return { path: target }
     },
-    syncReceive: async (key, received) => receive(ctx(), options.sync ?? {}, key, received),
+    syncReceive: async (key, received) => {
+      hold()
+      return receive(ctx(), options.sync ?? {}, key, received)
+    },
     syncTick: async () => {
       const sync = options.sync ?? {}
       if (Object.keys(sync).length === 0) return { imported: 0, delivered: 0, failed: 0 }

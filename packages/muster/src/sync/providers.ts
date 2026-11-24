@@ -141,7 +141,8 @@ export function github(options: GitHubOptions): Provider {
           out.push(root)
           parents.set(String(item.number), { author: root.author, text: root.text ?? '', labels: root.labels ?? {} })
           // Its state now: a close or a merge missed while down. Importing it on a thread that already says so changes nothing.
-          out.push({ ...root, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
+          // The list doesn't say who closed or merged it, so it is put down to the sync, not to whoever opened it.
+          out.push({ ...root, author: '', self: false, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
         }
         const comments = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
         for (const comment of Array.isArray(comments) ? comments : []) {

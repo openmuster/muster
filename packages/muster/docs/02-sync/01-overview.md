@@ -129,7 +129,8 @@ Platforms resend what wasn't answered, for a while. Beyond that, when the
 ticker starts it asks GitHub and Linear for the issues, pull requests and
 comments since the last event it received, and imports what it missed. A
 catch-up the platform refuses is asked again from the same point on the next
-start. Slack has no catch-up yet.
+start, and a webhook that arrives before the first catch-up doesn't move that
+point. Slack has no catch-up yet.
 
 ## Reaching the board
 
