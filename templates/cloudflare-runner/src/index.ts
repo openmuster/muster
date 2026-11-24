@@ -1,11 +1,11 @@
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
 import { authorized, usable } from './auth.ts'
 import { type BoardProps, type ModelProps, type RepoProps, boardHeaders, modelPasses, repoPasses, repoProps } from './gates.ts'
-import { capStream, decide, execRequest, exitCode, readCapped } from './lifecycle.ts'
+import { capStream, decide, ended, execRequest, exitCode, readCapped } from './lifecycle.ts'
 
 type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; timeoutMs?: number; attach?: boolean }
 type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
-type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance }
+type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance; LOG_TAIL?: string }
 
 /** Where Cloudflare puts the certificate its intercepts present. It exists once an HTTPS intercept is registered. */
 const CA = '/etc/cloudflare/certs/cloudflare-containers-ca.crt'
@@ -68,7 +68,7 @@ export class Closed extends WorkerEntrypoint<Env> {
 }
 
 /** What `start` hands back: where the checkout started, so what the agent changed can be told from what was there. */
-type Started = { checkout?: { sha: string; branch: string } }
+type Started = { checkout?: { sha: string; branch: string }; /** Why the run didn't start, for whoever asked: answered, never thrown, so it is in no log. */ failed?: string }
 /** A run as the CLI sees it: `exited` while the container is kept to be read, `running` before. */
 type Status = { state: 'running' | 'exited'; exitCode: number | null }
 
@@ -114,8 +114,10 @@ export class Run extends DurableObject<Env> {
         if (sha && branch) checkout = { sha, branch }
       }
     } catch (error) {
-      await this.end(`setup failed: ${(error as Error).message}`)
-      throw error
+      // What the command printed goes back to whoever started the run, as the answer: thrown, it would be an
+      // exception in the Worker's logs.
+      await this.end('setup failed')
+      return { failed: (error as Error).message }
     }
     // The clone is done: the repository's host is closed before anything of it runs.
     if (repo) await container.interceptOutboundHttps(repo.host, this.ctx.exports.Closed)
@@ -248,7 +250,7 @@ export class Run extends DurableObject<Env> {
       await this.ctx.storage.put('closed', true)
     } catch (error) {
       // A run that can't be closed is never read from: it ends.
-      await this.end(`closing failed: ${(error as Error).message}`)
+      await this.end('closing failed')
     }
   }
 
@@ -266,14 +268,15 @@ export class Run extends DurableObject<Env> {
     return new TextDecoder().decode(stdout)
   }
 
-  /** Ends the run: the tail of the agent's output goes to the Worker's logs, then the container and this object's state go. */
+  /** Ends the run: why and the agent's exit code go to the Worker's logs (and the tail of its output with LOG_TAIL=1), then the container and this object's state go. */
   private async end(why: string): Promise<void> {
     const container = this.ctx.container!
+    const code = (await this.ctx.storage.get<number | null>('exitCode')) ?? null
     await this.ctx.storage.deleteAlarm()
     await this.ctx.storage.deleteAll()
     let tail = ''
-    if (container.running) tail = await this.capture(['sh', '-c', `tail -c 2000 ${LOG} 2>/dev/null`]).catch(() => '')
-    console.log(JSON.stringify({ event: 'run.ended', why, tail }))
+    if (this.env.LOG_TAIL === '1' && container.running) tail = await this.capture(['sh', '-c', `tail -c 2000 ${LOG} 2>/dev/null`]).catch(() => '')
+    console.log(JSON.stringify(ended(why, code, tail, this.env.LOG_TAIL)))
     if (container.running) await container.destroy()
   }
 }
@@ -287,6 +290,8 @@ export default {
     if (request.method === 'POST' && url.pathname === '/runs') {
       const id = crypto.randomUUID()
       const started = await env.RUNS.get(env.RUNS.idFromName(id)).start((await request.json()) as Start)
+      // Why a run didn't start is for whoever asked, who holds the secret.
+      if (started.failed !== undefined) return new Response(`The run didn't start: ${started.failed}`, { status: 502 })
       return Response.json({ id, ...started })
     }
     // A run is named by the ID start gave it, and nothing else reaches one.

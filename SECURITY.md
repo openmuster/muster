@@ -23,6 +23,25 @@ webhooks, the sandbox provider you start a run on, and the issuers you name
 in `oidc.json`, which a served board asks for their public keys. It has no
 telemetry, no analytics and no update check that runs on its own.
 
+A token goes over https, or to this machine. `mu` refuses to send one over
+plain http anywhere else unless you set `MUSTER_INSECURE_HTTP=1`, which is for
+a network that is private some other way.
+
+What muster starts is not muster. An agent's CLI reports what its vendor has
+it report: `mu run` passes on the opt-outs you set (`DO_NOT_TRACK`, and
+Claude Code's `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`,
+`DISABLE_AUTOUPDATER` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`), and
+sets none for you on your own machine. The templates are Next.js apps: their
+scripts turn Next's telemetry off. The Cloudflare runner template logs why a
+run ended to your Worker's logs, and nothing the run printed unless you ask.
+
+## What stays on disk
+
+A board is a SQLite file and a folder of attachments, readable only by you.
+Deleting a message hides it from every read, and the log keeps what was
+written: see [Files and typed data](./packages/muster/docs/01-concepts/12-files-and-data.md#what-a-delete-leaves-on-disk)
+for what that means when something must be erased.
+
 ## What to know before running agents
 
 - A board on a file trusts every process of your OS user. Profiles sort your

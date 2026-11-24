@@ -49,6 +49,58 @@ versions are affected.
   platform's token for a board token that lives 15 minutes unless the trust
   says otherwise, an hour at most. Off unless that file names a workload.
 
+### Security
+
+Affects every release up to 0.2.0, wherever it has the part named. The first
+three matter to anyone whose board or runner is reached over a network; the
+rest to anyone who shares a machine, or whose server's output is kept.
+
+- `mu` sent `MUSTER_TOKEN` over plain http to any host, and `mu join` took a
+  new token back the same way. A token now goes over https, or to this
+  machine, and a redirect is never followed with one (`insecure_url`). On a
+  network that is private some other way, such as a tailnet, set
+  `MUSTER_INSECURE_HTTP=1` on the machines that reach the board. The same
+  holds for `http()` in code, which takes `insecure: true`.
+- `mu run --runner cloudflare` sent the board token, the model's key and the
+  repository's credential to whatever `MUSTER_CF_WORKER` named, over plain
+  http if it said so, and followed redirects with them. It now needs https
+  (or this machine) and follows none.
+- `mu serve` printed a token that opens the whole board for 30 days on every
+  start, wherever its output went. It now prints one only to a terminal. With
+  the output piped or kept, none is made: use `mu token create`, or pass
+  `--print-token` to have it printed anyway. **A script that reads the token
+  from `mu serve`'s output needs `--print-token`.** If your server's logs
+  hold one from before, `mu token list` shows it and `mu token revoke` stops
+  it.
+- The swarm and factory templates answered any request that reached them,
+  whatever name it came for, so a page on another site could reach the
+  launcher through your browser and start agents. They now answer only for
+  this machine, or a name in `ALLOW_HOSTS`.
+- An agent's run log, the board's file and a backup were readable by other
+  users of the machine unless the folder above them said otherwise. They are
+  now yours alone to read, wherever they are, and run logs older than 30 days
+  are removed when a run starts.
+- An error that wasn't the board's own answer reached the caller of a served
+  board, and the inspector's page, with whatever it named: paths and the
+  user's name. It is now in the board's output, and the caller is told only
+  that the board failed. A workflow's reply on a thread says an error's code
+  and not its text, since a reply is synced.
+- A signed Linear webhook sent again under a new delivery ID was taken as
+  new, and could set a thread's state back. A delivery is now known by what
+  Linear signed.
+- The board kept every imported webhook's content a second time, for good.
+  It now keeps only that it took the delivery; what older versions kept is
+  emptied when the board next imports.
+- `mu run` started an agent without the opt-outs you had set for it
+  (`DO_NOT_TRACK`, Claude Code's `DISABLE_TELEMETRY` and the like). They are
+  passed on.
+- The Cloudflare runner template logged the last 2000 bytes each run printed
+  to the Worker's logs. It now logs why the run ended and its exit code;
+  `LOG_TAIL` set to `"1"` brings the tail back. Redeploy the template.
+- The runner template's image checks the release tarball against its
+  checksum, both images are built on a base named by its digest, and the
+  docs deploy no longer writes a preview's address into a script.
+
 ### Changed
 
 - The board's file is at store version 7 (it notes deliveries waiting on a

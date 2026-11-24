@@ -222,7 +222,7 @@ describe('mu workflow', () => {
   it('run works over HTTP, against mu serve', async () => {
     const dir = tempDir()
     await cli(dir, ['post', 'work', 'ship'])
-    const serving = cliStart(dir, ['serve', '--port', '0'])
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
     try {
       for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
       const env = { MUSTER_URL: /MUSTER_URL=(\S+)/.exec(serving.output())![1]!, MUSTER_TOKEN: /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]! }
@@ -259,7 +259,8 @@ describe('the daemon starts a requested workflow', () => {
     let calls = 0
     const spawn: Spawner = async (worker) => {
       calls += 1
-      if (fail?.(calls)) throw new Error('spawn mu ENOENT')
+      // As Node says it when a program isn't there: the words name the program, and the code says what went wrong.
+      if (fail?.(calls)) throw Object.assign(new Error('spawn mu ENOENT'), { code: 'ENOENT' })
       spawned.push(worker)
     }
     return { spawned, deps: { spawn, now, runs: openRuns() } }
@@ -715,7 +716,7 @@ describe('the daemon starts a requested workflow', () => {
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
     expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
     expect(rec.spawned).toEqual([])
-    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start workers for release: spawn mu ENOENT"])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start workers for release: ENOENT (the daemon's log says more)"])
   })
 
   it("says how many workers started when one after the first won't, and doesn't try again", async () => {
@@ -725,7 +726,7 @@ describe('the daemon starts a requested workflow', () => {
     const run = `work/app/release-${seq}`
     expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
     expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1'])
-    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(['started 1 of 2 workers for release, then: spawn mu ENOENT'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["started 1 of 2 workers for release, then: ENOENT (the daemon's log says more)"])
     // The tasks are there for whoever starts workers by hand; the run isn't marked as started.
     expect(await tasksIn(team, run)).toHaveLength(2)
     expect(await openings(team, run)).toEqual([])
@@ -810,7 +811,7 @@ describe('the daemon starts a requested workflow', () => {
     const owner = board({ dir: join(dir, 'board') })
     const me = (await owner.whoami()).principal
     const serve = async (until: (err: string) => boolean | Promise<boolean>) => {
-      const serving = cliStart(dir, ['serve', '--port', '0'])
+      const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
       let err = ''
       serving.child.stderr!.on('data', (chunk) => (err += chunk))
       let done = false
@@ -1004,7 +1005,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     const one: Workflow = { ...trio, steps: [{ key: 'a', text: 'Do A' }], workers: { ...trio.workers, count: 2 } }
     let calls = 0
     // The second worker won't start, so the daemon makes the tasks and never writes the run's first message.
-    const deps = { spawn: async () => { if (++calls === 2) throw new Error('spawn mu ENOENT') }, now: () => time.now().getTime(), runs: openRuns() }
+    const deps = { spawn: async () => { if (++calls === 2) throw Object.assign(new Error('spawn mu ENOENT'), { code: 'ENOENT' }) }, now: () => time.now().getTime(), runs: openRuns() }
     const root = await team.post({ channel: 'work/app', text: 'ship' })
     await runWorkflows(team, [one], deps)
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
@@ -1018,7 +1019,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     }
     time.advance(24 * 60 * 60 * 1000)
     expect(await runWorkflows(team, [{ ...one, timeout: '1m' }], deps)).toEqual({ started: [], refused: [] })
-    expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['started 1 of 2 workers for release, then: spawn mu ENOENT'])
+    expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(["started 1 of 2 workers for release, then: ENOENT (the daemon's log says more)"])
   })
 
   it('answers on the thread the request was made on, whatever the run is relabelled to say', async () => {

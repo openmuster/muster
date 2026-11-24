@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Failure } from '../failure.ts'
@@ -59,8 +59,24 @@ export type Db = {
  * Opens a board's file with the settings SPEC.md section 3 lists, and refuses a filesystem that can't
  * do WAL: a board on one silently loses its guarantees.
  */
+/**
+ * Makes a board's file its owner's alone to read, before SQLite opens it: the files SQLite keeps beside
+ * it take its mode. The folder muster makes is private already; one somebody else made may not be.
+ */
+export function ownerOnly(path: string) {
+  try {
+    if (!existsSync(path)) closeSync(openSync(path, 'a', 0o600))
+    chmodSync(path, 0o600)
+    // What a board from before this kept beside it, at whatever mode it was made with.
+    for (const beside of [`${path}-wal`, `${path}-shm`]) if (existsSync(beside)) chmodSync(beside, 0o600)
+  } catch {
+    // Not ours to change (another user's file, a filesystem without modes): opening it says what is wrong, if anything.
+  }
+}
+
 export function openDb(path: string, options: { readonly?: boolean } = {}): Db {
   if (path !== ':memory:' && !options.readonly) mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  if (path !== ':memory:' && !options.readonly) ownerOnly(path)
   let raw: DatabaseSync
   try {
     raw = new DatabaseSync(path, { readOnly: options.readonly === true })

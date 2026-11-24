@@ -37,7 +37,7 @@ function bundlePath(): string {
   }) ?? join(here, '..', '..', 'dist', 'inspect', 'app.js')
 }
 
-export type InspectOptions = { backend: Backend; port?: number; bundle?: string; title?: string }
+export type InspectOptions = { backend: Backend; port?: number; bundle?: string; title?: string; /** Where an error that isn't the board's own answer is said: to whoever started the inspector, not to the page. */ log?: (line: string) => void }
 
 /**
  * The inspector: a page, its bundle, and `/board/*`, a proxy that acts as you. Because it acts as you
@@ -102,7 +102,8 @@ export function inspect(options: InspectOptions): Promise<{ url: string; link: s
       throw new Failure('not_found', 'No such route.')
     } catch (error) {
       if (error instanceof Failure) return send(res, error.reason === 'unauthorized' ? 401 : error.reason === 'forbidden' ? 403 : error.reason === 'not_found' ? 404 : error.exit === 2 ? 400 : 409, { error: error.toJSON() })
-      send(res, 500, { error: { reason: 'internal', message: error instanceof Error ? error.message : String(error) } })
+      options.log?.(`error  ${error instanceof Error ? error.message : String(error)}`)
+      send(res, 500, { error: { reason: 'internal', message: 'The board failed to answer. The terminal that started the inspector says why.' } })
     }
   })
   return new Promise((resolve, reject) => {

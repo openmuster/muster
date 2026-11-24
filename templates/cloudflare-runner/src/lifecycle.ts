@@ -90,3 +90,12 @@ export function execRequest(body: unknown): { cmd: string; args: string[]; env: 
   if (env !== undefined && (!env || typeof env !== 'object' || Array.isArray(env) || !Object.values(env).every((value) => typeof value === 'string'))) return null
   return { cmd, args: args as string[], env: (env as Record<string, string> | undefined) ?? {} }
 }
+
+/**
+ * What the Worker logs when a run ends: why, and how the agent exited. What the run printed is its own
+ * business, and can hold anything the agent read, so its tail is logged only when the Worker's owner set
+ * `LOG_TAIL` to `1`: it then sits in Cloudflare's logs for as long as those are kept.
+ */
+export function ended(why: string, exitCode: number | null, tail: string, logTail: string | undefined): { event: 'run.ended'; why: string; exitCode: number | null; tail?: string } {
+  return { event: 'run.ended', why, exitCode, ...(logTail === '1' ? { tail } : {}) }
+}

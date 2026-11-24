@@ -4,9 +4,13 @@
   "main": "src/index.ts",
   // 2026-10-01 or later: a pending exec or alarm keeps the Durable Object, and so the container, running.
   "compatibility_date": "2026-11-01",
-  "observability": { "enabled": true },
+  // Workers Logs keep what this Worker logs: why each run ended and its exit code. Not a line per request:
+  // every request here carries the runner's secret and names a run.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   // The container's size, per run: lite, basic, standard-1 to standard-4. An agent's CLI needs more than lite's 256 MiB.
-  "vars": { "INSTANCE": "standard-1" },
+  // LOG_TAIL "1" also logs the last 2000 bytes each run printed, to see why one failed. That is whatever the
+  // agent's command wrote, kept in Cloudflare's logs: leave it "0" unless you are looking into a failure.
+  "vars": { "INSTANCE": "standard-1", "LOG_TAIL": "0" },
   "containers": [
     {
       "class_name": "Run",

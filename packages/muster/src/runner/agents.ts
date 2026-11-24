@@ -77,7 +77,8 @@ export const claude: Agent = {
     if (permissionMode === 'bypass') args.push('--dangerously-skip-permissions')
     return { bin: 'claude', args }
   },
-  envKeys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'AWS_PROFILE', 'AWS_REGION'],
+  // The last four are what its user set to stop it reporting home: a clean environment mustn't turn that back on.
+  envKeys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'AWS_PROFILE', 'AWS_REGION', 'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_AUTOUPDATER', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'],
   model: {
     host: 'api.anthropic.com',
     keyEnv: 'ANTHROPIC_API_KEY',

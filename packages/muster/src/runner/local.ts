@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Agent, ExitKind, Parsed, PermissionMode } from './agents.ts'
 
@@ -30,11 +30,37 @@ export type RunRequest = {
   signal?: AbortSignal
   /** How long it gets between being asked to stop and being killed. */
   graceMs?: number
+  /** Removes the logs of earlier runs kept beside this one's (folders named `<task>-<time>`) once they are older than this. Left out, nothing is removed. */
+  keepLogsMs?: number
+  now?: () => number
+}
+
+/** How long `mu run` keeps a run's log: it is the agent's whole transcript, with whatever it read. */
+export const KEEP_LOGS_MS = 30 * 86_400_000
+
+/** Removes the logs of runs older than `keepMs` from the folder runs are kept in. Only folders named as a run's are touched. */
+function pruneLogs(runs: string, keepMs: number, now: number) {
+  let names: string[] = []
+  try {
+    names = readdirSync(runs)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    // A task's ID and the millisecond it started, as mu run names them: nothing else is touched.
+    if (!/^\d+-\d{13}$/.test(name)) continue
+    try {
+      if (statSync(join(runs, name)).mtimeMs < now - keepMs) rmSync(join(runs, name), { recursive: true, force: true })
+    } catch {
+      // Gone already, or not ours to remove.
+    }
+  }
 }
 
 export type RunResult = { kind: ExitKind; code: number | null; signal: NodeJS.Signals | null; parsed: Parsed; stdoutPath: string; stderrPath: string; pid: number; notStarted?: boolean }
 
-const ALWAYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM']
+// DO_NOT_TRACK is the opt-out every tool is asked to honour: an agent started here keeps it.
+const ALWAYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TERM', 'DO_NOT_TRACK']
 
 /**
  * The environment an agent starts with: built from nothing, then PATH and HOME, what the agent itself
@@ -59,11 +85,14 @@ export function ensureWorktree(cwd: string, worktree: NonNullable<RunRequest['wo
 /** Runs an agent to its end in its own process group, and says how it ended. */
 export function runLocal(request: RunRequest): { pid: number; done: Promise<RunResult>; stop(): void } {
   if (request.worktree) ensureWorktree(request.cwd, request.worktree)
-  mkdirSync(request.logDir, { recursive: true })
+  if (request.keepLogsMs !== undefined) pruneLogs(dirname(request.logDir), request.keepLogsMs, (request.now ?? Date.now)())
+  // A log is everything the agent printed, and so everything it read: its owner's alone, whatever the folder above allows.
+  mkdirSync(request.logDir, { recursive: true, mode: 0o700 })
+  chmodSync(request.logDir, 0o700)
   const stdoutPath = join(request.logDir, 'stdout.log')
   const stderrPath = join(request.logDir, 'stderr.log')
-  const out = openSync(stdoutPath, 'w')
-  const err = openSync(stderrPath, 'w')
+  const out = openSync(stdoutPath, 'w', 0o600)
+  const err = openSync(stderrPath, 'w', 0o600)
   const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe', ...(request.full ? { full: true } : {}), ...(request.writable ? { writable: request.writable } : {}), ...(request.resume ? { resume: request.resume } : {}), ...(request.model ? { model: request.model } : {}) })
   const child = spawn(bin, args, { cwd: request.cwd, env: agentEnv(request.agent, request), stdio: ['pipe', out, err], detached: true })
   closeSync(out)

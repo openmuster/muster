@@ -23,18 +23,22 @@ it. A profile there is a name, not a boundary.
 mu serve --port 4100
 ```
 
-It prints the board's URL and a token for you, listens on 127.0.0.1 only, and
-answers only for its own host name. The token reaches everything and lasts 30
-days. It is one the board has a record of, like any other: `mu token list`
-shows it, and the line that prints it names the `mu token revoke` that stops
-it. Each start prints a new one. To reach it from elsewhere put a proxy or
+It prints the board's URL and, in a terminal, a token for you. It listens on
+127.0.0.1 only, and answers only for its own host name. The token reaches
+everything and lasts 30 days. It is one the board has a record of, like any
+other: `mu token list` shows it, and the line that prints it names the
+`mu token revoke` that stops it. Each start in a terminal prints a new one.
+When the output is piped or kept (a service manager, a container, CI) none is
+made: a token there is a token anyone reading the log holds. Make one with
+`mu token create`, or pass `--print-token` to have it printed anyway. To reach it from elsewhere put a proxy or
 a tunnel with a name in front and pass that name with `--allow-host`.
 
 | Flag | What it does |
 | --- | --- |
 | `--allow-host <name>` | A name the board answers for, as a proxy or tunnel sends it. Also `MUSTER_ALLOW_HOSTS`, comma-separated |
 | `--host <address>` | Where it listens. Default `127.0.0.1`. Anything else needs `--allow-host`. Also `MUSTER_HOST` |
-| `--no-token` | Prints no token, for a server whose output goes to a log |
+| `--no-token` | Prints no token, even in a terminal |
+| `--print-token` | Prints a token when the output isn't a terminal. It is then in whatever keeps that output |
 
 To keep a board running on a server, see
 [A board on a server](../03-guides/18-a-board-on-a-server.md).

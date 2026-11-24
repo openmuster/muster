@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Agent, PermissionMode } from './agents.ts'
 import { Failure } from '../failure.ts'
+import { secureUrl } from '../backend/http.ts'
 import { gitRules, githubRepo } from './github.ts'
 import { PLACEHOLDER, boardPolicy } from './policy.ts'
 
@@ -406,17 +407,21 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
 export function cloudflare(options: { worker: string; secret: string; fetch?: typeof fetch; pollMs?: number }): CloudRunner {
   const doFetch = options.fetch ?? fetch
   const base = options.worker.replace(/\/$/, '')
+  // What a start carries is the board's token, the model's key and the repository's credential: none of it
+  // crosses plain http, and none of it follows a redirect to an address nobody configured.
   const send = (path: string, init: { method: string; body?: unknown }) =>
-    doFetch(`${base}${path}`, { method: init.method, headers: { authorization: `Bearer ${options.secret}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) })
+    doFetch(`${base}${path}`, { method: init.method, redirect: 'error', headers: { authorization: `Bearer ${options.secret}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) })
   const call = async <T>(path: string, body: unknown): Promise<T> => {
     const response = await send(path, { method: 'POST', body })
-    if (!response.ok) throw new Error(`the runner Worker answered ${response.status}`)
+    // Why it refused, as far as it says, cut short: it is the Worker's word, read by whoever started the run.
+    if (!response.ok) throw new Error(`the runner Worker answered ${response.status}${response.status === 502 ? `: ${(await response.text().catch(() => '')).slice(0, 600)}` : ''}`)
     return (await response.json()) as T
   }
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   return {
     name: 'cloudflare',
     async start(request) {
+      secureUrl(base, "The runner Worker's secret, and the credentials a run starts with,")
       const { networkPolicy, env } = boardPolicy(request.board)
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
       const made = await call<{ id: string; checkout?: { sha?: unknown; branch?: unknown } }>('/runs', {

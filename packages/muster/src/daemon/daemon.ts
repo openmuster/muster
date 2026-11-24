@@ -61,7 +61,7 @@ export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): { watche
   return { watchers, hooks, workflows, arm: () => armHooks(hooks, env) }
 }
 
-const WATCHER_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_URL']
+const WATCHER_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_URL', 'MUSTER_INSECURE_HTTP']
 
 /**
  * What a watcher's command starts with: built from nothing, then the few names above. The daemon holds

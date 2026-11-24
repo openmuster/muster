@@ -59,6 +59,8 @@ export function receive(ctx: Context, sync: Sync, key: string, received: Receive
 export function importPending(ctx: Context, sync: Sync, only?: string): { imported: number; failed: number } {
   let imported = 0
   let failed = 0
+  // What a board imported before it stopped keeping payloads: emptied once, the first time it is looked at.
+  if (ctx.db.raw.prepare("select 1 from inbox where done = 1 and payload != '{}' limit 1").get()) ctx.db.write(() => ctx.db.raw.prepare("update inbox set payload = '{}' where done = 1 and payload != '{}'").get())
   const rows = ctx.db.raw.prepare('select key, id, payload, attempts from inbox where done = 0 order by received, id').all() as { key: string; id: string; payload: string; attempts: number }[]
   const stuck = new Set<string>()
   for (const row of rows) {
@@ -71,13 +73,15 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
     try {
       ctx.db.write(() => {
         importOne(ctx, provider, row.key, event)
-        ctx.db.raw.prepare('update inbox set done = 1 where key = ? and id = ?').get(row.key, row.id)
+        // On the board now, or not for it: the row stays, so the same delivery is never taken twice, and what it
+        // carried goes. The inbox is bookkeeping, not a second copy of what people wrote.
+        ctx.db.raw.prepare("update inbox set done = 1, payload = '{}' where key = ? and id = ?").get(row.key, row.id)
       })
       imported++
     } catch {
       failed++
       const attempts = row.attempts + 1
-      ctx.db.write(() => ctx.db.raw.prepare('update inbox set attempts = ?, done = ? where key = ? and id = ?').get(attempts, attempts >= IMPORT_ATTEMPTS ? 1 : 0, row.key, row.id))
+      ctx.db.write(() => ctx.db.raw.prepare("update inbox set attempts = ?, done = ?, payload = case when ? = 1 then '{}' else payload end where key = ? and id = ?").get(attempts, attempts >= IMPORT_ATTEMPTS ? 1 : 0, attempts >= IMPORT_ATTEMPTS ? 1 : 0, row.key, row.id))
       if (attempts < IMPORT_ATTEMPTS) stuck.add(lane)
     }
   }

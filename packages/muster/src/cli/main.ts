@@ -31,7 +31,7 @@ import { loadSync } from '../sync/config.ts'
 import { inspect } from '../inspect/server.ts'
 import { spawn as spawnProcess } from 'node:child_process'
 import { AGENTS, generic, isSessionId } from '../runner/agents.ts'
-import { runLocal } from '../runner/local.ts'
+import { KEEP_LOGS_MS, runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
@@ -47,6 +47,8 @@ export type Io = {
   err: (text: string) => void
   stdin: () => string
   env: NodeJS.ProcessEnv
+  /** Whether what is printed goes to a terminal, and so to a person and not a file. */
+  tty?: boolean
   /** Aborts when the process is told to stop, with the signal that said so. */
   stop: AbortSignal
 }
@@ -710,7 +712,7 @@ const commands: Record<string, Command> = {
       const demo = board({ dir, principal: 'local:user:maya' })
       const pace = duration(str(parsed.flags, 'pace') ?? '3s', 'pace') * 1000
       const port = str(parsed.flags, 'port')
-      const serving = await inspect({ backend: demo.backend, ...(port ? { port: Number(port) } : {}), title: 'muster demo' })
+      const serving = await inspect({ backend: demo.backend, ...(port ? { port: Number(port) } : {}), title: 'muster demo', log: (line) => run.io.err(line) })
       run.io.out(`inspector  ${serving.link}`)
       run.io.out(`board      ${join(dir, 'main.db')}`)
       if (!on(parsed.flags, 'no-open') && process.platform === 'darwin') spawnProcess('open', [serving.link], { stdio: 'ignore', detached: true }).unref()
@@ -772,7 +774,7 @@ const commands: Record<string, Command> = {
     spec: { value: ['port'], bool: ['no-open'] },
     async run(run, parsed) {
       const port = str(parsed.flags, 'port')
-      const serving = await inspect({ backend: run.team.backend, ...(port ? { port: Number(port) } : {}) })
+      const serving = await inspect({ backend: run.team.backend, ...(port ? { port: Number(port) } : {}), log: (line) => run.io.err(line) })
       // The part after the # is what lets a page act as you: a browser keeps it, and nothing else on this machine is told it.
       run.io.out(`inspector  ${serving.link}`)
       run.io.out('reads and writes as you; stop it with ctrl-c')
@@ -876,7 +878,7 @@ const commands: Record<string, Command> = {
   },
 
   serve: {
-    spec: { value: ['port', 'host'], many: ['allow-host'], bool: ['no-token', 'allow-joins'] },
+    spec: { value: ['port', 'host'], many: ['allow-host'], bool: ['no-token', 'print-token', 'allow-joins'] },
     async run(run, parsed) {
       const me = await run.team.whoami()
       if (me.mode !== 'file') throw new Failure('forbidden', 'mu serve serves a board on this machine.')
@@ -891,7 +893,8 @@ const commands: Record<string, Command> = {
       let self = ''
       const allowJoins = on(parsed.flags, 'allow-joins') || run.io.env.MUSTER_ALLOW_JOINS === '1'
       const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
-        answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
+        // It is this server calling itself, at the address it listens on: nothing crosses a network it doesn't own.
+        answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, MUSTER_INSECURE_HTTP: '1', ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
       // The workloads the owner trusts to sign in with their platform's token. A file that is wrong stops the board here.
       const oidc = loadOidc()
       try {
@@ -910,6 +913,10 @@ const commands: Record<string, Command> = {
       if (on(parsed.flags, 'no-token')) {
         // A server's output usually ends up in a log: a token there is a token anyone reading the log holds.
         run.io.out('token  none printed: make one with mu token create')
+      } else if (!run.io.tty && !on(parsed.flags, 'print-token')) {
+        // Piped or redirected, it is being kept: under a service manager, in a container, in CI. A token that
+        // opens the whole board for a month isn't written there unless whoever started it says so.
+        run.io.out('token  none printed: this is not a terminal. Make one with mu token create, or pass --print-token')
       } else {
         // Made the way `mu token create` makes one, so the board has a record of it: it is in `mu token list`,
         // and `mu token revoke` stops it if this output ends up somewhere it shouldn't.
@@ -1339,7 +1346,8 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const token = claimed.token
   const leaseS = (Date.parse(claimed.task.claim!.until) - Date.now()) / 1000
   const env: Record<string, string> = { MUSTER_TASK: String(task), ...(me.profile ? { MUSTER_PROFILE: me.profile } : {}), ...pairs(list(parsed.flags, 'env'), 'env') }
-  for (const name of ['MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_URL', 'MUSTER_TOKEN', 'MUSTER_CONFIG']) if (run.io.env[name]) env[name] = run.io.env[name]!
+  // With the board's address goes what its owner said of the network it is on, or the agent's own mu would refuse it.
+  for (const name of ['MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_URL', 'MUSTER_TOKEN', 'MUSTER_CONFIG', 'MUSTER_INSECURE_HTTP']) if (run.io.env[name]) env[name] = run.io.env[name]!
   const timeout = str(parsed.flags, 'timeout')
   // An agent that worked this task before picks its own session back up: it remembers what it read and tried.
   const before = (await run.team.readThread({ id: task })).message.labels
@@ -1363,6 +1371,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
     ...(str(parsed.flags, 'model') ? { model: str(parsed.flags, 'model')! } : {}),
     ...(resume ? { resume } : {}),
     logDir: join(configDir(), 'runs', `${task}-${Date.now()}`),
+    keepLogsMs: KEEP_LOGS_MS,
     ...(timeout ? { timeoutMs: duration(timeout, 'timeout') * 1000 } : {}),
     signal: run.io.stop,
   })
@@ -1850,22 +1859,17 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     const joining = name === 'join' && /^https?:\/\//.test(parsed.positionals[0] ?? '')
     // Nor does a workload that signs in with its platform's token: the board token is what it is asking for.
     const exchanging = name === 'token' && parsed.positionals[0] === 'exchange'
+    // A network that is private some other way is the owner's to vouch for, by name: never the default.
+    const insecure = io.env.MUSTER_INSECURE_HTTP === '1'
     if (joining) {
-      team = board({ backend: http({ url: parsed.positionals[0]!, token: '' }), as: null })
+      team = board({ backend: http({ url: parsed.positionals[0]!, token: '', ...(insecure ? { insecure } : {}) }), as: null })
     } else if (url && exchanging) {
-      // It carries the job's own token, which is for this board and nowhere else: not over plain http, and not wherever a redirect points.
-      let target: URL | null = null
-      try {
-        target = new URL(url)
-      } catch {
-        // Refused below.
-      }
-      if (!target || (target.protocol !== 'https:' && !(target.protocol === 'http:' && isLoopback(target.hostname)))) throw misuse('insecure_url', `A workload's token goes to a board over https: ${url} isn't.`, 'Plain http is only for a board on this machine.')
-      team = board({ backend: http({ url, token: '', redirect: 'error' }), as: null })
+      // It carries the job's own token, which is for this board and nowhere else: never over plain http, whatever is set.
+      team = board({ backend: http({ url, token: '', insecure: false }), as: null })
     } else if (url) {
       const token = io.env.MUSTER_TOKEN
       if (!token) throw new Failure('unauthorized', `The board at ${url} needs a token.`, { hint: 'Set MUSTER_TOKEN to one from mu token create.' })
-      team = board({ backend: http({ url, token }), as: as ?? null })
+      team = board({ backend: http({ url, token, ...(insecure ? { insecure } : {}) }), as: as ?? null })
     } else {
       // Only the processes that take webhooks and tick need the platforms: a broken sync file never stops a read.
       let sync

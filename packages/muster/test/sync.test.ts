@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { board, file, github, linear, loadSync, slack } from '../src/index.ts'
 import { cli, cliStart, clock, tempDir } from './helpers.ts'
@@ -262,6 +263,36 @@ describe('sync: Linear', () => {
     expect(sent[0]).toMatchObject({ url: 'https://api.linear.app/graphql', auth: 'lin_api_token', body: { variables: { input: { issueId: 'iss-1', body: 'all 3.x' } } } })
     await lin({ type: 'Comment', action: 'create', data: { id: 'lc-9001', body: 'all 3.x', issueId: 'iss-1', userId: 'bot-user', issue: { team: { key: 'ENG' } } } })
     expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['which versions?', 'all 3.x'])
+  })
+
+  it("a Linear delivery is known by what Linear signed, not by a header it didn't: an old state change sent again changes nothing", async () => {
+    const { backend, team, lin } = setup()
+    await lin({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'Crash', team: { key: 'ENG' }, creatorId: 'u-ada', state: { name: 'Todo' } } })
+    const body = JSON.stringify({ type: 'Issue', action: 'update', data: { id: 'iss-1', team: { key: 'ENG' }, state: { name: 'In Progress' } } })
+    const signed = (id: string) => backend.syncReceive('lin', { headers: { 'linear-delivery': id, 'linear-signature': sign(SECRET, body) }, body })
+    await signed('first')
+    await lin({ type: 'Issue', action: 'update', data: { id: 'iss-1', team: { key: 'ENG' }, state: { name: 'Done' } } })
+    // Whoever kept the earlier request sends it again under a delivery ID of their own.
+    expect((await signed('replayed')).status).toBe(200)
+    const [thread] = (await team.readChannel({ channel: 'eng' })).threads
+    expect(thread!.message.labels.state).toBe('done')
+  })
+
+  it('what a platform sent is kept only until it is on the board: the inbox holds no second copy of it', async () => {
+    const dir = tempDir()
+    const sync = { lin: linear({ secret: SECRET, teams: { ENG: 'eng' } }) }
+    const backend = file({ dir, sync })
+    const body = JSON.stringify({ type: 'Issue', action: 'create', data: { id: 'iss-9', identifier: 'ENG-9', title: 'a customer wrote MARKER-4471', team: { key: 'ENG' }, creatorId: 'u-ada' } })
+    expect((await backend.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })).status).toBe(200)
+    expect((await board({ backend }).readChannel({ channel: 'eng' })).threads[0]!.message.text).toContain('MARKER-4471')
+    // Sent again, it is still the delivery the board already has.
+    await backend.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })
+    expect((await board({ backend }).readChannel({ channel: 'eng' })).threads).toHaveLength(1)
+    backend.close()
+    const db = new DatabaseSync(join(dir, 'main.db'), { readOnly: true })
+    expect(db.prepare("select count(*) as n from inbox where payload like '%MARKER-4471%'").get()).toEqual({ n: 0 })
+    expect(db.prepare('select count(*) as n from inbox where done = 1').get()).toEqual({ n: 1 })
+    db.close()
   })
 
   it('refuses a wrong signature', async () => {
@@ -574,7 +605,7 @@ describe('sync: config and the webhook route', () => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
     writeFileSync(join(dir, 'config', 'sync.json'), JSON.stringify({ gh: { type: 'github', secret: 'env:GH_SECRET', repos: { 'acme/web': 'web' } } }))
-    const serving = cliStart(dir, ['serve', '--port', '0'], { GH_SECRET: SECRET })
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'], { GH_SECRET: SECRET })
     for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
     const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
     const body = JSON.stringify({ action: 'opened', issue: issue(3, 'From a real webhook', ''), repository: repo, sender: { login: 'nico' } })

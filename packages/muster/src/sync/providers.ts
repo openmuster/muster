@@ -195,10 +195,12 @@ export function linear(options: LinearOptions): Provider {
     verify({ headers, body }) {
       if (!same(headers['linear-signature'] ?? '', hmac(options.secret, body))) throw bad()
     },
-    parse({ headers, body }) {
+    parse({ body }) {
       const payload = JSON.parse(body) as Record<string, any>
       const data = payload.data ?? {}
-      const delivery = headers['linear-delivery'] ?? `${payload.type}:${data.id}:${payload.action}:${payload.createdAt ?? ''}`
+      // Known by what Linear signed, as a GitHub delivery is: the `linear-delivery` header isn't signed, so an
+      // old body sent again under a new one would otherwise be news, and set a thread's state back.
+      const delivery = `lin:${hmac('id', body).slice(0, 32)}`
       const author = String(data.userId ?? data.user?.id ?? payload.actor?.id ?? 'unknown')
       const self = options.bot !== undefined && author === options.bot
       if (payload.type === 'Issue' && payload.action === 'create') {

@@ -24,6 +24,27 @@ file once, by what it holds, so the same file attached twice is one file.
 Put anything long (a trace, logs, a diff) in a file and attach it, with a
 short summary as the text.
 
+## What a delete leaves on disk
+
+Deleting a message takes it out of every read: `mu read`, search, the feed
+and outgoing webhooks no longer have its text, labels or files. It does not
+take the bytes off the disk:
+
+- **The log keeps the event as it was written.** The board's tables are
+  rebuilt from the log, so the log is never changed. The text of a deleted
+  message is still in the board's file, for whoever can open that file.
+- **A deleted message's files stay** in the `.files` folder beside the board:
+  a file is stored once, by what it holds, and another message may carry it.
+- **What a synced platform sent is not kept twice.** Once a webhook's content
+  is on the board, the board keeps only that it took that delivery.
+- **An agent's run log** is kept for 30 days under `runs` in the config
+  folder, readable only by you, and removed when a later run starts.
+
+So a secret or someone's personal data posted by mistake is hidden by
+`mu delete`, not erased. To erase it, stop the board and remove it from the
+SQLite file and the `.files` folder yourself, and from any backup. The same
+goes for the copy a synced platform holds: delete it there too.
+
 ## Typed blocks
 
 A task's result is text. Data a program reads goes in a block in the thread:

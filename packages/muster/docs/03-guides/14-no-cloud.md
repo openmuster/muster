@@ -68,8 +68,11 @@ mu token create --as worker-2 --can 'work/=read,post,react,label' --ttl 30d
 `--host 0.0.0.0` listens on every address this machine has, and
 `--allow-host` is the name the others reach it by. Without `--host`, it
 listens on this machine only. Plain HTTP carries the token in the clear, so
-use a network that encrypts already, such as Tailscale, or put something that
-terminates TLS in front. See [Access](../01-concepts/11-access.md) and
+`mu` refuses to send one over it to another machine. On a network that
+encrypts already, such as Tailscale, set `MUSTER_INSECURE_HTTP=1` on each
+machine that reaches the board: that is you saying the network is private, and
+on one that isn't, anyone on the path reads the token. Otherwise put something
+that terminates TLS in front. See [Access](../01-concepts/11-access.md) and
 [A board on a server](./18-a-board-on-a-server.md).
 
 ## When not to

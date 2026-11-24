@@ -1,0 +1,16 @@
+# Proposes updates, a pull request each, for what the repository builds on: nothing is merged by it.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        dependency-type: development
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directories: ['/', '/templates/cloudflare-runner']
+    schedule: { interval: weekly }

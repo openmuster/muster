@@ -277,7 +277,10 @@ export function createHandler(options: ServeOptions) {
       send(res, 200, { ok: result === undefined ? null : result })
     } catch (error) {
       if (error instanceof Failure) return send(res, statusOf(error), { error: error.toJSON(), exit: error.exit })
-      send(res, 500, { error: { reason: 'internal', message: error instanceof Error ? error.message : String(error) }, exit: 1 })
+      // Not the board's own answer: a bug, or the machine's (a full disk, a file it can't open). What it says can
+      // name paths and users on this machine, so it goes to the owner, in the board's output, and not to the caller.
+      options.log?.(`error  ${req.method} ${(req.url ?? '').split('?')[0]}: ${error instanceof Error ? error.message : String(error)}`)
+      send(res, 500, { error: { reason: 'internal', message: 'The board failed to answer. Whoever runs it can see why in its output.' }, exit: 1 })
     }
   }
 }

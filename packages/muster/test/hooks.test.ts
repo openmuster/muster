@@ -420,7 +420,7 @@ describe('hooks from the command line', () => {
     const there = await receiver()
     const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET', tail: { channel: 'work/' } }])
     await cli(dir, ['post', 'general', 'board exists'])
-    const serving = cliStart(dir, ['serve', '--port', '0'], { HOOK_SECRET: KEY })
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'], { HOOK_SECRET: KEY })
     let stderr = ''
     serving.child.stderr.on('data', (chunk) => (stderr += chunk))
     for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
@@ -439,7 +439,7 @@ describe('hooks from the command line', () => {
   it('mu serve with a hook it cannot sign for serves the board, says why, and keeps its watchers', async () => {
     const dir = setUpDir([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }], [{ name: 'lead', tail: { channel: 'work/' }, run: ['sh', '-c', 'echo woke >> "$HOME/woke"'], every: 1 }])
     await cli(dir, ['post', 'general', 'board exists'])
-    const serving = cliStart(dir, ['serve', '--port', '0'])
+    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
     let stderr = ''
     serving.child.stderr.on('data', (chunk) => (stderr += chunk))
     for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
