@@ -399,6 +399,18 @@ describe('cloud runners', () => {
     expect(calls[1]!.url).toBe('https://runner.example.workers.dev/runs/run-9/stop')
   })
 
+  it("cloudflare: a private repository's clone token goes to the Worker for its clone routes, never into the container's environment", async () => {
+    const sent: any[] = []
+    const fetcher = (async (_url: any, init?: RequestInit) => (sent.push(JSON.parse(String(init?.body))), Response.json({ id: 'r' }))) as typeof fetch
+    await cloudflare({ worker: 'https://w.example', secret: 's', fetch: fetcher }).start({ ...request, repo: 'https://github.com/acme/web.git', github: { token: 'ghs_clone' } })
+    expect(sent[0].repo).toBe('https://github.com/acme/web.git')
+    expect(sent[0].repoAuth).toBe(`Basic ${Buffer.from('x-access-token:ghs_clone').toString('base64')}`)
+    expect(JSON.stringify(sent[0].env)).not.toContain('ghs_clone')
+    // A public repository is cloned with nothing added.
+    await cloudflare({ worker: 'https://w.example', secret: 's', fetch: fetcher }).start({ ...request, repo: 'https://github.com/acme/web.git' })
+    expect(sent[1].repoAuth).toBeUndefined()
+  })
+
   it('both refuse a board the sandbox could not reach before starting anything', async () => {
     const local = { ...request, board: { url: 'http://127.0.0.1:4100/api/board', token: 'T' } }
     let created = false

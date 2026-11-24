@@ -325,9 +325,11 @@ a delivery to it is out, which has not been run live. An OAuth app was not
 tried; its token was sent without the `Bearer` prefix Linear asks for, which
 is now fixed.
 
-Built but proven only against stand-ins, never a real account or service:
-
-- The Cloudflare runner. Its Worker template has never been deployed or run.
+Run for real once, on 24 Nov 2026: the Cloudflare runner's Worker, deployed,
+with the board and a private repository reached only through it and the
+container removed when its run ended, and Claude Code doing two tasks in it
+from start to end, one of them fixing a bug in the repository with its tests
+passing offline.
 
 Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a
 sandbox claiming, logging and completing one small task on a board reached

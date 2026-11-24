@@ -8,6 +8,9 @@ import { loadSync } from '../src/index.ts'
 import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
+import { boardHeaders, modelPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
+import { boardPolicy } from '../src/runner/policy.ts'
+import { claude } from '../src/runner/agents.ts'
 
 const factory = resolve(dirname(fileURLToPath(import.meta.url)), '../../../templates/factory')
 
@@ -24,6 +27,51 @@ describe('the cloudflare runner template', () => {
     expect(await authorized('Bearer ', '')).toBe(false)
     expect(await authorized('Bearer null', null)).toBe(false)
     expect(await authorized('Bearer short', 'short')).toBe(false)
+  })
+})
+
+describe('the cloudflare runner gates', () => {
+  // What cloudflare() sends the Worker, from the same policy the Vercel runner uses.
+  const url = 'https://board.example.com/api/board'
+  const { networkPolicy } = boardPolicy({ url, token: 'tok-123' })
+  const board = { host: 'board.example.com', rules: networkPolicy.allow['board.example.com']!, token: 'tok-123' }
+
+  it("adds the token to the board's own routes, and to nothing else", () => {
+    expect(boardHeaders({ url: `${url}/post`, method: 'POST' }, board)).toEqual({ authorization: 'Bearer tok-123' })
+    expect(boardHeaders({ url: `${url}/whoami`, method: 'GET' }, board)).toEqual({ authorization: 'Bearer tok-123' })
+    expect(boardHeaders({ url: `${url}/post`, method: 'GET' }, board)).toBeNull()
+    // Closed to a sandbox: it starts work beyond it.
+    expect(boardHeaders({ url: `${url}/workflowRequest`, method: 'POST' }, board)).toBeNull()
+    expect(boardHeaders({ url: `${url}/../admin/post`, method: 'POST' }, board)).toBeNull()
+    expect(boardHeaders({ url: `${url}/x%2fpost`, method: 'POST' }, board)).toBeNull()
+    expect(boardHeaders({ url: 'http://board.example.com/api/board/post', method: 'POST' }, board)).toBeNull()
+    // The Host header is the container's to write: another host gets nothing, whatever the TLS name was.
+    expect(boardHeaders({ url: 'https://evil.example.com/api/board/post', method: 'POST' }, board)).toBeNull()
+  })
+
+  it("lets the model's calls through and none of the key's other uses", () => {
+    const anthropic = claude.model!
+    const model = { host: anthropic.host, paths: anthropic.paths, headers: anthropic.headers('k') }
+    expect(modelPasses({ url: 'https://api.anthropic.com/v1/messages', method: 'POST' }, model)).toBe(true)
+    expect(modelPasses({ url: 'https://api.anthropic.com/v1/messages?beta=true', method: 'POST' }, model)).toBe(true)
+    expect(modelPasses({ url: 'https://api.anthropic.com/v1/files', method: 'POST' }, model)).toBe(false)
+    expect(modelPasses({ url: 'https://api.anthropic.com/v1/messages', method: 'GET' }, model)).toBe(false)
+    expect(modelPasses({ url: 'https://example.com/v1/messages', method: 'POST' }, model)).toBe(false)
+  })
+
+  it('lets git clone read the one repository, and nothing else on its host', () => {
+    const repo = repoProps('https://github.com/acme/web.git')
+    expect(repoPasses({ url: 'https://github.com/acme/web.git/info/refs?service=git-upload-pack', method: 'GET' }, repo)).toBe(true)
+    expect(repoPasses({ url: 'https://github.com/acme/web.git/git-upload-pack', method: 'POST' }, repo)).toBe(true)
+    expect(repoPasses({ url: 'https://github.com/acme/web/info/refs?service=git-upload-pack', method: 'GET' }, repo)).toBe(true)
+    // Pushing, another repository, a page of the site.
+    expect(repoPasses({ url: 'https://github.com/acme/web.git/info/refs?service=git-receive-pack', method: 'GET' }, repo)).toBe(false)
+    expect(repoPasses({ url: 'https://github.com/acme/web.git/git-receive-pack', method: 'POST' }, repo)).toBe(false)
+    expect(repoPasses({ url: 'https://github.com/acme/other.git/git-upload-pack', method: 'POST' }, repo)).toBe(false)
+    expect(repoPasses({ url: 'https://github.com/acme/web', method: 'GET' }, repo)).toBe(false)
+    expect(repoPasses({ url: 'https://github.com/acme/web.git/../other.git/git-upload-pack', method: 'POST' }, repo)).toBe(false)
+    expect(() => repoProps('https://x:tok@github.com/acme/web.git')).toThrow()
+    expect(() => repoProps('http://github.com/acme/web.git')).toThrow()
   })
 })
 

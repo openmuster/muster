@@ -47,6 +47,23 @@ versions are affected.
 
 ### Fixed
 
+- The Cloudflare runner template now runs. It was written from documentation
+  and had never been deployed. On its first deploy:
+  - its container stopped as soon as the Worker went idle;
+  - its image had nothing to keep it running;
+  - HTTPS through its gates failed because nothing trusted Cloudflare's
+    certificate;
+  - `--repo` couldn't be cloned, and a private repository's token never
+    reached it;
+  - a failed setup step went unnoticed;
+  - its container got Cloudflare's default size, `lite` (256 MiB), in which
+    Claude Code and `mu` ran out of memory and stalled without failing.
+
+  It now has a `wrangler.jsonc`. The Worker owns each run until it ends,
+  clones through a gate that is closed again before the agent starts, and
+  removes the container when the agent exits or the run's time is up. Each
+  run gets a `standard-1` container; `INSTANCE` in `wrangler.jsonc` changes it.
+
 - Sync: what the board sent to a platform, a reply or a new thread, could
   come back as a second copy when the platform's webhook for it arrived
   before its answer to the board did. With no `bot` set, as with a Linear

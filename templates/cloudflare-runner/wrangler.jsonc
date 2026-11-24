@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "muster-runner",
+  "main": "src/index.ts",
+  // 2026-10-01 or later: a pending exec or alarm keeps the Durable Object, and so the container, running.
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  // The container's size, per run: lite, basic, standard-1 to standard-4. An agent's CLI needs more than lite's 256 MiB.
+  "vars": { "INSTANCE": "standard-1" },
+  "containers": [
+    {
+      "class_name": "Run",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "dockerfile": "./Dockerfile",
+          // The agent's CLI by version: `npm view @anthropic-ai/claude-code version` says the current one.
+          "build_vars": { "AGENT_VERSION": "2.1.331" }
+        }
+      }
+    }
+  ],
+  "durable_objects": { "bindings": [{ "name": "RUNS", "class_name": "Run" }] },
+  "exports": { "Run": { "type": "durable-object", "storage": "sqlite" } }
+}

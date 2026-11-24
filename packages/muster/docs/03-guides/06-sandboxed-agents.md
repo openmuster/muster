@@ -8,9 +8,10 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 > removes its sandbox, the credentials stay out of it, a repository is cloned
 > and its dependencies installed, a base is forked, and a worker gives each
 > task its own sandbox, and `--push` opens a pull request through a GitHub
-> App. The Cloudflare runner and its Worker in
-> `templates/cloudflare-runner` have never been deployed. Treat both runners
-> as experimental.
+> App. The Cloudflare runner's Worker in `templates/cloudflare-runner` has
+> been deployed and run: the board and a private repository reached only
+> through it, Claude Code doing a task in a repository from start to end, and
+> the container removed when the run ends. Treat both runners as experimental.
 
 ## What a sandbox needs
 
@@ -122,7 +123,14 @@ The agent needs `mu` and its own CLI where it runs.
   so, and the agent starts without them.
 - **Cloudflare.** A run's container has no internet and installs nothing. `mu`
   and the agent's CLI are in the image you build: the template's `Dockerfile`
-  installs both.
+  installs both. `--repo` is cloned through the Worker, which opens that one
+  repository's clone routes, adds the GitHub App's read token for a private
+  one, and closes GitHub again before the agent starts. Dependencies aren't
+  installed. The Worker checks the run every minute and removes the container
+  when the agent exits or `--timeout` (an hour without one) has passed. Each
+  run gets a `standard-1` container (half a vCPU, 4 GiB); set `INSTANCE` in
+  the Worker's `wrangler.jsonc` for another size. Cloudflare's default, `lite`,
+  is too small for an agent's CLI.
 
 ### Push what it changed
 
