@@ -53,13 +53,15 @@ When the ticker starts, and a token is set, it asks Linear for the issues in
 the mapped teams updated since the last event it received, then the comments
 on them. An issue created while the board was down arrives whole, with its
 title, description and labels, and its comments as replies. A state change
-missed meanwhile sets `state`. An older issue updated while the board was down
+missed meanwhile sets `state`, by `lin`: Linear's list doesn't say who
+moved the issue, so the change is put down to the sync. An older issue updated while the board was down
 starts a thread too. What the board already has, by webhook or because it
 sent it, isn't imported again.
 
 Edits and removals made while the board was down are not read; nor are they
-for GitHub. Up to 500 issues and 500 comments are read, in pages of 50; what
-is beyond that is not. If Linear refuses, a rate limit among the reasons, the
+for GitHub. One start reads up to 500 issues and 500 comments, oldest change
+first, in pages of 50. If there are more, the next start goes on from the
+newest change it read. If Linear refuses, a rate limit among the reasons, the
 next start asks again from the same point.
 
 ## Set it up

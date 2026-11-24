@@ -261,20 +261,44 @@ export function linear(options: LinearOptions): Provider {
       if (!options.token) return []
       const keys = Object.keys(options.teams)
       if (keys.length === 0) return []
-      // Every page of both lists, or nothing: a call that fails throws, and the board asks again from the same point.
-      const read = async (field: 'issues' | 'comments', nodes: string, filter: unknown) => {
-        const out: Record<string, any>[] = []
-        let after: string | null = null
-        for (let page = 0; page < LINEAR_CATCHUP_PAGES; page++) {
-          const answer = await postAs(`query($filter: ${field === 'issues' ? 'IssueFilter' : 'CommentFilter'}, $after: String) { ${field}(filter: $filter, first: ${LINEAR_CATCHUP_PAGE}, after: $after, orderBy: updatedAt) { nodes { ${nodes} } pageInfo { hasNextPage endCursor } } }`, { filter, after }, fetcher)
-          const list = answer?.data?.[field]
+      const refused = (field: string, answer: any) => new Failure('platform_refused', `Linear did not list ${field}: ${String(answer?.errors?.[0]?.message ?? 'no data').slice(0, 200)}`)
+      /**
+       * Reads a list oldest change first, up to the page cap. A call that fails throws, and the board asks again
+       * from the same point. Issues sort that way; comments can't be sorted, and Linear lists them newest first,
+       * so they are read from the end backwards. Cut short, it says where the next catch-up starts: the newest
+       * change it read, less a millisecond, so one made in that same millisecond is read again, not skipped.
+       */
+      const read = async (field: 'issues' | 'comments', nodes: string, filter: Record<string, unknown>): Promise<{ nodes: Record<string, any>[]; resume?: string }> => {
+        const type = field === 'issues' ? 'IssueFilter' : 'CommentFilter'
+        const list = async (variables: Record<string, unknown>, args: string, page: string) => {
+          const answer = await postAs(`query($filter: ${type}, $cursor: String) { ${field}(filter: $filter, ${args}) { nodes { ${nodes} } pageInfo { ${page} } } }`, variables, fetcher)
+          const got = answer?.data?.[field]
           // Linear can answer 200 with errors and no data, a rate limit among them: that is a failure, not "nothing changed".
-          if (!list || !Array.isArray(list.nodes)) throw new Failure('platform_refused', `Linear did not list ${field}: ${String(answer?.errors?.[0]?.message ?? 'no data').slice(0, 200)}`)
-          out.push(...list.nodes)
-          if (!list.pageInfo?.hasNextPage || !list.pageInfo.endCursor) break
-          after = String(list.pageInfo.endCursor)
+          if (!got || !Array.isArray(got.nodes)) throw refused(field, answer)
+          return got
         }
-        return out
+        const out: Record<string, any>[] = []
+        let cursor: string | null = null
+        let more = false
+        for (let page = 0; page < LINEAR_CATCHUP_PAGES; page++) {
+          const got: any =
+            field === 'issues'
+              ? await list({ filter, cursor }, `first: ${LINEAR_CATCHUP_PAGE}, after: $cursor, sort: [{ updatedAt: { order: Ascending } }]`, 'hasNextPage endCursor')
+              : await list({ filter, cursor }, `last: ${LINEAR_CATCHUP_PAGE}, before: $cursor, orderBy: updatedAt`, 'hasPreviousPage startCursor')
+          out.push(...got.nodes)
+          const next = field === 'issues' ? [got.pageInfo?.hasNextPage, got.pageInfo?.endCursor] : [got.pageInfo?.hasPreviousPage, got.pageInfo?.startCursor]
+          more = Boolean(next[0] && next[1])
+          if (!more) break
+          cursor = String(next[1])
+        }
+        if (!more || out.length === 0) return { nodes: out }
+        const times = out.map((node) => Date.parse(String(node.updatedAt))).filter((time) => !Number.isNaN(time))
+        if (times.length !== out.length) throw new Failure('platform_refused', `Linear listed ${field} without when they changed.`)
+        // What was read must be the oldest changes: if anything older is left, the order isn't what this read assumed,
+        // and moving on would skip it. Refused, the next start asks again from the same point.
+        const older = await list({ filter: { ...filter, updatedAt: { gt: (filter.updatedAt as { gt: string }).gt, lt: new Date(Math.min(...times)).toISOString() } }, cursor: null }, 'first: 1', 'hasNextPage')
+        if (older.nodes.length > 0) throw new Failure('platform_refused', `Linear did not list ${field} oldest first.`)
+        return { nodes: out, resume: new Date(Math.max(...times) - 1).toISOString() }
       }
       const issueFields = 'id identifier title description creator { id } team { key } state { name } updatedAt'
       const changed = { updatedAt: { gt: since } }
@@ -282,20 +306,23 @@ export function linear(options: LinearOptions): Provider {
       const comments = await read('comments', `id body updatedAt user { id } issue { ${issueFields} }`, { ...changed, issue: { team: { key: { in: keys } } } })
       const out: Inbound[] = []
       // Issues first, so a comment on one opened while the board was down lands in its thread.
-      for (const issue of issues) {
+      for (const issue of issues.nodes) {
         const root = rootOf(issue, `catchup:issue:${issue.id}`)
         out.push(root)
         // Its state now: a move missed while down. Importing it on a thread that already says so changes nothing.
-        if (root.labels?.state) out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, labels: { state: root.labels.state } })
+        // Linear doesn't say here who moved it, so it is put down to the sync, not to whoever opened the issue.
+        if (root.labels?.state) out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, labels: { state: root.labels.state } })
       }
-      for (const comment of comments) {
+      for (const comment of comments.nodes) {
         if (!comment.issue?.id) continue
         // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
         const { author, text, labels, place } = rootOf(comment.issue, '')
         const by = String(comment.user?.id ?? 'unknown')
         out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} } })
       }
-      return out
+      // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
+      const resumes = [issues.resume, comments.resume].filter((at): at is string => at !== undefined).sort()
+      return resumes.length ? { events: out, resume: resumes[0]! } : out
     },
     async deliver(message, target, fetcher) {
       const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)

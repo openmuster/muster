@@ -112,7 +112,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
   const at = ctx.now().toISOString()
-  const by: By = { principal: `${key}:user:${event.author}`, profile: null }
+  const by: By = { principal: event.author ? `${key}:user:${event.author}` : key, profile: null }
   let root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined
 
   // About a platform thread the board never saw, and carrying it: start the thread from it, as its opener wrote it.
@@ -286,14 +286,19 @@ export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = 
     if (!last.at) continue
     if (!pending) ctx.db.write(() => ctx.db.raw.prepare("insert or ignore into cursors (name, profile, seq) values (?, '', ?)").get(name, Date.parse(last.at!)))
     let events: Inbound[]
+    let resume: string | undefined
     try {
-      events = await provider.catchUp(last.at, fetcher)
+      const read = await provider.catchUp(last.at, fetcher)
+      events = Array.isArray(read) ? read : read.events
+      resume = Array.isArray(read) ? undefined : read.resume
     } catch {
       continue
     }
     ctx.db.write(() => {
       for (const event of events) ctx.db.raw.prepare('insert or ignore into inbox (key, id, received, payload) values (?, ?, ?, ?)').get(key, event.id, ctx.now().toISOString(), JSON.stringify(event))
-      ctx.db.raw.prepare("delete from cursors where name = ? and profile = ''").get(name)
+      // Cut short, the next start goes on from where this one got to; read to the end, from the last event received.
+      if (resume !== undefined && !Number.isNaN(Date.parse(resume))) ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(Date.parse(resume), name)
+      else ctx.db.raw.prepare("delete from cursors where name = ? and profile = ''").get(name)
     })
     fetched += events.length
   }

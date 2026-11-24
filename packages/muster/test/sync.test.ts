@@ -589,21 +589,34 @@ describe('sync: GitHub threads the board never saw opened', () => {
 
 describe('sync: Linear catch-up after downtime', () => {
   type Node = Record<string, any>
-  /** Linear's GraphQL API, faked: lists filtered by what the test says changed, a comment made on request. */
+  /**
+   * Linear's GraphQL API, faked as it documents itself: issues sorted as asked, comments only newest first (so read
+   * backwards from the end), each filtered by `updatedAt`, a comment made on request.
+   */
   function fakeLinear() {
-    const state = { issues: [] as Node[], comments: [] as Node[], fail: null as null | 'errors' | 'status', page: 50 }
-    const asked: { field: string; filter: any; after: string | null }[] = []
+    const state = { issues: [] as Node[], comments: [] as Node[], fail: null as null | 'errors' | 'status', page: 50, commentsOldestFirst: false }
+    const asked: { field: string; filter: any; cursor: string | null; query: string }[] = []
     const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
       const { query, variables } = JSON.parse(String(init?.body ?? '{}'))
       if (String(query).includes('commentCreate')) return Response.json({ data: { commentCreate: { success: true, comment: { id: 'lc-board' } } } })
       const field = String(query).includes('comments(') ? 'comments' : 'issues'
-      asked.push({ field, filter: variables.filter, after: variables.after })
+      asked.push({ field, filter: variables.filter, cursor: variables.cursor, query })
       if (state.fail === 'status') return new Response('{"errors":[{"message":"down"}]}', { status: 503 })
       if (state.fail === 'errors') return Response.json({ errors: [{ message: 'Rate limit exceeded', extensions: { code: 'RATELIMITED' } }] })
-      const all = state[field]
-      const from = variables.after ? Number(variables.after) : 0
-      const nodes = all.slice(from, from + state.page)
-      return Response.json({ data: { [field]: { nodes, pageInfo: { hasNextPage: from + state.page < all.length, endCursor: String(from + state.page) } } } })
+      const { gt, lt } = variables.filter.updatedAt
+      const ascending = field === 'issues' ? String(query).includes('order: Ascending') : state.commentsOldestFirst
+      const all = (state[field] as Node[])
+        .filter((node) => node.updatedAt > gt && (lt === undefined || node.updatedAt < lt))
+        .sort((a, b) => (ascending ? 1 : -1) * a.updatedAt.localeCompare(b.updatedAt))
+      if (String(query).includes('first: 1,') || /first: 1\)/.test(query)) return Response.json({ data: { [field]: { nodes: all.slice(0, 1), pageInfo: { hasNextPage: all.length > 1 } } } })
+      if (String(query).includes('last:')) {
+        // Relay backwards: the page just before the cursor, in the list's own order.
+        const to = variables.cursor ? Number(variables.cursor) : all.length
+        const from = Math.max(0, to - state.page)
+        return Response.json({ data: { [field]: { nodes: all.slice(from, to), pageInfo: { hasPreviousPage: from > 0, startCursor: String(from) } } } })
+      }
+      const from = variables.cursor ? Number(variables.cursor) : 0
+      return Response.json({ data: { [field]: { nodes: all.slice(from, from + state.page), pageInfo: { hasNextPage: from + state.page < all.length, endCursor: String(from + state.page) } } } })
     }) as typeof fetch
     return { state, asked, fetcher }
   }
@@ -626,7 +639,9 @@ describe('sync: Linear catch-up after downtime', () => {
     await webhook(first, opened)
     return { time, open, first, ...linearApi }
   }
-  const sinces = (asked: { field: string; filter: any }[]) => asked.map((each) => [each.field, each.filter.updatedAt.gt])
+  /** Where each list was read from in the requests since `from`, once each. */
+  const startedFrom = (asked: { field: string; filter: any }[], from: number) => [...new Set(sinces(asked.slice(from)).map((each) => each.join(' ')))]
+  const sinces = (asked: { field: string; filter: any }[]) => asked.filter((each) => each.filter.updatedAt.lt === undefined).map((each) => [each.field, each.filter.updatedAt.gt])
 
   it('issues and comments made while the board was down arrive once, a state change too, and the app\'s own comment not at all', async () => {
     const { time, open, first, state, asked } = await downtime({ bot: 'bot-user' })
@@ -744,21 +759,75 @@ describe('sync: Linear catch-up after downtime', () => {
     })
   }
 
-  it('reads every page Linear has, up to ten of each list', async () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString()
+
+  it('more changes than one catch-up reads: it reads the oldest, and the next start goes on from there, skipping nothing', async () => {
     const { time, open, first, state, asked } = await downtime()
     first.close()
     state.page = 2
-    state.issues = Array.from({ length: 5 }, (_, index) => issueNode(`iss-${index + 10}`, `Issue ${index + 10}`))
-    state.comments = Array.from({ length: 30 }, (_, index) => commentNode(`c-${index}`, `comment ${index}`, state.issues[0]!))
+    // Twenty-five issues and as many comments, each changed a minute after the last: the cap is ten pages of two.
+    state.issues = Array.from({ length: 25 }, (_, index) => issueNode(`iss-${index + 10}`, `Issue ${index + 10}`, { updatedAt: at(index + 1) }))
+    state.comments = state.issues.map((issue, index) => commentNode(`c-${index}`, `comment ${index}`, issue, 'u-maya'))
+    state.comments.forEach((comment, index) => (comment.updatedAt = at(index + 1)))
     time.advance(3_600_000)
     const second = open()
     await second.syncTick()
-    expect(asked.filter((each) => each.field === 'issues').map((each) => each.after)).toEqual([null, '2', '4'])
-    expect(asked.filter((each) => each.field === 'comments')).toHaveLength(10)
-    const team = board({ backend: second })
+    const titles = async (backend: ReturnType<typeof open>) => (await board({ backend }).readChannel({ channel: 'eng' })).threads.map((thread) => thread.message.text).sort()
+    // Twenty of each read, the oldest; the next start asks from the twentieth, less a millisecond.
+    expect((await titles(second)).length).toBe(21)
+    second.close()
+    time.advance(3_600_000)
+    const third = open()
+    const before = asked.length
+    await third.syncTick()
+    const resumed = new Date(Date.parse(at(20)) - 1).toISOString()
+    expect(startedFrom(asked, before)).toEqual([`issues ${resumed}`, `comments ${resumed}`])
+    const team = board({ backend: third })
     const threads = (await team.readChannel({ channel: 'eng' })).threads
-    expect(threads).toHaveLength(6)
-    expect((await team.readThread({ id: threads.find((thread) => thread.message.text === 'Issue 10')!.message.id })).replies).toHaveLength(20)
+    expect(threads).toHaveLength(26)
+    for (const thread of threads.filter((each) => each.message.text.startsWith('Issue '))) expect((await team.readThread({ id: thread.message.id })).replies).toHaveLength(1)
+    third.close()
+    // Read to the end, the start after that is from the last event received again.
+    time.advance(3_600_000)
+    const fourth = open()
+    const later = asked.length
+    await fourth.syncTick()
+    expect(startedFrom(asked, later)).toEqual(['issues 2026-01-01T02:00:00.000Z', 'comments 2026-01-01T02:00:00.000Z'])
+    fourth.close()
+  })
+
+  it('cut short, a list that turns out not to be oldest first is refused, and the next start asks from the same point', async () => {
+    const { time, open, first, state, asked } = await downtime()
+    first.close()
+    state.page = 2
+    state.commentsOldestFirst = true
+    const issue = issueNode('iss-2', 'Opened while down')
+    state.issues = [issue]
+    state.comments = Array.from({ length: 25 }, (_, index) => ({ ...commentNode(`c-${index}`, `comment ${index}`, issue), updatedAt: at(index + 1) }))
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    expect((await board({ backend: second }).readChannel({ channel: 'eng' })).threads).toHaveLength(1)
+    second.close()
+    time.advance(3_600_000)
+    const third = open()
+    const before = asked.length
+    await third.syncTick()
+    expect(startedFrom(asked, before)).toEqual(['issues 2026-01-01T00:00:00.000Z', 'comments 2026-01-01T00:00:00.000Z'])
+    third.close()
+  })
+
+  it('a state change read on catching up is put down to the sync, not to whoever opened the issue, even when that is the app', async () => {
+    const { time, open, first, state } = await downtime({ bot: 'u-nico' })
+    first.close()
+    state.issues = [issueNode('iss-1', 'Seen before the downtime', { state: { name: 'Done' } })]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    const [thread] = (await board({ backend: second }).readChannel({ channel: 'eng' })).threads
+    expect(thread!.message.labels.state).toBe('done')
+    const changed = (await board({ backend: second }).events({ after: 0, filter: { types: ['labels.changed'] } })).events.at(-1)
+    expect(changed?.by.principal).toBe('lin')
     second.close()
   })
 })

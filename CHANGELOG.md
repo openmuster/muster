@@ -12,8 +12,9 @@ versions are affected.
   updated since the last event it received, and imports what the webhooks
   missed: new issues, new comments and state changes. What the board already
   has is not imported twice. Edits and removals made meanwhile are not read.
-  It reads up to 500 of each. Covered by tests against a faked Linear API
-  only.
+  A state change is put down to the sync (`lin`), since Linear's list doesn't
+  say who made it. One start reads up to 500 of each, oldest first; the next
+  goes on from there. Covered by tests against a faked Linear API only.
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
