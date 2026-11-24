@@ -33,6 +33,10 @@ repository. Sync has not been run against GitHub yet.
 
 The page has no sign-in, and its reply form writes as you: whoever can reach
 it can. `pnpm dev` listens on 127.0.0.1 only, so that is this machine.
+It also answers only requests that came for this machine's own name
+(`proxy.ts`), so a page on another site can't reach it through your browser
+under a name of its own. Behind something that asks who is there, list the
+name it is reached by in `ALLOW_HOSTS`, comma-separated.
 
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass

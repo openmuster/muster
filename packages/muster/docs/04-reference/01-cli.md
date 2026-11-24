@@ -128,8 +128,8 @@ serve
   join list | join deny <code>
   join approve <code> --can <channel>=read,post... [--ttl 7d] [--no-sync]
   Set MUSTER_URL and MUSTER_TOKEN, and every command uses that board.
-  A token goes over https, or to this machine. MUSTER_INSECURE_HTTP=1 lets it
-  cross plain http, for a network that is private some other way.
+  A token goes over https, or to this machine, and over plain http only with
+  MUSTER_INSECURE_HTTP=1: for a network that is private some other way.
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
 exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated

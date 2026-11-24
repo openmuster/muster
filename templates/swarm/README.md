@@ -17,6 +17,10 @@ It uses the default board on this machine, or the one at `MUSTER_URL` with
 The page has no sign-in: whoever can reach it can launch agents as you.
 `pnpm dev` listens on 127.0.0.1 only, so that is this machine. Don't put it
 on a network without something in front that asks who is there.
+It also answers only requests that came for this machine's own name
+(`proxy.ts`), so a page on another site can't reach it through your browser
+under a name of its own. Behind something that asks who is there, list the
+name it is reached by in `ALLOW_HOSTS`, comma-separated.
 
 Agents run as local processes, with the access of whoever started the page,
 or in cloud sandboxes when you pick a runner. Launch runs only on code you
