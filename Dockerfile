@@ -36,5 +36,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.MUSTER_PORT || 4100) + '/api/board/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
 
 ENTRYPOINT ["mu"]
-# No token in the log: make one with `docker exec board mu token create`.
+# No token in the log: make one with `docker exec board mu token create --all`.
 CMD ["serve", "--no-token"]

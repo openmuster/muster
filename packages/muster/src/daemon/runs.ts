@@ -8,7 +8,7 @@ import type { Workflow } from './workflows.ts'
 
 /**
  * Starts one worker process, and settles once it has started or couldn't. The daemon passes the real one;
- * tests pass one that only takes notes. A worker with no `cwd` (a Vercel worker) starts where the daemon runs.
+ * tests pass one that only takes notes. A worker with no `cwd` (a Vercel or Cloudflare worker) starts where the daemon runs.
  */
 export type Spawner = (worker: { name: string; argv: string[]; cwd?: string }) => void | Promise<void>
 
@@ -37,7 +37,25 @@ export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: 
 /** How many ticks a request may be held before the daemon gives up on it, says so, and reads on. */
 export const MAX_TRIES = 5
 
-export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns }
+export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns; env?: Record<string, string | undefined> }
+
+/**
+ * What a cloud worker would miss in the daemon's environment, which its workers start with: said on the run's
+ * thread instead of starting workers that exit at once, unseen. Null when nothing is missing.
+ */
+export function missingSettings(workers: Workflow['workers'], env: Record<string, string | undefined>): string | null {
+  if (workers.runner !== 'vercel' && workers.runner !== 'cloudflare') return null
+  const missing: string[] = []
+  if (!env.MUSTER_URL && !env.MUSTER_SANDBOX_URL) missing.push('MUSTER_URL or MUSTER_SANDBOX_URL')
+  if (workers.runner === 'cloudflare') for (const name of ['MUSTER_CF_WORKER', 'MUSTER_CF_SECRET']) if (!env[name]) missing.push(name)
+  if (workers.runner === 'vercel') {
+    const set = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'].filter((name) => env[name])
+    if (set.length === 0 && !env.VERCEL_OIDC_TOKEN) missing.push('VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN')
+    else if (set.length > 0 && set.length < 3) missing.push('all three of VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID')
+  }
+  if (workers.push) for (const name of ['GITHUB_APP_ID', 'GITHUB_APP_KEY_FILE']) if (!env[name]) missing.push(name)
+  return missing.length ? `the daemon's environment has no ${missing.join(', ')}, which its ${workers.runner} workers need` : null
+}
 
 /** What a pass did. `reported` is there only when a run was summed up on its thread. */
 export type Ran = { started: number[]; refused: number[]; reported?: number[]; why?: string }
@@ -97,7 +115,7 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
   const workers = workflow.workers
   return [
     'run', '--ready', run, '--loop', '--wait', '10m',
-    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
+    ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
     '--agent', workers.agent, '--as', `${workers.as}-${i}`,
     ...(workers.repo ? ['--repo', workers.repo] : []),
     ...(workers.push ? ['--push'] : []),
@@ -208,10 +226,14 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
       }
     } catch (error) {
       let held: unknown = error
+      // Workers this request spawned keep running whatever went wrong after: a reply never says it didn't start.
+      const crew = deps.runs.crews.get(event.seq)
+      const begun = !deps.runs.crews.has(event.seq) ? null : crew ? crew.text : `started ${workflow?.workers.count} workers for ${name}`
+      const failed = (why: string) => (begun === null ? `couldn't start ${name}: ${why}` : `${begun}; couldn't confirm the run: ${why}`)
       if (error instanceof Failure && refusal === null && !isTransient(error)) {
         // The board's own answer, such as a task text too long to post: the same next time, so said and passed over.
         try {
-          await say(event.seq, thread, `couldn't start ${name}: ${error.message}`)
+          await say(event.seq, thread, failed(error.message))
           out.refused.push(event.seq)
           held = null
         } catch (unsaid) {
@@ -231,7 +253,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         }
         out.why = `${name} ${event.seq}: gave up after ${MAX_TRIES} tries: ${message}`
         // Said if the board will take it; passed over either way.
-        await say(event.seq, thread, `couldn't start ${name}: ${said(held)} (gave up after ${MAX_TRIES} tries)`).catch(() => {})
+        await say(event.seq, thread, failed(`${said(held)} (gave up after ${MAX_TRIES} tries)`)).catch(() => {})
         out.refused.push(event.seq)
       }
     }
@@ -503,6 +525,8 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     // Started on an earlier try of this request, which was then held: not started again.
     if (!deps.runs.crews.has(on.seq)) {
       let ended: { text: string; failed: string } | null = null
+      const missing = missingSettings(workflow.workers, deps.env ?? process.env)
+      if (missing) ended = { text: `couldn't start workers for ${workflow.name}: ${missing}`, failed: missing }
       for (let i = 1; i <= workflow.workers.count && ended === null; i++) {
         try {
           await deps.spawn({ name: `${workflow.workers.as}-${i}`, argv: workerArgv(workflow, run, on.seq, i, owner), ...(workflow.workers.cwd !== undefined ? { cwd: workflow.workers.cwd } : {}) })

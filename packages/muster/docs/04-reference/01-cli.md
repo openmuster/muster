@@ -119,8 +119,9 @@ serve
        [--host 0.0.0.0] [--no-token]  listen beyond this machine; print no token
        [--print-token]           print a token when the output isn't a terminal
        [--allow-joins]           let an agent with no token ask to join
-  token create [--as <profile>] [--can <channel>=read,post]... [--ttl 30d]
+  token create [--as <profile>] --can <channel>=read,post... [--ttl 30d]
        [--no-sync]
+  token create --all [--ttl 30d]  a token with your full access: every channel
   token list | token revoke <id>
   token exchange [-]             a CI job's own OIDC token for a board token:
                                  on stdin with -, or in MUSTER_OIDC_TOKEN
