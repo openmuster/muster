@@ -119,8 +119,10 @@ The rules are the same for each platform:
   The board stops reading a file as soon as it passes 25 MB.
 - **A day's allowance per sync.** Anyone who can post in a synced place can
   send files, so each sync brings in at most 500 MB of them a day (UTC).
-  Past that a file is named, not stored. Set `"filesPerDayMB"` on the sync's
-  entry in `sync.json` to change it.
+  Past that a file is named, not stored, and one with no size given is not
+  even fetched. Bytes count when they are stored, so deleting the message
+  gives none back. Set `"filesPerDayMB"` on the sync's entry in `sync.json`
+  to change it.
 - **Any content type.** The board keeps the type as data and only ever hands
   a file out as bytes: it never shows one in a page.
 - **Nothing is lost without a word.** A file that is too big, on another
@@ -137,8 +139,10 @@ The rules are the same for each platform:
 
 A webhook is answered first and its files are fetched on the next tick of
 `mu serve` or the daemon, so a message with files arrives a moment after the
-rest. Replies after it in its thread wait for it. A platform that fails is
-tried five times, then the message comes without the file and says so.
+rest. Replies after it in its thread wait for it. A tick fetches up to
+50 MB, and leaves the rest for the next one. A file that fails is tried
+again on five ticks, alone: the files that came are kept. Then the message
+comes without it and says so.
 
 Files added or removed by an edit don't follow it. Deleting a message on the
 board doesn't remove the files it put in a Slack thread.

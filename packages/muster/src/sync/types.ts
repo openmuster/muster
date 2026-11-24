@@ -31,6 +31,9 @@ export type Inbound = {
   fetched?: { attachments: Attachment[]; notes: string[]; tries: number; withheld?: number }
 }
 
+/** How many bytes a file may have, and what to say when it has more. */
+export type Limit = { max: number; over: string }
+
 /** A file on the platform, as an event names it. `id` is the platform's own, when it has one. */
 export type Remote = { url: string; name: string; id?: string; type?: string; size?: number; skip?: string }
 
@@ -73,7 +76,7 @@ export type ProviderExtras = {
   /** Bytes of files this sync may bring in a day, from the operator's config. */
   filesPerDay?: number
   /** Fetches a file an event named, from the platform's own file host only. Throws a Failure: `file_refused` is final. */
-  download?(file: Remote, fetcher: typeof fetch): Promise<{ bytes: Buffer; type?: string }>
+  download?(file: Remote, fetcher: typeof fetch, limit: Limit): Promise<{ bytes: Buffer; type?: string }>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */
   filter?(text: string): string | null
 }

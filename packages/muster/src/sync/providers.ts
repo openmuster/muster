@@ -193,6 +193,7 @@ export type LinearOptions = {
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
 export function linear(options: LinearOptions): Provider {
   const team = (place: string) => options.teams[place]
+  let organization: Promise<string> | undefined
   // A personal API key goes as it is; an OAuth token is a bearer token.
   const authorization = () => {
     const token = options.token!
@@ -201,7 +202,8 @@ export function linear(options: LinearOptions): Provider {
   /** Files uploaded to Linear, as the markdown links its text carries. Links anywhere else are only text. */
   const uploads = (text: unknown): Remote[] | undefined => {
     const found = [...String(text ?? '').matchAll(/!?\[([^\]\n]*)\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g)].map((match) => ({ url: match[2]!, name: match[1] || match[2]!.split('/').pop()! }))
-    return found.length ? found : undefined
+    const once = found.filter((file, index) => found.findIndex((other) => other.url === file.url) === index)
+    return once.length ? once : undefined
   }
   return {
     type: 'linear',
@@ -244,9 +246,22 @@ export function linear(options: LinearOptions): Provider {
       const to = team(place)
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
-    async download(file, fetcher) {
+    async download(file, fetcher, limit) {
       if (!options.token) throw refused('no token to fetch it with')
-      return fetchFile(fetcher, file.url, { hosts: ['uploads.linear.app'], headers: { authorization: authorization() } })
+      // Linear lists no uploads for a comment, so a link is all there is, and anyone who can comment writes it. The
+      // key fetches only what its own workspace holds: the first part of an upload's path is the workspace's ID.
+      organization ??= send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query: '{ organization { id } }' }) }).then((answer) => {
+        const id = answer?.data?.organization?.id
+        if (typeof id !== 'string' || !id) throw new Failure('platform_refused', 'Linear did not say which workspace the key is for.')
+        return id
+      })
+      const workspace = await organization.catch((error) => {
+        organization = undefined
+        throw error
+      })
+      const path = URL.canParse(file.url) ? new URL(file.url).pathname.split('/')[1] : undefined
+      if (path !== workspace) throw refused("not an upload of this board's Linear workspace")
+      return fetchFile(fetcher, file.url, { hosts: ['uploads.linear.app'], headers: { authorization: authorization() }, limit })
     },
     async deliver(message, target, fetcher, read) {
       const post = (query: string, variables: unknown) => send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
@@ -262,10 +277,12 @@ export function linear(options: LinearOptions): Provider {
         try {
           const made = await post('mutation($type: String!, $name: String!, $size: Int!) { fileUpload(contentType: $type, filename: $name, size: $size) { success uploadFile { uploadUrl assetUrl headers { key value } } } }', { type: file.type, name: file.name, size: bytes.length })
           const upload = made?.data?.fileUpload?.uploadFile
-          if (!upload || !String(upload.uploadUrl).startsWith('https://') || !String(upload.assetUrl).startsWith('https://')) throw new Failure('platform_refused', 'Linear gave no upload URL.')
+          // The bytes go only to Linear's storage, with only the storage's own headers from Linear's answer.
+          const to = URL.canParse(String(upload?.uploadUrl)) ? new URL(String(upload.uploadUrl)) : null
+          if (!to || to.protocol !== 'https:' || to.hostname !== 'storage.googleapis.com' || to.port !== '' || to.username !== '' || !String(upload.assetUrl).startsWith('https://uploads.linear.app/')) throw new Failure('platform_refused', 'Linear gave no upload URL.')
           const headers: Record<string, string> = { 'content-type': file.type, 'cache-control': 'public, max-age=31536000' }
-          for (const { key, value } of upload.headers ?? []) headers[String(key)] = String(value)
-          const put = await fetcher(String(upload.uploadUrl), { method: 'PUT', headers, body: new Uint8Array(bytes), redirect: 'manual', signal: AbortSignal.timeout(SEND_MS) })
+          for (const { key, value } of upload.headers ?? []) if (/^(x-goog-[a-z0-9-]+|content-disposition)$/i.test(String(key))) headers[String(key).toLowerCase()] = String(value)
+          const put = await fetcher(to.href, { method: 'PUT', headers, body: new Uint8Array(bytes), redirect: 'manual', signal: AbortSignal.timeout(SEND_MS) })
           if (!put.ok) throw new Failure(`platform_${put.status}`, `Linear's storage answered ${put.status}.`)
           lines.push(`${file.type.startsWith('image/') ? '!' : ''}[${file.name.replace(/[[\]\n]/g, '_')}](${upload.assetUrl})`)
         } catch {
@@ -376,9 +393,9 @@ export function slack(options: SlackOptions): Provider {
       const to = options.channels[place]
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
-    async download(file, fetcher) {
+    async download(file, fetcher, limit) {
       if (!options.token) throw refused('no token to fetch it with')
-      const got = await fetchFile(fetcher, file.url, { hosts: ['files.slack.com'], headers: { authorization: `Bearer ${options.token}` }, ...(file.size !== undefined ? { size: file.size } : {}) })
+      const got = await fetchFile(fetcher, file.url, { hosts: ['files.slack.com'], headers: { authorization: `Bearer ${options.token}` }, limit, ...(file.size !== undefined ? { size: file.size } : {}) })
       // A web page in place of a file that isn't one is likely Slack's sign-in page: the token can't read files.
       if ((got.type ?? '').startsWith('text/html') && !(file.type ?? '').startsWith('text/html')) throw refused('Slack sent a page, not the file: does the app have files:read?')
       if (file.size !== undefined && got.bytes.length !== file.size) throw refused(`Slack sent ${sizeOf(got.bytes.length)}, not the ${sizeOf(file.size)} it named`)

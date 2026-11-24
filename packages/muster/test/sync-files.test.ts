@@ -43,6 +43,7 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     if (url.startsWith('https://storage.googleapis.com/')) return new Response('', { status: 200 })
     if (url === 'https://api.linear.app/graphql') {
       const query = String((body as { query: string }).query)
+      if (query.includes('organization')) return Response.json({ data: { organization: { id: 'org' } } })
       if (query.includes('fileUpload')) return Response.json({ data: { fileUpload: { success: true, uploadFile: { uploadUrl: `https://storage.googleapis.com/linear-uploads/u${made}?X-Goog-Signature=abc`, assetUrl: `https://uploads.linear.app/org/u${made}`, headers: [{ key: 'x-goog-meta-x', value: '1' }] } } } })
       return Response.json({ data: { commentCreate: { success: true, comment: { id: 'lc-board' } } } })
     }
@@ -51,7 +52,7 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
   }) as typeof fetch
   const sync = {
     chat: { ...slack({ secret: SECRET, token: SLACK_TOKEN, bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }), ...(filter ? { filter } : {}), ...(filesPerDay ? { filesPerDay } : {}) },
-    lin: linear({ secret: SECRET, token: LINEAR_TOKEN, teams: { ENG: 'eng' } }),
+    lin: { ...linear({ secret: SECRET, token: LINEAR_TOKEN, teams: { ENG: 'eng' } }), ...(filesPerDay ? { filesPerDay } : {}) },
     gh: github({ secret: SECRET, token: 'ghs_github-credential', bot: 'muster[bot]', repos: { 'acme/web': { issues: 'web/issues', mirror: true } } }),
   }
   const backend = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
@@ -202,7 +203,7 @@ describe('sync: files from Slack', () => {
     await chat({ subtype: 'file_share', user: 'U1', text: 'three', ts: '1.3', files: [other] }, 'Ev3')
     await backend.syncTick()
     const texts = async () => (await team.readChannel({ channel: 'general' })).threads.map((thread) => [thread.message.text, thread.message.attachments.length]).sort()
-    expect(await texts()).toEqual([['one', 1], ['three\n\n[file not imported: other.bin: over the 33 B a day this sync may bring in]', 0], ['two\n\n[file not imported: trace.json: over the 33 B a day this sync may bring in]', 0]])
+    expect(await texts()).toEqual([['one', 1], ['three\n\n[file not imported: other.bin: over the 33 B a day this sync may bring in]', 0], ['two\n\n[file not imported: trace.json: 17 B, over the 33 B a day this sync may bring in]', 0]])
     // The second file named its size and was never fetched; the third was fetched, found too big, and not kept.
     expect(calls.map((call) => call.url.split('/').pop())).toEqual(['trace.json', 'other.bin'])
     expect(kept()).toHaveLength(1)
@@ -220,6 +221,59 @@ describe('sync: files from Slack', () => {
     expect(loadSync(path, { S: 'x' }).chat!.filesPerDay).toBe(50 * MB)
     writeFileSync(path, JSON.stringify({ chat: { type: 'slack', secret: 'env:S', channels: {}, filesPerDayMB: -1 } }))
     expect(() => loadSync(path, { S: 'x' })).toThrow(/filesPerDayMB/)
+  })
+
+  it("deleting a message gives none of the day's allowance back", async () => {
+    const { team, backend, calls, chat } = setup({}, undefined, 2 * TRACE.length - 1)
+    await chat({ subtype: 'file_share', user: 'U1', text: 'one', ts: '1.1', files: [slackFile()] }, 'Ev1')
+    await backend.syncTick()
+    await team.remove({ id: (await team.readChannel({ channel: 'general' })).threads[0]!.message.id })
+    await chat({ subtype: 'file_share', user: 'U1', text: 'two', ts: '1.2', files: [slackFile({ id: 'F2', size: undefined })] }, 'Ev2')
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads[0]!.message).toMatchObject({ text: 'two\n\n[file not imported: trace.json: over the 33 B a day this sync may bring in]', attachments: [] })
+    expect(calls.filter((call) => call.url.startsWith('https://files.slack.com/'))).toHaveLength(2)
+  })
+
+  it('refuses every trick for another host: userinfo, a port, a trailing dot, a look-alike name, a longer name, an IP, plain http', async () => {
+    const { team, backend, calls, chat } = setup()
+    const urls = ['https://user@files.slack.com/a', 'https://files.slack.com:8443/a', 'https://files.slack.com./a', 'https://f\u0456les.slack.com/a', 'https://files.slack.com.evil.com/a', 'https://1.2.3.4/a', 'http://files.slack.com/a']
+    await chat({ subtype: 'file_share', user: 'U1', text: 'tricks', ts: '1.1', files: urls.map((url, index) => slackFile({ id: `F${index}`, name: `f${index}`, url_private: url })) }, 'Ev1')
+    await backend.syncTick()
+    const [thread] = (await team.readChannel({ channel: 'general' })).threads
+    expect(calls).toHaveLength(0)
+    expect(thread!.message.attachments).toEqual([])
+    expect(thread!.message.text.split('\n').filter((line) => line.endsWith('not on files.slack.com]'))).toHaveLength(urls.length)
+  })
+
+  it('a file that failed is tried again alone: the one that came is kept, fetched once and counted once', async () => {
+    let failing = 1
+    const { team, backend, calls, chat } = setup({ 'https://files.slack.com/files-pri/T1-F7/': () => (failing-- > 0 ? new Response('busy', { status: 503 }) : undefined) }, undefined, 3 * TRACE.length)
+    await chat({ subtype: 'file_share', user: 'U1', text: 'two files', ts: '1.1', files: [slackFile(), slackFile({ id: 'F7', name: 'b.json', url_private: 'https://files.slack.com/files-pri/T1-F7/b.json' })] }, 'Ev1')
+    await backend.syncTick()
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads[0]!.message.attachments.map((file) => file.name)).toEqual(['trace.json', 'b.json'])
+    expect(calls.map((call) => call.url.split('/').pop())).toEqual(['trace.json', 'b.json', 'b.json'])
+    // Two files counted, not three: a third fits the allowance.
+    await chat({ subtype: 'file_share', user: 'U1', text: 'third', ts: '1.2', files: [slackFile({ id: 'F8' })] }, 'Ev2')
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads.find((thread) => thread.message.text === 'third')!.message.attachments).toHaveLength(1)
+  })
+
+  it('a tick fetches up to 50 MB; the rest waits for the next tick', async () => {
+    const big = new Uint8Array(25 * MB)
+    const { team, backend, chat } = setup({ 'https://files.slack.com/files-pri/T1-B': () => new Response(big) })
+    for (const n of [1, 2, 3]) await chat({ subtype: 'file_share', user: 'U1', text: `big ${n}`, ts: `1.${n}`, files: [slackFile({ id: `B${n}`, name: `b${n}`, size: 25 * MB, url_private: `https://files.slack.com/files-pri/T1-B${n}/b` })] }, `Ev${n}`)
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads).toHaveLength(2)
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads).toHaveLength(3)
+  })
+
+  it('a filter that changes only the lines about files keeps none of the files', async () => {
+    const { team, backend, chat } = setup({}, (text) => text.replace('core.dump', 'a-dump'))
+    await chat({ subtype: 'file_share', user: 'U1', text: 'x', ts: '1.1', files: [slackFile(), slackFile({ id: 'F2', name: 'core.dump', size: 26 * MB })] }, 'Ev1')
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads[0]!.message).toMatchObject({ text: 'x\n\n[file not imported: a-dump: 26.0 MB, over 25 MB]\n\n[files not imported: the filter changed this message]', attachments: [] })
   })
 
   it('the same message sent again, under a new event ID, fetches nothing', async () => {
@@ -300,7 +354,48 @@ describe('sync: files with Linear', () => {
     await backend.syncTick()
     const [thread] = (await team.readChannel({ channel: 'eng' })).threads
     expect(thread!.message).toMatchObject({ text: `Crash\n\n${issue.data.description}`, attachments: [{ name: 'shot.png', type: 'image/png', size: TRACE.length }] })
-    expect(calls.map((call) => [call.url, call.auth])).toEqual([['https://uploads.linear.app/org/a/b', LINEAR_TOKEN]])
+    expect(calls.filter((call) => !call.url.includes('graphql')).map((call) => [call.url, call.auth])).toEqual([['https://uploads.linear.app/org/a/b', LINEAR_TOKEN]])
+  })
+
+  it("fetches a link once however often a comment repeats it, and never an upload of another workspace", async () => {
+    const { team, backend, calls, lin } = setup()
+    const link = '![a](https://uploads.linear.app/org/x/y)'
+    await lin({ ...issue, data: { ...issue.data, description: `${link} ${link} ${link} ![b](https://uploads.linear.app/other-org/x/y)` } })
+    await backend.syncTick()
+    const [thread] = (await team.readChannel({ channel: 'eng' })).threads
+    expect(thread!.message.attachments).toHaveLength(1)
+    expect(thread!.message.text.split('\n').pop()).toBe("[file not imported: b: not an upload of this board's Linear workspace]")
+    expect(calls.filter((call) => call.url.startsWith('https://uploads.linear.app/')).map((call) => call.url)).toEqual(['https://uploads.linear.app/org/x/y'])
+  })
+
+  it("past the day's allowance a link with no size is not fetched at all", async () => {
+    const { team, backend, calls, lin } = setup({}, undefined, TRACE.length)
+    await lin(issue)
+    await backend.syncTick()
+    await lin({ type: 'Comment', action: 'create', data: { id: 'c-2', issueId: 'iss-1', body: '![more](https://uploads.linear.app/org/c/d)', team: { key: 'ENG' }, userId: 'u2' } })
+    await backend.syncTick()
+    expect(calls.filter((call) => call.url.startsWith('https://uploads.linear.app/'))).toHaveLength(1)
+    const reply = (await team.readThread({ id: (await team.readChannel({ channel: 'eng' })).threads[0]!.message.id })).replies[0]!
+    expect(reply).toMatchObject({ attachments: [], text: expect.stringContaining('[file not imported: more: over the 17 B a day this sync may bring in]') })
+  })
+
+  it('sends no bytes to an upload URL that is not Linear\'s storage, and drops headers that are not the storage\'s own', async () => {
+    let upload = 'https://evil.example/put'
+    const { team, backend, calls, lin } = setup({ 'https://api.linear.app/graphql': (call) => (String((call.body as { query: string }).query).includes('fileUpload') ? Response.json({ data: { fileUpload: { success: true, uploadFile: { uploadUrl: upload, assetUrl: 'https://uploads.linear.app/org/u', headers: [{ key: 'x-goog-meta-a', value: '1' }, { key: 'Authorization', value: 'stolen' }, { key: 'Host', value: 'evil.example' }] } } } }) : undefined) })
+    await lin({ ...issue, data: { ...issue.data, description: 'none' } })
+    await backend.syncTick()
+    const [thread] = (await team.readChannel({ channel: 'eng' })).threads
+    const shot = await team.filePut({ name: 'a.png', type: 'image/png', data: TRACE.toString('base64') })
+    await team.reply({ to: thread!.message.id, text: 'one', attachments: [shot] })
+    await backend.syncTick()
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(0)
+    upload = 'https://storage.googleapis.com/b/u?sig=1'
+    await team.reply({ to: thread!.message.id, text: 'two', attachments: [shot] })
+    await backend.syncTick()
+    const [put] = calls.filter((call) => call.method === 'PUT')
+    expect([put!.headers.get('x-goog-meta-a'), put!.headers.get('authorization'), put!.headers.get('host')]).toEqual(['1', null, null])
+    const bodies = calls.filter((call) => String((call.body as { query?: string }).query).includes('commentCreate')).map((call) => (call.body as { variables: { input: { body: string } } }).variables.input.body)
+    expect(bodies[0]).toBe('one\n\n[file not sent: a.png: Linear did not take it]')
   })
 
   it('a file over 25 MB with no size given is cut off as it is read', async () => {
@@ -354,7 +449,7 @@ describe('sync: files and credentials', () => {
   it('no platform credential is stored anywhere on the board, in events, inbox, links or files', async () => {
     const { team, backend, chat, lin, stored } = setup()
     await chat({ subtype: 'file_share', user: 'U1', text: 'in', ts: '1.1', files: [slackFile()] }, 'Ev1')
-    await lin({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'T', description: '![s](https://uploads.linear.app/o/a)', team: { key: 'ENG' } } })
+    await lin({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'T', description: '![s](https://uploads.linear.app/org/a)', team: { key: 'ENG' } } })
     await backend.syncTick()
     const [thread] = (await team.readChannel({ channel: 'general' })).threads
     const out = await team.filePut({ name: 'out.json', data: TRACE.toString('base64') })

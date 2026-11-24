@@ -172,6 +172,15 @@ create table if not exists sending (
   primary key (key, seq)
 ) without rowid;
 
+-- Bytes of files each sync stored, by UTC day, for its daily allowance. Bookkeeping: not in the log, never
+-- decremented, so deleting a message gives none back.
+create table if not exists sync_files (
+  key text not null,
+  day text not null,
+  bytes integer not null,
+  primary key (key, day)
+) without rowid;
+
 -- Reader bookkeeping. Not a board fact: it is not in the log and a fold doesn't rebuild it.
 create table if not exists cursors (
   name text not null,

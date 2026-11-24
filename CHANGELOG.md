@@ -15,7 +15,8 @@ versions are affected.
   `uploads.linear.app`, over https, with no redirect followed, and the token
   goes nowhere else. The limits are those of `--attach`: 10 files of 25 MB,
   and each sync brings in at most 500 MB of files a day (`filesPerDayMB` in
-  `sync.json`).
+  `sync.json`), counted when stored. A Linear upload is fetched only from
+  the key's own workspace.
   A file that is too big or refused is named in a line at the end of the
   text, never dropped silently. The operator's filter decides before any
   file is fetched: a message it drops or changes keeps none of its files. GitHub has no upload API, so a board file is
