@@ -158,7 +158,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
 | `runner_not_configured` | The runner's settings are missing |
 | `runner_setup_failed` | A step that prepares the sandbox failed; the sandbox was removed |
-| `push_unsupported` | `--push` was asked of a run that can't push: another runner, `--detach`, `--ready`, or an SDK too old |
+| `push_unsupported` | `--push` was asked of a run that can't push: `--runner local`, `--detach`, `--ready`, or an SDK or runner Worker too old |
 | `push_failed` | Pushing the agent's branch from the sandbox failed |
 | `pull_request_failed` | The branch is pushed, and GitHub didn't open the pull request |
 | `github_app_not_installed` | The GitHub App isn't installed on the run's repository |

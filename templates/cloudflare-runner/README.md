@@ -28,6 +28,22 @@ container alive, and removes the container when the agent exits or the run's
 time is up. The tail of the agent's output goes to the Worker's logs
 (`wrangler tail`).
 
+A run started with `attach` (`mu run --push`) is kept after its agent exits,
+for up to 15 minutes, so `mu run` can read what it changed. Each route takes
+the run's ID:
+
+| Route | What it does |
+| --- | --- |
+| `GET /runs/:id` | `running` or `exited`, with the exit code; 404 once it has ended |
+| `POST /runs/:id/close` | Closes every host the run opened. The agent's exit already did this, and stopped what it left running |
+| `POST /runs/:id/exec` | Runs one command in the checkout, after exit and close only, with a time limit and the first 64 KiB of its output |
+| `GET /runs/:id/file?path=&max=` | A regular file no bigger than `max`, after exit and close only |
+| `POST /runs/:id/stop` | Removes the container |
+
+Give a deploy a minute before a `--push` run: for a short while after it,
+Cloudflare can still send a run's requests to the previous version of the
+Worker, which may not have these routes.
+
 ```bash
 npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends: 16 characters or more
 npx wrangler deploy

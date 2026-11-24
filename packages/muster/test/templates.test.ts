@@ -9,6 +9,7 @@ import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
 import { boardHeaders, modelPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
+import { KEEP_MS, capStream, decide, execRequest, exitCode, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
 import { boardPolicy } from '../src/runner/policy.ts'
 import { claude } from '../src/runner/agents.ts'
 
@@ -72,6 +73,60 @@ describe('the cloudflare runner gates', () => {
     expect(repoPasses({ url: 'https://github.com/acme/web.git/../other.git/git-upload-pack', method: 'POST' }, repo)).toBe(false)
     expect(() => repoProps('https://x:tok@github.com/acme/web.git')).toThrow()
     expect(() => repoProps('http://github.com/acme/web.git')).toThrow()
+  })
+})
+
+describe('the cloudflare runner lifecycle', () => {
+  const now = 1_000_000
+  const run = { now, running: true, deadline: now + 60 * 60_000, attach: false }
+
+  it('keeps a container while its agent works, and ends it once the agent exits unless the CLI will read it', () => {
+    expect(decide(run)).toBe('wait')
+    expect(decide({ ...run, exitedAt: now - 1 })).toBe('end')
+    expect(decide({ ...run, attach: true, exitedAt: now - 1 })).toBe('wait')
+    // Kept to be read for a while, not for ever: a CLI that died leaves it for KEEP_MS at most.
+    expect(decide({ ...run, attach: true, exitedAt: now - KEEP_MS })).toBe('end')
+  })
+
+  it('never cuts off a call in progress, but the deadline and a stopped container still end the run', () => {
+    expect(decide({ ...run, attach: true, exitedAt: now - KEEP_MS, busyUntil: now + 1 })).toBe('wait')
+    expect(decide({ ...run, exitedAt: now - 1, busyUntil: now })).toBe('end')
+    expect(decide({ ...run, busyUntil: now + 1, deadline: now })).toBe('end')
+    expect(decide({ ...run, attach: true, exitedAt: now, deadline: now - 1 })).toBe('end')
+    expect(decide({ ...run, running: false })).toBe('end')
+  })
+
+  const stream = (...chunks: number[][]) => new ReadableStream<Uint8Array>({ start(controller) { for (const chunk of chunks) controller.enqueue(new Uint8Array(chunk)); controller.close() } })
+
+  it('reads no more of a stream than its limit, and stops what prints past it once', async () => {
+    let stopped = 0
+    const stop = () => void stopped++
+    expect([...(await readCapped(stream([1, 2], [3]), 3, stop))]).toEqual([1, 2, 3])
+    expect(stopped).toBe(0)
+    // One byte over, across a chunk: what is read is max + 1, so the caller can tell, and the command is stopped.
+    expect([...(await readCapped(stream([1, 2], [3, 4, 5]), 3, stop))]).toEqual([1, 2, 3, 4])
+    expect(stopped).toBe(1)
+    expect([...(await readCapped(null, 3, stop))]).toEqual([])
+  })
+
+  it('passes a file on as a stream, and errors it once it grows past its limit', async () => {
+    const read = async (s: ReadableStream<Uint8Array>) => new Uint8Array(await new Response(s).arrayBuffer())
+    expect([...(await read(capStream(stream([1], [2, 3]), 3)))]).toEqual([1, 2, 3])
+    await expect(read(capStream(stream([1], [2, 3, 4]), 3))).rejects.toThrow()
+  })
+
+  it('runs only a command given as strings', () => {
+    expect(execRequest({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })).toEqual({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })
+    expect(execRequest({ cmd: 'sh', args: [] })).toEqual({ cmd: 'sh', args: [], env: {} })
+    for (const bad of [null, 'sh', {}, { cmd: '', args: [] }, { cmd: 'sh', args: [1] }, { cmd: 'sh', args: 'x' }, { cmd: 'sh', args: [], env: { A: 1 } }, { cmd: 'sh', args: [], env: ['x'] }]) expect(execRequest(bad)).toBeNull()
+  })
+
+  it('reads an exit code only as a number: what else the agent wrote in that file means nothing', () => {
+    expect(exitCode('0\n')).toBe(0)
+    expect(exitCode('137')).toBe(137)
+    expect(exitCode('abc')).toBeNull()
+    expect(exitCode('1\n2')).toBeNull()
+    expect(exitCode('99999')).toBeNull()
   })
 })
 
