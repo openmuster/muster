@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:http'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { agentEnv, board, claude, cloudflare, codex, file, generic, http, listen, mint, runLocal } from '../src/index.ts'
+import { watcherEnv } from '../src/daemon/daemon.ts'
 import { inspect } from '../src/inspect/server.ts'
+import { ownerOnly } from '../src/store/sqlite.ts'
 import { cli, cliStart, reason, tempDir } from './helpers.ts'
 
 /** What others on the machine may do with a file: nothing, when this is 0. */
@@ -56,6 +58,39 @@ describe('a credential never crosses the network in the clear', () => {
     expect(asked.map((call) => call.redirect)).toEqual(['error', 'error', 'error'])
   })
 
+  it("what mu starts is told what its owner said of the network: an agent's and a watcher's own mu commands reach the same board", async () => {
+    const dir = tempDir()
+    await cli(dir, ['tasks', 'create', 'work', 'a'])
+    await cli(dir, ['run', '1', '--cwd', dir, '--', 'sh', '-c', `cat >/dev/null; echo "insecure=$MUSTER_INSECURE_HTTP" > ${dir}/got.txt`], { env: { MUSTER_INSECURE_HTTP: '1' } })
+    expect(readFileSync(join(dir, 'got.txt'), 'utf8')).toBe('insecure=1\n')
+    expect(watcherEnv({}, [], { PATH: '/bin', MUSTER_URL: 'http://board.internal/api/board', MUSTER_INSECURE_HTTP: '1', GITHUB_TOKEN: 'ghp' })).toEqual({ PATH: '/bin', MUSTER_URL: 'http://board.internal/api/board', MUSTER_INSECURE_HTTP: '1' })
+  }, 30_000)
+
+  it('a board served on an address of its own still answers its MCP tool: there the server calls itself over plain http', async () => {
+    const address = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address
+    // A machine with no network but itself has no such address to serve on.
+    if (!address) return
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'board exists'])
+    const serving = cliStart(dir, ['serve', '--port', '0', '--host', address, '--allow-host', address, '--print-token'])
+    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
+    const token = /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]!
+    const response = await fetch(`${url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mu', arguments: { args: ['channels'] } } }) })
+    const { result } = (await response.json()) as { result: { isError: boolean; content: { text: string }[] } }
+    expect([result.isError, result.content[0]!.text]).toEqual([false, expect.stringContaining('general')])
+    serving.child.kill('SIGTERM')
+    await serving.done
+  }, 30_000)
+
+  it("a job's token for mu token exchange never crosses plain http, whatever is set, and isn't told of a setting that wouldn't help", async () => {
+    const dir = tempDir()
+    const plain = await cli(dir, ['token', 'exchange', '-', '--json'], { env: { MUSTER_URL: 'http://board.example/api/board', MUSTER_INSECURE_HTTP: '1' }, input: 'a.b.c' })
+    const error = JSON.parse(plain.stderr).error
+    expect([plain.code, error.reason]).toEqual([2, 'insecure_url'])
+    expect(JSON.stringify(error)).not.toContain('MUSTER_INSECURE_HTTP')
+  }, 30_000)
+
   it('the Cloudflare runner hands its credentials to a Worker over https only, and to no address a redirect names', async () => {
     const asked: { redirect: unknown }[] = []
     const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -74,7 +109,7 @@ describe('a credential never crosses the network in the clear', () => {
 describe('what is kept on disk is the owner\'s alone to read', () => {
   it("an agent's log is kept in a folder and files only its owner can open", async () => {
     const dir = tempDir()
-    const logDir = join(dir, 'runs', '7-1')
+    const logDir = join(dir, 'runs', '7-1700000000007')
     const ran = await runLocal({ agent: generic('sh', ['-c', 'echo out; echo err >&2']), prompt: '', cwd: dir, logDir }).done
     expect(ran.kind).toBe('ok')
     expect([others(logDir), others(ran.stdoutPath), others(ran.stderrPath)]).toEqual([0, 0, 0])
@@ -96,21 +131,35 @@ describe('what is kept on disk is the owner\'s alone to read', () => {
     for (const name of readdirSync(join(dir, 'shared', 'copy.files'))) expect(others(join(dir, 'shared', 'copy.files', name))).toBe(0)
   }, 30_000)
 
+  it("the files SQLite keeps beside a board are made private with it: a board from before this was is mended when opened", () => {
+    const dir = tempDir()
+    const path = join(dir, 'main.db')
+    for (const name of [path, `${path}-wal`, `${path}-shm`]) {
+      writeFileSync(name, '')
+      chmodSync(name, 0o644)
+    }
+    ownerOnly(path)
+    expect([others(path), others(`${path}-wal`), others(`${path}-shm`)]).toEqual([0, 0, 0])
+  })
+
   it("old run logs go when a new run starts: a transcript isn't kept for ever", async () => {
     const dir = tempDir()
     const runs = join(dir, 'runs')
-    const old = join(runs, '3-1')
+    const old = join(runs, '3-1700000000001')
     mkdirSync(old, { recursive: true })
     writeFileSync(join(old, 'stdout.log'), 'a transcript')
     const now = Date.now()
-    await runLocal({ agent: generic('true'), prompt: '', cwd: dir, logDir: join(runs, '4-2'), keepLogsMs: 60_000, now: () => now + 61_000 }).done
+    // Only when asked to, as mu run does: someone calling runLocal names a folder of their own, and what is beside it is theirs.
+    await runLocal({ agent: generic('true'), prompt: '', cwd: dir, logDir: join(runs, '3-1700000000009'), now: () => now + 10 * 365 * 86_400_000 }).done
+    expect(existsSync(old)).toBe(true)
+    await runLocal({ agent: generic('true'), prompt: '', cwd: dir, logDir: join(runs, '4-1700000000002'), keepLogsMs: 60_000, now: () => now + 61_000 }).done
     expect(existsSync(old)).toBe(false)
-    expect(existsSync(join(runs, '4-2', 'stdout.log'))).toBe(true)
+    expect(existsSync(join(runs, '4-1700000000002', 'stdout.log'))).toBe(true)
     // Anything else in the folder is somebody's, and stays.
     mkdirSync(join(runs, 'notes'))
-    await runLocal({ agent: generic('true'), prompt: '', cwd: dir, logDir: join(runs, '5-3'), keepLogsMs: 60_000, now: () => now + 500_000 }).done
+    await runLocal({ agent: generic('true'), prompt: '', cwd: dir, logDir: join(runs, '5-1700000000003'), keepLogsMs: 60_000, now: () => now + 500_000 }).done
     expect(existsSync(join(runs, 'notes'))).toBe(true)
-    expect(existsSync(join(runs, '4-2'))).toBe(false)
+    expect(existsSync(join(runs, '4-1700000000002'))).toBe(false)
   })
 })
 

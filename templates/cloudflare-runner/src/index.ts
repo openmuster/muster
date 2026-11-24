@@ -68,7 +68,7 @@ export class Closed extends WorkerEntrypoint<Env> {
 }
 
 /** What `start` hands back: where the checkout started, so what the agent changed can be told from what was there. */
-type Started = { checkout?: { sha: string; branch: string } }
+type Started = { checkout?: { sha: string; branch: string }; /** Why the run didn't start, for whoever asked: answered, never thrown, so it is in no log. */ failed?: string }
 /** A run as the CLI sees it: `exited` while the container is kept to be read, `running` before. */
 type Status = { state: 'running' | 'exited'; exitCode: number | null }
 
@@ -114,9 +114,10 @@ export class Run extends DurableObject<Env> {
         if (sha && branch) checkout = { sha, branch }
       }
     } catch (error) {
-      // What the command printed goes back to whoever started the run, in the error below: not into the Worker's logs.
+      // What the command printed goes back to whoever started the run, as the answer: thrown, it would be an
+      // exception in the Worker's logs.
       await this.end('setup failed')
-      throw error
+      return { failed: (error as Error).message }
     }
     // The clone is done: the repository's host is closed before anything of it runs.
     if (repo) await container.interceptOutboundHttps(repo.host, this.ctx.exports.Closed)
@@ -288,14 +289,10 @@ export default {
     const url = new URL(request.url)
     if (request.method === 'POST' && url.pathname === '/runs') {
       const id = crypto.randomUUID()
-      try {
-        const started = await env.RUNS.get(env.RUNS.idFromName(id)).start((await request.json()) as Start)
-        return Response.json({ id, ...started })
-      } catch (error) {
-        // Why a run didn't start is for whoever asked, who holds the secret: answered, not thrown, so what a
-        // setup command printed isn't in the Worker's logs as an exception.
-        return new Response(`The run didn't start: ${(error as Error).message}`, { status: 502 })
-      }
+      const started = await env.RUNS.get(env.RUNS.idFromName(id)).start((await request.json()) as Start)
+      // Why a run didn't start is for whoever asked, who holds the secret.
+      if (started.failed !== undefined) return new Response(`The run didn't start: ${started.failed}`, { status: 502 })
+      return Response.json({ id, ...started })
     }
     // A run is named by the ID start gave it, and nothing else reaches one.
     const route = /^\/runs\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/(stop|close|exec|file))?$/.exec(url.pathname)

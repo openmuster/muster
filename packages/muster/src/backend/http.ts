@@ -14,7 +14,8 @@ export type HttpOptions = {
   redirect?: 'follow' | 'error'
   /**
    * Lets a token cross plain http to a host that isn't this machine. Only for a network that is private
-   * some other way, such as a tailnet: anywhere else, whoever is on the path reads the token.
+   * some other way, such as a tailnet: anywhere else, whoever is on the path reads the token. `false`
+   * says it never may, whatever the caller's environment says: a job's own token, on its way to be exchanged.
    */
   insecure?: boolean
 }
@@ -22,15 +23,15 @@ export type HttpOptions = {
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 /** Refuses a board URL a token would cross in the clear: anything but https, or plain http to this machine. */
-export function secureUrl(url: string, what: string, insecure = false): void {
+export function secureUrl(url: string, what: string, insecure?: boolean): void {
   let parsed: URL | null = null
   try {
     parsed = new URL(url)
   } catch {
     // Refused below.
   }
-  if (parsed?.protocol === 'https:' || (parsed?.protocol === 'http:' && (insecure || LOOPBACK.has(parsed.hostname)))) return
-  throw new Failure('insecure_url', `${what} goes over https: ${url} isn't.`, { exit: 2, hint: 'Plain http is only for this machine. On a network that is private some other way, such as a tailnet, set MUSTER_INSECURE_HTTP=1.' })
+  if (parsed?.protocol === 'https:' || (parsed?.protocol === 'http:' && (insecure === true || LOOPBACK.has(parsed.hostname)))) return
+  throw new Failure('insecure_url', `${what} goes over https: ${url} isn't.`, { exit: 2, hint: insecure === false ? 'Plain http is only for this machine.' : 'Plain http is only for this machine. On a network that is private some other way, such as a tailnet, set MUSTER_INSECURE_HTTP=1.' })
 }
 
 /** A board at a URL, answered by a `mu serve`. The token says who you are and what you may do. */

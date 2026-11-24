@@ -67,6 +67,8 @@ export function ownerOnly(path: string) {
   try {
     if (!existsSync(path)) closeSync(openSync(path, 'a', 0o600))
     chmodSync(path, 0o600)
+    // What a board from before this kept beside it, at whatever mode it was made with.
+    for (const beside of [`${path}-wal`, `${path}-shm`]) if (existsSync(beside)) chmodSync(beside, 0o600)
   } catch {
     // Not ours to change (another user's file, a filesystem without modes): opening it says what is wrong, if anything.
   }

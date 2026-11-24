@@ -31,7 +31,7 @@ import { loadSync } from '../sync/config.ts'
 import { inspect } from '../inspect/server.ts'
 import { spawn as spawnProcess } from 'node:child_process'
 import { AGENTS, generic, isSessionId } from '../runner/agents.ts'
-import { runLocal } from '../runner/local.ts'
+import { KEEP_LOGS_MS, runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
@@ -893,7 +893,8 @@ const commands: Record<string, Command> = {
       let self = ''
       const allowJoins = on(parsed.flags, 'allow-joins') || run.io.env.MUSTER_ALLOW_JOINS === '1'
       const mcp = (message: unknown, as: { token: string; profile: string | null }) =>
-        answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
+        // It is this server calling itself, at the address it listens on: nothing crosses a network it doesn't own.
+        answerMcp(message, { MUSTER_URL: self, MUSTER_TOKEN: as.token, MUSTER_INSECURE_HTTP: '1', ...(as.profile ? { MUSTER_PROFILE: as.profile } : {}) }, main)
       // The workloads the owner trusts to sign in with their platform's token. A file that is wrong stops the board here.
       const oidc = loadOidc()
       try {
@@ -1345,7 +1346,8 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const token = claimed.token
   const leaseS = (Date.parse(claimed.task.claim!.until) - Date.now()) / 1000
   const env: Record<string, string> = { MUSTER_TASK: String(task), ...(me.profile ? { MUSTER_PROFILE: me.profile } : {}), ...pairs(list(parsed.flags, 'env'), 'env') }
-  for (const name of ['MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_URL', 'MUSTER_TOKEN', 'MUSTER_CONFIG']) if (run.io.env[name]) env[name] = run.io.env[name]!
+  // With the board's address goes what its owner said of the network it is on, or the agent's own mu would refuse it.
+  for (const name of ['MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_URL', 'MUSTER_TOKEN', 'MUSTER_CONFIG', 'MUSTER_INSECURE_HTTP']) if (run.io.env[name]) env[name] = run.io.env[name]!
   const timeout = str(parsed.flags, 'timeout')
   // An agent that worked this task before picks its own session back up: it remembers what it read and tried.
   const before = (await run.team.readThread({ id: task })).message.labels
@@ -1369,6 +1371,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
     ...(str(parsed.flags, 'model') ? { model: str(parsed.flags, 'model')! } : {}),
     ...(resume ? { resume } : {}),
     logDir: join(configDir(), 'runs', `${task}-${Date.now()}`),
+    keepLogsMs: KEEP_LOGS_MS,
     ...(timeout ? { timeoutMs: duration(timeout, 'timeout') * 1000 } : {}),
     signal: run.io.stop,
   })
@@ -1862,7 +1865,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
       team = board({ backend: http({ url: parsed.positionals[0]!, token: '', ...(insecure ? { insecure } : {}) }), as: null })
     } else if (url && exchanging) {
       // It carries the job's own token, which is for this board and nowhere else: never over plain http, whatever is set.
-      team = board({ backend: http({ url, token: '' }), as: null })
+      team = board({ backend: http({ url, token: '', insecure: false }), as: null })
     } else if (url) {
       const token = io.env.MUSTER_TOKEN
       if (!token) throw new Failure('unauthorized', `The board at ${url} needs a token.`, { hint: 'Set MUSTER_TOKEN to one from mu token create.' })
