@@ -10,8 +10,9 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 > task its own sandbox, and `--push` opens a pull request through a GitHub
 > App. The Cloudflare runner's Worker in `templates/cloudflare-runner` has
 > been deployed and run: the board and a private repository reached only
-> through it, Claude Code doing a task in a repository from start to end, and
-> the container removed when the run ends. Treat both runners as experimental.
+> through it, Claude Code doing a task in a repository from start to end,
+> `--push` opening a pull request, and the container removed when the run
+> ends. Treat both runners as experimental.
 
 ## What a sandbox needs
 
@@ -166,8 +167,15 @@ reply. Nothing changed, no pull request.
 - **The pull request is opened from your machine,** so GitHub's API is never
   reachable from the sandbox.
 - **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
-  whose tasks would share one checkout. Only the Vercel runner pushes, and
-  it needs `git` on this machine.
+  whose tasks would share one checkout. It needs `git` on this machine.
+- **On Cloudflare** the Worker does the closing. When it sees the agent
+  exit, it shuts every host the run opened and kills whatever the agent left
+  running, before anything is read. Only then does it run the bundle step and
+  hand the bundle out, each with a time limit and a size limit. With
+  `--push`, a Cloudflare run is waited on, like a Vercel one, and the
+  container is kept for up to 15 minutes after the agent exits for `mu run`
+  to read; `mu run` removes it as soon as it has. A Cloudflare run without
+  `--push` still returns once it starts.
 - Without `--push`, a GitHub App that is set is used to clone a private
   repository, the same way, and nothing is pushed. A public repository the
   App isn't installed on is cloned without it.

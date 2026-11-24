@@ -25,6 +25,8 @@ export type CloudRequest = {
   /** A GitHub token for the repository: added to its git routes while it is cloned, before anything of it runs, and never after. */
   github?: { token: string }
   timeoutMs?: number
+  /** Stay with the run until its agent exits and keep the sandbox to be read after (`--push`): a runner that returns at once otherwise does so. */
+  attach?: boolean
 }
 
 export type CloudRun = {
@@ -90,8 +92,9 @@ async function stdoutOf(done: Finished | void): Promise<string> {
 }
 
 /** A commit's full ID and a branch's name, as git would never read them as an option. */
-const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
-const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
+export const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+/** A branch a pull request can be opened against: a detached checkout's `HEAD` is not one. */
+export const BRANCH = /^(?!-)(?!HEAD$)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
 
 /** A sandbox as the SDK hands it back. */
 export type VercelMade = {
@@ -400,19 +403,23 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
  * The Worker holds the board's token and adds it to the container's outbound requests; this client
  * only asks the Worker to start and stop runs.
  */
-export function cloudflare(options: { worker: string; secret: string; fetch?: typeof fetch }): CloudRunner {
+export function cloudflare(options: { worker: string; secret: string; fetch?: typeof fetch; pollMs?: number }): CloudRunner {
   const doFetch = options.fetch ?? fetch
-  const call = async (path: string, body: unknown) => {
-    const response = await doFetch(`${options.worker.replace(/\/$/, '')}${path}`, { method: 'POST', headers: { authorization: `Bearer ${options.secret}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const base = options.worker.replace(/\/$/, '')
+  const send = (path: string, init: { method: string; body?: unknown }) =>
+    doFetch(`${base}${path}`, { method: init.method, headers: { authorization: `Bearer ${options.secret}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) })
+  const call = async <T>(path: string, body: unknown): Promise<T> => {
+    const response = await send(path, { method: 'POST', body })
     if (!response.ok) throw new Error(`the runner Worker answered ${response.status}`)
-    return (await response.json()) as { id: string }
+    return (await response.json()) as T
   }
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   return {
     name: 'cloudflare',
     async start(request) {
       const { networkPolicy, env } = boardPolicy(request.board)
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
-      const made = await call('/runs', {
+      const made = await call<{ id: string; checkout?: { sha?: unknown; branch?: unknown } }>('/runs', {
         task: request.task,
         command: [bin, ...args],
         prompt: request.prompt,
@@ -427,8 +434,53 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         // The Worker adds these to requests for the model's host, as it adds the board's token.
         ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, paths: request.agent.model.paths, headers: request.agent.model.headers(request.model.key) } } : {}),
         ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}),
+        ...(request.attach ? { attach: true } : {}),
       })
-      return { id: made.id, stop: async () => void (await call(`/runs/${made.id}/stop`, {})) }
+      const run = `/runs/${encodeURIComponent(made.id)}`
+      const stop = async () => void (await call(`${run}/stop`, {}))
+      if (!request.attach) return { id: made.id, stop }
+      // What the Worker says about the checkout came out of the container: it is checked as anything from there is.
+      const sha = made.checkout?.sha
+      const branch = made.checkout?.branch
+      const checkout = typeof sha === 'string' && typeof branch === 'string' && SHA.test(sha) && BRANCH.test(branch) ? { sha, branch } : undefined
+      return {
+        id: made.id,
+        stop,
+        ...(checkout ? { checkout } : {}),
+        // Asked until the agent has exited. A run that is gone, timed out or stopped, has no exit code to give.
+        async wait() {
+          // A dropped connection or a Worker error is asked again: losing the run to one failed question would lose the agent's work.
+          for (let failed = 0; ; ) {
+            const response = await send(run, { method: 'GET' }).catch(() => null)
+            if (response?.status === 404) return { exitCode: null }
+            if (response && !response.ok && response.status < 500) throw new Error(`the runner Worker answered ${response.status}`)
+            const status = response?.ok ? ((await response.json().catch(() => null)) as { state?: string; exitCode?: unknown } | null) : null
+            if (status?.state === 'exited') return { exitCode: typeof status.exitCode === 'number' ? status.exitCode : null }
+            failed = status ? 0 : failed + 1
+            await pause(Math.min((options.pollMs ?? 5000) * 2 ** failed, 60_000))
+          }
+        },
+        // The Worker closed everything when the agent exited: asking again costs nothing, and anything but closing is not something it does.
+        async setPolicy(rules) {
+          if (rules !== 'deny-all') throw new Failure('push_unsupported', "The Cloudflare runner can close a run's network, not change it.")
+          await call(`${run}/close`, {})
+        },
+        exec: (command) => call<{ exitCode: number | null; stdout: string }>(`${run}/exec`, command),
+        // Read no further than `max` bytes, whatever the Worker sends: null when there is none, or it is bigger.
+        async readFile(path, max) {
+          const response = await send(`${run}/file?${new URLSearchParams({ path, max: String(max) })}`, { method: 'GET' })
+          if (response.status === 404) return null
+          if (!response.ok || !response.body) throw new Error(`the runner Worker answered ${response.status}`)
+          const chunks: Buffer[] = []
+          let size = 0
+          for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+            size += chunk.length
+            if (size > max) return null
+            chunks.push(Buffer.from(chunk))
+          }
+          return Buffer.concat(chunks)
+        },
+      }
     },
   }
 }

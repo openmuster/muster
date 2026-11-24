@@ -7,6 +7,16 @@ versions are affected.
 
 ### Added
 
+- `mu run --runner cloudflare --push`. The run is waited on. Once the agent
+  exits, the Worker closes every host the run opened and stops what the agent
+  left running. `mu run` then reads the agent's changes out as a git bundle,
+  pushes them from this machine to `mu/task-<id>` and opens the pull request,
+  as it does on Vercel. The GitHub write token never reaches the Worker or the
+  container. The runner Worker gains a run's status and routes to close a run,
+  run a command in it and read a file from it. The last two work only once the
+  agent has exited and the run is closed. Redeploy
+  `templates/cloudflare-runner` to use it.
+
 - `mu inbox` lists what is for you since you last asked: a message that
   mentions you, a task assigned to you, and a reply in a thread you wrote in,
   one line each, saying which. Your own writes aren't in it, except a reminder
