@@ -108,8 +108,12 @@ export type DaemonOptions = {
   steady?: { after: number; then: () => void }
 }
 
-/** The longest pause between ticks that keep failing. A board that can't be read is tried again, slowly. */
-export const FAILING_PAUSE = 60_000
+/**
+ * The longest pause between ticks that keep failing. A board that can't be read is tried again, slowly.
+ * Kept under the minute after which a gap between ticks reads as the machine asleep, and under the
+ * shortest grace a schedule has, so a pause never skips a slot or extends a lease.
+ */
+export const FAILING_PAUSE = 30_000
 
 /** What a tick needs to send outgoing webhooks: the hooks, and what each has been through since the daemon started. */
 export type Hooks = { list: ArmedHook[]; states: Map<string, HookState>; deps: HookDeps; notes?: Set<number> }

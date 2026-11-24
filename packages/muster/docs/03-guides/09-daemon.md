@@ -60,7 +60,7 @@ since the guard is in `mu daemon run` itself.
 
 A daemon that starts but can't tick, such as one whose board file can't be
 read, doesn't crash: it logs the error once, then again at 2, 4, 8 failed
-ticks in a row, and waits longer between ticks, up to a minute. It never
+ticks in a row, and waits longer between ticks, up to 30 seconds. It never
 counts as having stayed up.
 
 ## One per board

@@ -515,7 +515,8 @@ describe('a watcher whose command keeps failing', () => {
     const bad = await team.post({ channel: 'work/api', text: 'cannot be delivered' })
     for (let i = 0; i < DELIVERY_ATTEMPTS; i++) await tick()
     expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
-    for (let i = 0; i < 20; i++) await tick()
+    // Nothing to do is not a failure: a quiet board after a give-up logs nothing about it.
+    for (let i = 0; i < 20; i++) expect((await tick()).slowed).toBeUndefined()
     expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
     expect(ran).toHaveLength(DELIVERY_ATTEMPTS)
   })
@@ -578,19 +579,15 @@ describe('the restart guard', () => {
     let steadied = 0
     let ticks = 0
     const log: string[] = []
+    const counted = { ...team, scheduleTick: () => ((ticks += 1), team.scheduleTick()) } as typeof team
     const done = runDaemon({
-      team,
+      team: counted,
       lock: join(tempDir(), 'main.db.tick.lock'),
       watchers: [],
       stop: stop.signal,
       log: (line) => log.push(line),
       interval: 1,
-      deps: {
-        now: () => {
-          ticks += 1
-          return time.now().getTime()
-        },
-      },
+      deps: { now: () => time.now().getTime() },
       steady: { after: STEADY_AFTER, then: () => (steadied += 1) },
     })
     const ticked = async (more: number) => {

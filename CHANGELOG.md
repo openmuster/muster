@@ -126,7 +126,7 @@ rest to anyone who shares a machine, or whose server's output is kept.
   another note, for ever. Its own notes no longer wake it.
 - A daemon whose board couldn't be read logged the same error every second.
   It now logs it once and then at 2, 4, 8 failed ticks in a row, and waits up
-  to a minute between tries.
+  to 30 seconds between tries.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

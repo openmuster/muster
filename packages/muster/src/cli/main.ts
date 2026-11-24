@@ -1045,7 +1045,7 @@ const commands: Record<string, Command> = {
         )
       }
       if (verb === 'status') {
-        // Read before the config, which may be what stopped it and may not load.
+        // A stopped daemon is said first: it is the line that matters most.
         const kept = guard.readGuard(guard.guardPath(name))
         const recent = kept.starts.filter((at) => run.now() - at < guard.RESTART_WINDOW).length
         const { watchers, hooks } = loadDaemonConfig(run.io.env)

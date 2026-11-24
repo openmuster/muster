@@ -119,6 +119,6 @@ export async function runWatcher(team: Board, watcher: Watcher, state: WatchStat
     }
   }
   if (reached > cursor) await me.cursorSet(name, reached)
-  if ((state.failures ?? 0) >= DELIVERY_ATTEMPTS) out.slowed = pause(watcher, state) / 1000
+  if (out.failed.length && (state.failures ?? 0) >= DELIVERY_ATTEMPTS) out.slowed = pause(watcher, state) / 1000
   return out
 }
