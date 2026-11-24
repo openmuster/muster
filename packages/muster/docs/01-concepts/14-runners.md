@@ -76,13 +76,13 @@ See [Running agents](../03-guides/05-running-agents.md) for local runs and
 | Set up once | The agent's CLI, signed in | `@vercel/sandbox` installed; a Vercel token, team and project; a model API key | `templates/cloudflare-runner` deployed to a Workers Paid account, which builds the image with `mu` and the agent's CLI in it; its secret; a model API key |
 | Credentials the agent holds | Yours, as on this machine | None: placeholders, with the board's token and the model's key added by Vercel's network policy on the way out | None: placeholders, with the board's token and the model's key added by your Worker on the way out |
 | What the agent can reach | What this machine can | The board's routes and the model's calls | The board's routes and the model's calls; nothing else resolves |
-| The code it works on | This folder, or `--worktree` for a git worktree per task | `--repo`, cloned into the sandbox, with its dependencies installed from the lockfile | `--repo`, cloned into the container through the Worker; no dependency install |
+| The code it works on | This folder, or `--worktree` for a git worktree per task | `--repo`, cloned into the sandbox, with its dependencies installed from the lockfile | `--repo`, cloned into the container through the Worker, with its dependencies installed from the lockfile while only the npm registry is open to read |
 | Private repository | Your own git access | A GitHub App's read token, used only while cloning | A GitHub App's read token, added by the Worker only while cloning |
-| `mu run` waits for it | Yes | Yes; `--detach` returns at once | With `--push`; otherwise it returns at once and the Worker ends the container when the agent exits |
+| `mu run` waits for it | Yes | Yes; `--detach` returns at once | With `--push`, and for each task of a `--ready --loop` worker; otherwise it returns at once and the Worker ends the container when the agent exits |
 | `--push` (a pull request) | No | Yes | Yes |
-| `--ready --loop` | One agent after another, here | A sandbox per task, started from here | One container that takes task after task, in one checkout, so no `--push` |
-| Registered workflows | Yes | Yes | No |
-| Default `--timeout` | None | 30 minutes | 30 minutes with `--push`; otherwise an hour, set by the Worker |
+| `--ready --loop` | One agent after another, here | A sandbox per task, started from here | A container per task, started from here (covered by tests only, not run live) |
+| Registered workflows | Yes | Yes | Yes (covered by tests only, not run live) |
+| Default `--timeout` | None | 30 minutes | 30 minutes with `--push` or for a worker's task; otherwise an hour, set by the Worker |
 | Agents | Claude Code, Codex, or any command | Claude Code and Codex, which the sandbox image has | Claude Code, which the template's image installs; set `AGENT_PACKAGE` for another |
 
 The cloud runners are experimental. What has been run against the real

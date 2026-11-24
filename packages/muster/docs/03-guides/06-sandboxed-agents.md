@@ -47,7 +47,8 @@ how the task ended. Ctrl-C does the same, sooner. A dropped connection is
 waited out, not taken for an exit. `--detach` starts the run and returns,
 and the sandbox is left to its timeout, holding the agent's token in its
 policy until then. On Cloudflare the command returns once the run starts,
-unless it is a `--push` run, which is waited on in the same way.
+unless it is a `--push` run or a task of a `--ready --loop` worker, which
+are waited on in the same way.
 
 One length of time sets the rest. `--timeout`, 30 minutes when you don't
 pass one, is how long the agent works on the task. The sandbox lives ten
@@ -61,19 +62,26 @@ minutes past the sandbox, and an attached run revokes it as soon as it ends.
 
 ```bash
 mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo https://github.com/acme/web.git --push
+mu run --ready work/ --loop --runner cloudflare --agent claude --as worker-2 --repo https://github.com/acme/web.git --push
 ```
 
-On Vercel, `--ready` with `--loop` is a worker that stays on this machine.
+On either cloud, `--ready` with `--loop` is a worker that stays on this machine.
 It claims the next ready task as `worker-1`, under a claim token made for
 that task, and runs it as above in a sandbox of its own, which takes the same
 claim: no other worker can have it, and each task gets its own clone, its own
 token and, with `--push`, its own pull request. Then the next, until nothing
 is ready for `--wait` (ten minutes by default). Start as many as you want
 running at once; the swarm template starts one per agent. The sandbox holds
-the claim token for its one task.
+the claim token for its one task. On Cloudflare each task's container is
+waited on and stopped once its agent exits, before the next task is claimed,
+so the Worker keeps none of them for its 15 minutes. A task whose run
+doesn't start, or ends without saying how, is given back, ready, and its
+token revoked. A worker stops at once when the runner refuses a start, and
+after three failures in a row otherwise (`runner_start_failed`). The Cloudflare worker
+is covered by tests against a stand-in Worker only; it has not been run live.
 
-Without `--loop`, `--ready` is one sandbox that takes task after task itself,
-as on Cloudflare, sharing one checkout, so it can't `--push`.
+Without `--loop`, `--ready` is one sandbox, or one container, that takes
+task after task itself, sharing one checkout, so it can't `--push`.
 
 `MUSTER_SANDBOX_URL` is the board's address for sandboxes, when this machine
 has the board itself: `mu run` then reads and claims on the board here, and
@@ -123,12 +131,21 @@ The agent needs `mu` and its own CLI where it runs.
   dependencies' own included. `--no-install` skips it. A failed install
   doesn't stop the run: the task gets a `deps` label and a reply that says
   so, and the agent starts without them.
-- **Cloudflare.** A run's container has no internet and installs nothing. `mu`
-  and the agent's CLI are in the image you build: the template's `Dockerfile`
-  installs both. `--repo` is cloned through the Worker, which opens that one
-  repository's clone routes, adds the GitHub App's read token for a private
-  one, and closes GitHub again before the agent starts. Dependencies aren't
-  installed. The Worker checks the run every minute and removes the container
+- **Cloudflare.** A run's container has no internet. `mu` and the agent's
+  CLI are in the image you build: the template's `Dockerfile` installs both.
+  `--repo` is cloned through the Worker, which opens that one repository's
+  clone routes, adds the GitHub App's read token for a private one, and
+  closes GitHub again before anything of the repository runs. Its
+  dependencies are then installed with the same script as on Vercel, for at
+  most three minutes (less when the clone was slow), while the Worker lets the container read the public
+  npm registry (`registry.npmjs.org`, `registry.yarnpkg.com`,
+  `repo.yarnpkg.com`) and nothing else there; those hosts are closed again
+  before the agent starts. The image is built for pnpm, npm and yarn; it has no bun, so
+  a `bun.lock` repository says `failed (exit 127)`. A private registry, a
+  git dependency or a package fetched from anywhere else fails the install.
+  `--no-install`, the `deps` label and the reply work as on Vercel. This is
+  covered by tests of the Worker's gate and of what the CLI sends, not run
+  live. The Worker checks the run every minute and removes the container
   when the agent exits or `--timeout` (an hour without one) has passed. Each
   run gets a `standard-1` container (half a vCPU, 4 GiB); set `INSTANCE` in
   the Worker's `wrangler.jsonc` for another size. Cloudflare's default, `lite`,
@@ -176,7 +193,7 @@ reply. Nothing changed, no pull request.
   `--push`, a Cloudflare run is waited on, like a Vercel one, and the
   container is kept for up to 15 minutes after the agent exits for `mu run`
   to read; `mu run` removes it as soon as it has. A Cloudflare run without
-  `--push` still returns once it starts.
+  `--push` still returns once it starts, unless it is a worker's task.
 - Without `--push`, a GitHub App that is set is used to clone a private
   repository, the same way, and nothing is pushed. A public repository the
   App isn't installed on is cloned without it.
@@ -194,6 +211,12 @@ lockfile can name any registry. Once set up, that policy is replaced by the
 agent's, and the agent starts with only the board and its model's host open.
 Code that ran while setting up could reach the internet, but there was
 nothing to take: the tokens only ever go on requests after that.
+
+A Cloudflare container never has that: while dependencies install, the
+registries are open to read and nothing else is, the board and the model's
+host included. Once the install is done, the registries close, every process
+it left running is killed, and only then do the board and the model's host
+open again, for the agent.
 
 A repository's own configuration still runs at install, scripts or not: a
 `.pnpmfile.cjs`, a yarn plugin, an `.npmrc` pointing at a registry of its
