@@ -58,7 +58,12 @@ user named in `bot`.
   image shows inline.
 
 A personal API key with read and write access fetches and uploads files.
-What an OAuth app's scopes need for files has not been checked. See [Files](./01-overview.md#files) for the limits.
+What an OAuth app's scopes need for files has not been checked.
+
+Linear's docs don't say whether `uploads.linear.app` answers with the file
+or redirects to a storage host. The board follows no redirect, so if Linear
+sends one, the file is named in the text instead of attached. This has not
+been tried against Linear. See [Files](./01-overview.md#files) for the limits.
 
 ## Set it up
 

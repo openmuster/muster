@@ -117,6 +117,10 @@ The rules are the same for each platform:
   that host.
 - **The same limits as `--attach`**: up to 10 files of up to 25 MB each.
   The board stops reading a file as soon as it passes 25 MB.
+- **A day's allowance per sync.** Anyone who can post in a synced place can
+  send files, so each sync brings in at most 500 MB of them a day (UTC).
+  Past that a file is named, not stored. Set `"filesPerDayMB"` on the sync's
+  entry in `sync.json` to change it.
 - **Any content type.** The board keeps the type as data and only ever hands
   a file out as bytes: it never shows one in a page.
 - **Nothing is lost without a word.** A file that is too big, on another

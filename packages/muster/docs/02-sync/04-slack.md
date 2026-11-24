@@ -45,7 +45,9 @@ Messages from the app's own bot, named by `bot`, are not imported back.
 - **In:** a file on a Slack message is fetched from `files.slack.com` with
   the bot token and attached to the message. It needs `files:read`. A web
   page in place of the file is taken to be Slack's sign-in page, and the
-  message says to check that scope. A file
+  message says to check that scope. Slack's docs don't say whether
+  `files.slack.com` redirects; the board follows no redirect, and a file
+  Slack redirects is named instead. Not tried against Slack. A file
   Slack only links to (from Google Drive, say) is named, not fetched.
 - **Out:** each file on a board message is uploaded with
   `files.getUploadURLExternal`, then shared into the Slack thread after the

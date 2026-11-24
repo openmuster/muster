@@ -8,6 +8,20 @@ import { SEND_MS, type Inbound } from './types.ts'
 /** How many ticks a file that failed for a reason that may pass is tried before its message goes without it. */
 export const FETCH_TRIES = 5
 
+/** What files one sync may bring onto the board in a day (UTC), unless its entry in sync.json says otherwise. */
+export const SYNC_FILES_PER_DAY = 500 * 1024 * 1024
+
+/**
+ * Bytes of files a sync brought in today: on the messages it imported, and fetched for events still waiting.
+ * Counted from what the board holds, so a restart doesn't reset it.
+ */
+function broughtToday(ctx: Context, key: string): number {
+  const since = `${ctx.now().toISOString().slice(0, 10)}T00:00:00.000Z`
+  const imported = ctx.db.raw.prepare("select coalesce(sum(json_extract(file.value, '$.size')), 0) as bytes from messages, json_each(messages.attachments) as file where substr(messages.principal, 1, ?) = ? and messages.at >= ?").get(key.length + 1, `${key}:`, since) as { bytes: number }
+  const waiting = ctx.db.raw.prepare("select coalesce(sum(json_extract(file.value, '$.size')), 0) as bytes from inbox, json_each(json_extract(inbox.payload, '$.fetched.attachments')) as file where inbox.key = ? and inbox.done = 0 and inbox.received >= ?").get(key, since) as { bytes: number }
+  return Number(imported.bytes) + Number(waiting.bytes)
+}
+
 /** A file that will not be fetched however often it is tried: the reason is said in the message instead. */
 export const refused = (why: string) => new Failure('file_refused', why)
 
@@ -75,6 +89,7 @@ export async function fetchFile(fetcher: typeof fetch, url: string, options: { h
  */
 export async function fetchFiles(ctx: Context, sync: Sync, fetcher: typeof fetch): Promise<void> {
   const rows = ctx.db.raw.prepare("select key, id, payload from inbox where done = 0 and payload like '%\"files\":%' order by received, id").all() as { key: string; id: string; payload: string }[]
+  const used = new Map<string, number>()
   for (const row of rows) {
     const provider = sync[row.key]
     const event = JSON.parse(row.payload) as Inbound
@@ -112,8 +127,21 @@ export async function fetchFiles(ctx: Context, sync: Sync, fetcher: typeof fetch
           notes.push(noteIn(file.name, 'this platform does not hand out files'))
           continue
         }
+        // Anyone who can post in a synced place can send files: a day's allowance keeps them from filling the disk.
+        const allowance = provider.filesPerDay ?? SYNC_FILES_PER_DAY
+        if (!used.has(row.key)) used.set(row.key, broughtToday(ctx, row.key))
+        const over = noteIn(file.name, `over the ${sizeOf(allowance)} a day this sync may bring in`)
+        if (file.size !== undefined && used.get(row.key)! + file.size > allowance) {
+          notes.push(over)
+          continue
+        }
         try {
           const got = await provider.download(file, fetcher)
+          if (used.get(row.key)! + got.bytes.length > allowance) {
+            notes.push(over)
+            continue
+          }
+          used.set(row.key, used.get(row.key)! + got.bytes.length)
           attachments.push({ id: storeBytes(ctx, got.bytes), name: safeName(file.name), type: safeType(file.type ?? got.type), size: got.bytes.length })
         } catch (error) {
           if (error instanceof Failure && error.reason === 'file_refused') notes.push(noteIn(file.name, error.message))

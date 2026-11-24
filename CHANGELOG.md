@@ -13,7 +13,9 @@ versions are affected.
   Slack and shared into its thread, or uploaded to Linear and linked from the
   comment. Files are fetched only from `files.slack.com` and
   `uploads.linear.app`, over https, with no redirect followed, and the token
-  goes nowhere else. The limits are those of `--attach`: 10 files of 25 MB.
+  goes nowhere else. The limits are those of `--attach`: 10 files of 25 MB,
+  and each sync brings in at most 500 MB of files a day (`filesPerDayMB` in
+  `sync.json`).
   A file that is too big or refused is named in a line at the end of the
   text, never dropped silently. The operator's filter decides before any
   file is fetched: a message it drops or changes keeps none of its files. GitHub has no upload API, so a board file is

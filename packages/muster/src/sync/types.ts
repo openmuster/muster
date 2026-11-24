@@ -70,6 +70,8 @@ export type ProviderExtras = {
   remove?(external: string, place: string, fetcher: typeof fetch): Promise<void>
   /** What happened on the platform since a time, for when webhooks were missed while the board was down. */
   catchUp?(since: string, fetcher: typeof fetch): Promise<Inbound[]>
+  /** Bytes of files this sync may bring in a day, from the operator's config. */
+  filesPerDay?: number
   /** Fetches a file an event named, from the platform's own file host only. Throws a Failure: `file_refused` is final. */
   download?(file: Remote, fetcher: typeof fetch): Promise<{ bytes: Buffer; type?: string }>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */

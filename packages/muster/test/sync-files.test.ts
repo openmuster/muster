@@ -2,7 +2,8 @@ import { createHmac } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { board, file, github, linear, slack } from '../src/index.ts'
+import { writeFileSync } from 'node:fs'
+import { board, file, github, linear, loadSync, slack } from '../src/index.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -15,7 +16,7 @@ const MB = 1024 * 1024
 type Call = { url: string; method: string; auth: string | null; headers: Headers; body: unknown }
 
 /** A board on disk, synced with Slack, Linear and GitHub, whose platforms are a fetcher that answers like them. */
-function setup(answers: Record<string, (call: Call) => Response | undefined> = {}, filter?: (text: string) => string | null) {
+function setup(answers: Record<string, (call: Call) => Response | undefined> = {}, filter?: (text: string) => string | null, filesPerDay?: number) {
   const time = clock()
   const dir = tempDir()
   const calls: Call[] = []
@@ -49,7 +50,7 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     return new Response('a host the board should never reach', { status: 200 })
   }) as typeof fetch
   const sync = {
-    chat: { ...slack({ secret: SECRET, token: SLACK_TOKEN, bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }), ...(filter ? { filter } : {}) },
+    chat: { ...slack({ secret: SECRET, token: SLACK_TOKEN, bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }), ...(filter ? { filter } : {}), ...(filesPerDay ? { filesPerDay } : {}) },
     lin: linear({ secret: SECRET, token: LINEAR_TOKEN, teams: { ENG: 'eng' } }),
     gh: github({ secret: SECRET, token: 'ghs_github-credential', bot: 'muster[bot]', repos: { 'acme/web': { issues: 'web/issues', mirror: true } } }),
   }
@@ -73,7 +74,8 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     }
     return Buffer.concat(parts).toString('latin1')
   }
-  return { team, backend, calls, chat, lin, stored }
+  const kept = () => readdirSync(dir).filter((name) => name.endsWith('.files')).flatMap((name) => readdirSync(join(dir, name)))
+  return { team, backend, calls, chat, lin, stored, time, kept }
 }
 
 const slackFile = (over: Record<string, unknown> = {}) => ({ id: 'F1', name: 'trace.json', mimetype: 'application/json', size: TRACE.length, url_private: 'https://files.slack.com/files-pri/T1-F1/trace.json', ...over })
@@ -189,6 +191,35 @@ describe('sync: files from Slack', () => {
     await chat({ subtype: 'file_share', user: 'U1', text: 'the trace', ts: '1.1', files: [slackFile()] }, 'Ev1')
     await backend.syncTick()
     expect((await team.readChannel({ channel: 'general' })).threads[0]!.message.attachments).toHaveLength(1)
+  })
+
+  it("a sync brings in at most its day's allowance of files: past it a file is named and not stored, and the next day it starts again", async () => {
+    const OTHER = Buffer.from('other bytes, and more')
+    const { team, backend, calls, chat, time, kept } = setup({ 'https://files.slack.com/files-pri/T1-F9/': () => new Response(OTHER) }, undefined, 2 * TRACE.length - 1)
+    const other = slackFile({ id: 'F9', name: 'other.bin', size: undefined, url_private: 'https://files.slack.com/files-pri/T1-F9/other.bin' })
+    await chat({ subtype: 'file_share', user: 'U1', text: 'one', ts: '1.1', files: [slackFile()] }, 'Ev1')
+    await chat({ subtype: 'file_share', user: 'U1', text: 'two', ts: '1.2', files: [slackFile({ id: 'F2' })] }, 'Ev2')
+    await chat({ subtype: 'file_share', user: 'U1', text: 'three', ts: '1.3', files: [other] }, 'Ev3')
+    await backend.syncTick()
+    const texts = async () => (await team.readChannel({ channel: 'general' })).threads.map((thread) => [thread.message.text, thread.message.attachments.length]).sort()
+    expect(await texts()).toEqual([['one', 1], ['three\n\n[file not imported: other.bin: over the 33 B a day this sync may bring in]', 0], ['two\n\n[file not imported: trace.json: over the 33 B a day this sync may bring in]', 0]])
+    // The second file named its size and was never fetched; the third was fetched, found too big, and not kept.
+    expect(calls.map((call) => call.url.split('/').pop())).toEqual(['trace.json', 'other.bin'])
+    expect(kept()).toHaveLength(1)
+    time.advance(86_400_000)
+    await chat({ subtype: 'file_share', user: 'U1', text: 'next day', ts: '1.4', files: [other] }, 'Ev4')
+    await backend.syncTick()
+    expect((await texts()).find(([text]) => text === 'next day')).toEqual(['next day', 1])
+    expect(kept()).toHaveLength(2)
+  })
+
+  it('sync.json sets the allowance in megabytes', () => {
+    const dir = tempDir()
+    const path = join(dir, 'sync.json')
+    writeFileSync(path, JSON.stringify({ chat: { type: 'slack', secret: 'env:S', channels: {}, filesPerDayMB: 50 } }))
+    expect(loadSync(path, { S: 'x' }).chat!.filesPerDay).toBe(50 * MB)
+    writeFileSync(path, JSON.stringify({ chat: { type: 'slack', secret: 'env:S', channels: {}, filesPerDayMB: -1 } }))
+    expect(() => loadSync(path, { S: 'x' })).toThrow(/filesPerDayMB/)
   })
 
   it('the same message sent again, under a new event ID, fetches nothing', async () => {
