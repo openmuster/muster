@@ -221,7 +221,8 @@ export const Sandbox = { async create(options) {
     const sdk = fakeSdk(dir)
     const repo = ['--repo', 'https://github.com/acme/web.git']
     const reasonOf = async (args: string[], env: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
-    expect(await reasonOf(['--runner', 'cloudflare', ...repo])).toBe('push_unsupported')
+    expect(await reasonOf(['--runner', 'cloudflare'])).toBe('invalid_repo')
+    expect(await reasonOf(['--runner', 'cloudflare', ...repo, '--detach'])).toBe('push_unsupported')
     expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', ...repo, '--detach'])).toBe('push_unsupported')
@@ -293,6 +294,71 @@ export const Sandbox = { async create(options) {
     const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env } })
     api.close()
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
+  })
+
+  it('cloudflare: --push waits for the agent, reads its changes out of a container the Worker closed, and pushes them from here', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(work, 'mu.bundle'))
+
+    // GitHub's API and the runner Worker, standing in.
+    const got: any[] = []
+    const seen: { method: string; path: string; body: string }[] = []
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        const path = req.url ?? ''
+        if (path.startsWith('/worker/')) {
+          seen.push({ method: req.method!, path: path.slice('/worker'.length), body })
+          const at = path.slice('/worker'.length)
+          if (at === '/runs') return json(200, { id: '0b0d6b1e-9f43-4c2a-8d43-1b2c3d4e5f60', checkout: { sha: base, branch: 'main' } })
+          if (req.method === 'GET' && at.endsWith('5f60')) return json(200, { state: 'exited', exitCode: 0 })
+          if (at.endsWith('/close')) return json(200, { closed: true })
+          if (at.endsWith('/exec')) return json(200, { exitCode: 0, stdout: 'bundle\n' })
+          if (at.includes('/file?')) return res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(bundle)
+          if (at.endsWith('/stop')) return json(200, {})
+          return json(404, {})
+        }
+        const parsed = body ? JSON.parse(body) : null
+        got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: parsed })
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        json(201, { html_url: 'https://github.com/acme/web/pull/8' })
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const dir = tempDir()
+    const env = { ...board, ...appEnv(), MUSTER_CF_WORKER: `${origin}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789', MUSTER_GITHUB_API: origin, MUSTER_GITHUB_REMOTE: remote }
+    const run = await cli(dir, ['run', '12', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--push', '--json'], { env })
+    server.close()
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/8' })
+    expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:README.md'], { encoding: 'utf8' })).toBe('hello, fixed\n')
+    expect(got.at(-1)).toMatchObject({ url: '/repos/acme/web/pulls', auth: 'Bearer ghs_write', body: expect.objectContaining({ head: 'mu/task-12', base: 'main', body: expect.stringContaining('in a Cloudflare sandbox') }) })
+    // The run is started to be waited on, closed before anything is read from it, read, then stopped.
+    const steps = seen.map((each) => `${each.method} ${each.path.replace(/\?.*$/, '').replace(/\/runs\/[^/]+/, '/runs/:id')}`)
+    expect(steps[0]).toBe('POST /runs')
+    expect(JSON.parse(seen[0]!.body)).toMatchObject({ attach: true, repo: 'https://github.com/acme/web.git' })
+    expect(steps.slice(steps.indexOf('POST /runs/:id/close'))).toEqual(['POST /runs/:id/close', 'POST /runs/:id/exec', 'GET /runs/:id/file', 'POST /runs/:id/stop'])
+    expect(JSON.parse(seen.find((each) => each.path.endsWith('/exec'))!.body).env).toMatchObject({ MU_BASE: base, MU_NAME: 'fixer' })
+    // The Worker had the read token, for the clone; the write token never left this machine.
+    expect(seen[0]!.body).toContain(Buffer.from('x-access-token:ghs_read').toString('base64'))
+    expect(JSON.stringify(seen)).not.toContain('ghs_write')
+    expect(JSON.stringify(seen)).not.toContain(Buffer.from('x-access-token:ghs_write').toString('base64'))
   })
 
   it('vercel: a --ready --loop worker stays here and gives each task a sandbox of its own, under a claim made for it', async () => {

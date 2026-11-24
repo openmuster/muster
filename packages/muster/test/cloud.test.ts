@@ -411,6 +411,52 @@ describe('cloud runners', () => {
     expect(sent[1].repoAuth).toBeUndefined()
   })
 
+  it("cloudflare: a run started to be read is waited on until its agent exits, and gives back only what it should", async () => {
+    const asked: string[] = []
+    let polls = 0
+    const worker = (answers: { start?: unknown; file?: Uint8Array; gone?: boolean } = {}) =>
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname + new URL(String(url)).search
+        asked.push(`${init?.method} ${path}`)
+        if (path === '/runs') return Response.json(answers.start ?? { id: 'r1', checkout: { sha: 'a'.repeat(40), branch: 'main' } })
+        if (init?.method === 'GET' && path === '/runs/r1') return answers.gone ? new Response('', { status: 404 }) : Response.json(polls++ < 2 ? { state: 'running', exitCode: null } : { state: 'exited', exitCode: 3 })
+        if (path.startsWith('/runs/r1/file')) return new Response(Buffer.from(answers.file ?? new Uint8Array([1, 2, 3])))
+        return Response.json({ exitCode: 0, stdout: 'ok' })
+      }) as typeof fetch
+    const run = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker(), pollMs: 1 }).start({ ...request, repo: 'https://github.com/acme/web.git', attach: true })
+    expect(run.checkout).toEqual({ sha: 'a'.repeat(40), branch: 'main' })
+    expect(await run.wait!()).toEqual({ exitCode: 3 })
+    expect(polls).toBe(3)
+    // Only closing is something the Worker does to a run's network.
+    await run.setPolicy!('deny-all')
+    expect(asked).toContain('POST /runs/r1/close')
+    expect(await reason(run.setPolicy!({ 'example.com': [] }))).toBe('push_unsupported')
+    expect(await run.readFile!('/tmp/x', 3)).toEqual(Buffer.from([1, 2, 3]))
+    // What the Worker sends is held to the limit here too.
+    const big = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker({ file: new Uint8Array(10) }) }).start({ ...request, attach: true })
+    expect(await big.readFile!('/tmp/x', 9)).toBeNull()
+    // A run that is gone has no exit code; a checkout that can't be a pull request's base isn't one.
+    const gone = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker({ gone: true, start: { id: 'r1', checkout: { sha: 'a'.repeat(40), branch: 'HEAD' } } }) }).start({ ...request, attach: true })
+    expect(await gone.wait!()).toEqual({ exitCode: null })
+    expect(gone.checkout).toBeUndefined()
+    const odd = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker({ start: { id: 'r1', checkout: { sha: '--upload-pack=x', branch: 'main' } } }) }).start({ ...request, attach: true })
+    expect(odd.checkout).toBeUndefined()
+    // A Worker error or a dropped connection on the way is asked again, not taken as the end of the run.
+    let answers = 0
+    const flaky = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (new URL(String(url)).pathname === '/runs') return Response.json({ id: 'r2' })
+      answers++
+      if (answers === 1) throw new TypeError('fetch failed')
+      if (answers === 2) return new Response('', { status: 503 })
+      return Response.json({ state: 'exited', exitCode: 0 })
+    }) as typeof fetch
+    expect(await (await cloudflare({ worker: 'https://w.example', secret: 's', fetch: flaky, pollMs: 1 }).start({ ...request, attach: true })).wait!()).toEqual({ exitCode: 0 })
+    expect(answers).toBe(3)
+    // A run not started to be read returns at once, as before: nothing to wait on or read.
+    const detached = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker() }).start(request)
+    expect(Object.keys(detached).sort()).toEqual(['id', 'stop'])
+  })
+
   it('both refuse a board the sandbox could not reach before starting anything', async () => {
     const local = { ...request, board: { url: 'http://127.0.0.1:4100/api/board', token: 'T' } }
     let created = false

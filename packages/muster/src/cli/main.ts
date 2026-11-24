@@ -1525,7 +1525,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const gh = repo ? githubRepo(repo) : null
   const push = on(parsed.flags, 'push')
   if (push) {
-    if (where !== 'vercel') throw misuse('push_unsupported', '--push works with the Vercel runner only.')
+    if (where === 'local') throw misuse('push_unsupported', '--push works with a cloud runner: --runner vercel or cloudflare.')
     if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
     if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
     if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
@@ -1565,7 +1565,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
   const limit = str(parsed.flags, 'timeout')
-  const timeout = limit ?? (where === 'vercel' ? DEFAULT_CLOUD_TIMEOUT : undefined)
+  // A run that is waited on has a bound: Vercel's always are, and a Cloudflare one is with --push.
+  const timeout = limit ?? (where === 'vercel' || push ? DEFAULT_CLOUD_TIMEOUT : undefined)
   const seconds = timeout ? duration(timeout, 'timeout') : undefined
   // A --timeout you give is the bound, for a worker too; without one a worker gets time for several tasks.
   const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? WORKER_LIFETIME : seconds + SETTLE
@@ -1623,6 +1624,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     // A Cloudflare container has no internet: mu is in the image you built.
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
     ...(lifetime ? { timeoutMs: lifetime * 1000 } : {}),
+    // --push reads the agent's changes out once it exits, so the run is waited on and its sandbox kept until then.
+    ...(push ? { attach: true } : {}),
   })
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200), ...(started.installed ? { deps: started.installed } : {}) } }).catch(() => {})
   if (started.installed?.startsWith('failed')) {
@@ -1643,7 +1646,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   let pr: string | null = null
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
-    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
+    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', runner: where === 'vercel' ? 'Vercel' : 'Cloudflare', ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -1654,7 +1657,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     return stopCode(run.io.stop)
   }
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
-  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? '\npr       none: nothing changed' : ''}`)
+  print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? `\npr       none: ${exitCode === null ? "the run ended before it could be read" : 'nothing changed'}` : ''}`)
   return exitCode === 0 ? 0 : 1
 }
 
@@ -1665,8 +1668,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
  * agent's, and the pull request opened from here. No sandbox the agent ran in ever holds the token. Null
  * when nothing changed.
  */
-async function pushChanges(run: Run, started: CloudRun, options: { task: number; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; api?: string; remote?: string }): Promise<string | null> {
-  if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'npm i @vercel/sandbox@latest' })
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; runner: string; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; api?: string; remote?: string }): Promise<string | null> {
+  if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' })
   if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
   const thread = await run.team.readThread({ id: options.task }).catch(() => null)
   const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
@@ -1688,7 +1691,7 @@ async function pushChanges(run: Run, started: CloudRun, options: { task: number;
   // Made now, on this machine, for this repository, to write its contents and open the pull request.
   const { token } = await installationToken(options.app, options.repo, { contents: 'write', pull_requests: 'write' }, options.api ? { api: options.api } : {})
   await pushBundle({ repo: options.repo, token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
-  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a Vercel sandbox.`, ...(options.api ? { api: options.api } : {}) })
+  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a ${options.runner} sandbox.`, ...(options.api ? { api: options.api } : {}) })
   await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
   await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
   return url
