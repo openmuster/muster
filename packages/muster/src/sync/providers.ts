@@ -420,9 +420,118 @@ export type SlackOptions = {
   now?: () => number
 }
 
+/**
+ * Requests one catch-up tick makes for what was posted while down, shared by the mapped channels, each getting at
+ * least three. Ticks come a minute apart while a read is cut short: Slack allows an app made for its own
+ * workspace 50 or more of these a minute.
+ */
+const SLACK_REQUESTS = 24
+/** Threads started before the downtime, among the 200 messages before it, whose new replies a tick reads per channel. */
+const SLACK_OLD_THREADS = 2
+/** How far back from its start a catch-up looks for those threads. */
+const SLACK_LOOKBACK_US = 7 * 24 * 3600 * 1_000_000
+/** History is read oldest first, a stretch of time at a time: this long to begin with, longer while quiet. */
+const SLACK_WINDOW_US = 30 * 60 * 1_000_000
+/** The shortest stretch. One busier than a tick can read is gone past, and said to be. */
+const SLACK_MIN_WINDOW_US = 60 * 1_000_000
+/** Pages a stretch longer than the shortest may take before it is read as shorter ones. */
+const SLACK_STRETCH_PAGES = 2
+
+/** A Slack ts, `1700000000.000100`, as whole microseconds, and back. */
+const fromTs = (ts: string) => {
+  const [seconds = '0', fraction = ''] = String(ts).split('.')
+  return Number(seconds) * 1_000_000 + Number(fraction.padEnd(6, '0').slice(0, 6))
+}
+const toTs = (us: number) => `${Math.floor(us / 1_000_000)}.${String(us % 1_000_000).padStart(6, '0')}`
+
+type SlackPage = { messages?: Record<string, any>[]; has_more?: boolean; response_metadata?: { next_cursor?: string } }
+
 /** Slack: messages in mapped channels come in as threads, and board replies go back into the Slack thread. */
 export function slack(options: SlackOptions): Provider {
   const now = options.now ?? (() => Date.now())
+  const isSelf = (message: Record<string, any>) => message.bot_id !== undefined && (options.bot === undefined || message.bot_id === options.bot)
+  /** A Web API read. Slack says no with a 200 and `ok: false`, which is a failure here too, never "nothing new". */
+  const api = async (fetcher: typeof fetch, method: string, query: Record<string, string>): Promise<SlackPage> => {
+    const body = await send(fetcher, `${options.api ?? 'https://slack.com/api'}/${method}?${new URLSearchParams(query)}`, { headers: { authorization: `Bearer ${options.token}` } })
+    if (body.ok !== true) throw new Failure(`slack_${body.error ?? 'error'}`, `Slack refused ${method}: ${body.error ?? 'unknown'}.`)
+    return body as SlackPage
+  }
+  /** A message read back, as the webhook for it would have made it. */
+  const inbound = (channel: string, each: Record<string, any>, thread: string, parent?: Inbound['parent']): Inbound => ({
+    id: `catchup:${channel}:${each.ts}`,
+    author: String(each.user ?? each.bot_id ?? 'unknown'),
+    place: channel,
+    self: isSelf(each),
+    kind: thread === each.ts ? 'root' : 'reply',
+    thread: `${channel}:${thread}`,
+    external: `${channel}:${each.ts}`,
+    text: String(each.text ?? ''),
+    ...(parent ? { parent } : {}),
+  })
+  // Joins, topic changes and replies also sent to the channel: what a webhook ignores, this does too.
+  const isPlain = (each: Record<string, any>) => each.subtype === undefined && (each.thread_ts === undefined || each.thread_ts === each.ts)
+  /** Whether a thread may have had replies after a point. A parent that doesn't say when its last came is read to find out. */
+  const repliedAfter = (each: Record<string, any>, from: number) => Number(each.reply_count) > 0 && (each.latest_reply === undefined || fromTs(each.latest_reply) > from)
+  /** A thread's replies after a point, oldest first, in up to `pages` requests; `done` is false if there were more. */
+  const repliesOf = async (fetcher: typeof fetch, channel: string, parent: Record<string, any>, from: number, pages: number) => {
+    // A reply whose thread the board never saw starts it from the thread's first message.
+    const opener = isSelf(parent) ? undefined : { author: String(parent.user ?? parent.bot_id ?? 'unknown'), text: String(parent.text ?? ''), labels: {} }
+    const out: Inbound[] = []
+    let cursor = ''
+    let used = 0
+    while (used < pages) {
+      const got = await api(fetcher, 'conversations.replies', { channel, ts: parent.ts, oldest: toTs(from), limit: '200', ...(cursor ? { cursor } : {}) })
+      used++
+      for (const reply of got.messages ?? []) {
+        if (reply.ts !== parent.ts && fromTs(reply.ts) > from && reply.subtype === undefined) out.push(inbound(channel, reply, parent.ts, opener))
+      }
+      cursor = got.has_more ? (got.response_metadata?.next_cursor ?? '') : ''
+      if (!cursor) return { events: out, used, done: true }
+    }
+    return { events: out, used, done: false }
+  }
+  /**
+   * What was posted in a stretch of time, and the replies in threads started in it, in up to `pages` history pages
+   * and `budget` requests in all. Not `done` when there was more: what it did read is kept in `events`, newest
+   * history first if it was the history that ran over.
+   */
+  const stretch = async (fetcher: typeof fetch, channel: string, lo: number, hi: number, from: number, pages: number, budget: number) => {
+    const messages: Record<string, any>[] = []
+    let cursor = ''
+    let used = 0
+    let done = true
+    for (;;) {
+      // From lo up to hi, not including it: Slack leaves out both ends, and a ts is a whole microsecond.
+      const got = await api(fetcher, 'conversations.history', { channel, oldest: toTs(lo - 1), latest: toTs(hi), limit: '200', ...(cursor ? { cursor } : {}) })
+      used++
+      messages.push(...(got.messages ?? []))
+      cursor = got.has_more ? (got.response_metadata?.next_cursor ?? '') : ''
+      if (!cursor) break
+      if (used >= Math.min(pages, budget)) {
+        done = false
+        break
+      }
+    }
+    const historyPages = used
+    // Ran over, and not to be kept: read as shorter stretches instead.
+    if (!done && used < budget) return { events: [], used, pages: historyPages, done }
+    messages.sort((a, b) => fromTs(a.ts) - fromTs(b.ts))
+    const events: Inbound[] = []
+    for (const each of messages) {
+      if (!isPlain(each)) continue
+      events.push(inbound(channel, each, each.ts))
+      if (!repliedAfter(each, from)) continue
+      if (used >= budget) {
+        done = false
+        continue
+      }
+      const replies = await repliesOf(fetcher, channel, each, from, budget - used)
+      used += replies.used
+      events.push(...replies.events)
+      if (!replies.done) done = false
+    }
+    return { events, used, pages: historyPages, done }
+  }
   return {
     type: 'slack',
     verify({ headers, body }) {
@@ -475,6 +584,54 @@ export function slack(options: SlackOptions): Provider {
     async remove(external, _place, fetcher) {
       const [channel, ts] = external.split(':')
       await send(fetcher, `${options.api ?? 'https://slack.com/api'}/chat.delete`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts }) })
+    },
+    /**
+     * Each mapped channel's history since a point, oldest first, and the new replies in its threads. A tick that
+     * stops short says where the next goes on from: the channel furthest behind. Each channel moves on at least
+     * the shortest stretch a tick, so a read never stalls: one busier than that is gone past, and said to be.
+     * Replies in threads started before the point are read for a few threads, best effort. A refusal, a rate
+     * limit included, throws: the board asks again from the same point later.
+     */
+    async catchUp(since, fetcher) {
+      if (!options.token) return []
+      const channels = Object.keys(options.channels)
+      const start = Date.parse(since) * 1000
+      const end = now() * 1000
+      const events: Inbound[] = []
+      let resume = end
+      let skipped: number | undefined
+      for (const channel of channels) {
+        const before = await api(fetcher, 'conversations.history', { channel, oldest: toTs(Math.max(0, start - SLACK_LOOKBACK_US)), latest: toTs(start), limit: '200' })
+        for (const parent of (before.messages ?? []).filter((each) => isPlain(each) && repliedAfter(each, start)).slice(0, SLACK_OLD_THREADS)) {
+          events.push(...(await repliesOf(fetcher, channel, parent, start, 1)).events)
+        }
+        let lo = start
+        let width = SLACK_WINDOW_US
+        let budget = Math.max(3, Math.floor(SLACK_REQUESTS / channels.length))
+        let moved = false
+        while (lo < end && budget > 0) {
+          // The last request or two of a tick that hasn't moved this channel on read the shortest stretch, whatever it holds.
+          if (!moved && budget <= 2) width = SLACK_MIN_WINDOW_US
+          const shortest = width <= SLACK_MIN_WINDOW_US
+          const hi = Math.min(lo + width, end)
+          // Two requests are kept back for that, until it has moved on.
+          const read = await stretch(fetcher, channel, lo, hi, start, shortest ? budget : SLACK_STRETCH_PAGES, shortest || moved ? budget : budget - 2)
+          budget -= read.used
+          if (read.done || shortest) {
+            if (!read.done) skipped = Math.min(skipped ?? lo, lo)
+            events.push(...read.events)
+            lo = hi
+            moved = true
+            if (read.done && read.pages === 1) width *= 2
+            continue
+          }
+          width = Math.max(SLACK_MIN_WINDOW_US, Math.floor(width / 4))
+        }
+        resume = Math.min(resume, lo)
+      }
+      if (resume >= end && skipped === undefined) return events
+      const at = (point: number) => new Date(Math.floor(point / 1000)).toISOString()
+      return { events, resume: at(resume), ...(skipped !== undefined ? { skipped: at(skipped) } : {}) }
     },
     mirrors(place) {
       const to = options.channels[place]

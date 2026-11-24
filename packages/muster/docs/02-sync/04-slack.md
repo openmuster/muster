@@ -40,6 +40,35 @@ than five minutes is refused however well it is signed.
 
 Messages from the app's own bot, named by `bot`, are not imported back.
 
+## After downtime
+
+Slack retries an event that wasn't answered three times, within minutes.
+Beyond that, the ticker reads each mapped channel's history, oldest first,
+from five minutes before the last event it received, and the new replies in
+threads started meanwhile: see [After downtime](./01-overview.md#after-downtime)
+for when it starts, waits and goes on. A message or reply posted while the
+board was down arrives once: one the board already has, whether it came in by
+webhook or the board sent it, is not imported again, and the app's own
+messages are skipped, as they are from webhooks. Edits and deletes made
+meanwhile are not read.
+
+- A tick makes up to 24 requests for what was posted while down, shared by the
+  channels, at least three each, 200 messages a request. A longer gap is read
+  over the next ticks, a minute apart.
+- Every tick moves each channel on by at least a minute of its history. A
+  minute busier than that tick can read is gone past, and logged as skipped.
+- New replies in threads started before the downtime are read for up to two
+  threads a channel a tick, among the 200 messages before it. A reply in any
+  other older thread is missed.
+- A refusal, Slack asking to slow down included, is asked again from the same
+  point five minutes later.
+
+Catch-up uses `conversations.history` and `conversations.replies`, which the
+`channels:history` and `groups:history` scopes below already allow. Slack
+gives an app made for your own workspace, as below, 50 or more of each a
+minute; an app installed from outside the Slack Marketplace gets far fewer,
+and with many channels mapped, catch-up then mostly waits.
+
 ## Set it up
 
 The board has to be served at an HTTPS address Slack can reach: see
