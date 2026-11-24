@@ -205,6 +205,6 @@ export async function within<T, F>(promise: Promise<T>, ms: number, fallback: F)
   try {
     return await Promise.race([promise, late])
   } finally {
-    clearTimeout(timer)
+    if (timer !== undefined) clearTimeout(timer)
   }
 }

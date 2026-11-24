@@ -76,6 +76,10 @@ npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends: 16
 npx wrangler deploy
 ```
 
+The Worker's code is typechecked with the rest of the repository (`pnpm
+typecheck`), against `@cloudflare/workers-types`; `src/globals.d.ts` types
+`ctx.exports` as `wrangler types` would.
+
 Whoever holds `RUNNER_SECRET` can start a container that runs a command of
 their choosing, so make it long and random (`openssl rand -base64 32`). Until
 one is set the Worker answers every request with an error and starts nothing.

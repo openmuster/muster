@@ -108,6 +108,15 @@ importers:
         specifier: ^4.1.12
         version: 4.1.12(@types/node@24.19.2)(vite@7.3.8(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.36.0)(yaml@2.9.1))
 
+  templates/cloudflare-runner:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 5.20261110.1
+        version: 5.20261110.1
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   templates/factory:
     dependencies:
       muster:
@@ -489,6 +498,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@cloudflare/workers-types@5.20261110.1':
+    resolution: {integrity: sha512-XOr3TDQ2sNDiP9zoZtdwYVhuLZ3aFY+G+G4iSeNO9p/HDSveZJpyCbUtmpEElaClLBe9hIzfN26qd0i/S7ksPg==}
 
   '@cloudflare/workers-utils@0.55.0':
     resolution: {integrity: sha512-D51hkju35j8pKamLQkD4+L0H830SmX2pwtdnIVX6KX4s+Yz3NlfAh1iWXYmMF770FhLDfYiC6j6ln7zLE8VVcQ==}
@@ -4982,6 +4994,8 @@ snapshots:
 
   '@cloudflare/workerd-windows-64@1.20261118.1':
     optional: true
+
+  '@cloudflare/workers-types@5.20261110.1': {}
 
   '@cloudflare/workers-utils@0.55.0(vitest@4.1.12(@types/node@24.19.2)(vite@7.3.8(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.36.0)(yaml@2.9.1)))':
     dependencies:
