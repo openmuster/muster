@@ -34,13 +34,39 @@ requests. A repository that isn't mapped is ignored.
 | Closed, merged, reopened | The label `state`: `closed`, `merged`, `open` |
 | A review is submitted | The label `review`: `approved`, `changes_requested`, `commented`. Its text, if any, is a reply |
 | A workflow run completes on a pull request | The label `ci.<workflow>`: `success`, `failure`, and so on |
+| A label is on it, put on, or taken off | A label per GitHub label: `tag.bug=bug` |
+| Someone is assigned or unassigned | A label per assignee: `assignee.maya=maya` |
 
 An agent can wait on any of them:
 
 ```bash
 mu wait web/prs --label 'ci.ci=failure' --timeout 1h
 mu read web/prs --label review=changes_requested
+mu wait web/issues --label tag.agent=agent --timeout 1h
 ```
+
+## What it is filed under
+
+A thread carries its issue's or pull request's labels and assignees, and
+keeps to them: under `tag.` and `assignee.` it says what GitHub says now.
+
+- **The key is the name, cut to fit a label key.** Lowercase, with anything
+  but letters, numbers, `.` and `_` turned into `-`: `Needs Review` is
+  `tag.needs-review`. A name with nothing left, such as an emoji alone, makes
+  no label. Two names that make the same key are one label.
+- **The value is the name in lowercase,** so `--label tag.agent=agent`
+  matches a label typed `Agent`.
+- **What you set by hand under `tag.` or `assignee.` goes** the next time
+  GitHub says what the item's labels are. Use another key for your own:
+  `owner=fixer` stays.
+- **At most 40 are kept per thread,** labels before assignees, so there is
+  room left for yours.
+- **Nothing goes back.** A label you set on the board is never put on the
+  issue.
+
+A watcher can listen for one (`"labels": ["tag.agent=agent"]`). Then anyone
+who may label an issue in that repository can set off whatever you wired to
+it, so wire it only for repositories whose labels you trust.
 
 ## What goes back
 
@@ -69,8 +95,9 @@ When the ticker starts, and a token is set, it asks each mapped repository for
 the issues and pull requests updated since the last event it received, then
 their comments. An issue opened while the board was down arrives whole, with
 its title, body and labels, and its comments as replies. A close or merge
-missed meanwhile sets `state`. Up to 100 of each are read per repository.
+missed meanwhile sets `state`, and a label or an assignee put on or taken off
+meanwhile is put on or taken off the thread. Up to 100 of each are read per repository.
 
-A comment or review on an issue the board never saw, such as one opened
+A comment, a review, a label or an assignee on an issue the board never saw, such as one opened
 before sync was set up, starts its thread from the issue itself. Catch-up
 does the same for an older issue updated while the board was down.

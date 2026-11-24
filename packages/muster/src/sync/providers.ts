@@ -8,6 +8,31 @@ const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(
 const bad = () => new Failure('unauthorized', 'bad signature')
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'run'
 
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]+/g
+/** The most labels and assignees a thread is filed under: a message holds 64 labels, and its own come too. */
+const MOST_FILED = 40
+
+/**
+ * A platform's names (its labels, an item's assignees) as board labels under a prefix:
+ * `tag.needs-review=needs review`. The key is the name cut down to what a label key may hold, the prefix
+ * included; the value is the name in lowercase, so a filter written once matches however it was typed
+ * there. A name with nothing a key can hold makes no label. Two names that make one key are one label,
+ * the one that sorts first, so what a thread carries doesn't turn on the order a platform listed them in.
+ */
+function filed(prefix: string, names: unknown[]): [string, string][] {
+  const out = new Map<string, string>()
+  for (const name of names.filter((each): each is string => typeof each === 'string').sort()) {
+    const key = name.toLowerCase().replace(/[^a-z0-9_.]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64 - prefix.length)
+    const value = name.replace(CONTROL, ' ').trim().toLowerCase().slice(0, 256)
+    if (key && value && !out.has(prefix + key)) out.set(prefix + key, value)
+  }
+  return [...out]
+}
+
+/** What an item is filed under, tags before assignees, up to the most a thread takes. */
+const filedUnder = (tags: unknown[], assignees: unknown[]) => Object.fromEntries([...filed('tag.', tags), ...filed('assignee.', assignees)].slice(0, MOST_FILED))
+
 async function send(fetcher: typeof fetch, url: string, init: RequestInit): Promise<any> {
   const response = await fetcher(url, { signal: AbortSignal.timeout(SEND_MS), ...init })
   const body = (await response.json().catch(() => ({}))) as any
@@ -28,6 +53,17 @@ export type GitHubOptions = {
 
 /** GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors. */
 export function github(options: GitHubOptions): Provider {
+  /**
+   * An issue's or a pull request's labels and assignees, as GitHub lists them now. Every event about one
+   * carries both whole, so the thread is made to say the same: `owns` is each list the item came with.
+   */
+  const filing = (item: Record<string, any>) => {
+    const names = (list: unknown, field: string) => (Array.isArray(list) ? list.map((each) => each?.[field]) : [])
+    return {
+      labels: filedUnder(names(item.labels, 'name'), names(item.assignees, 'login')),
+      owns: [...(Array.isArray(item.labels) ? ['tag.'] : []), ...(Array.isArray(item.assignees) ? ['assignee.'] : [])],
+    }
+  }
   /** An issue or pull request as a thread's first message, written by whoever opened it, in the state it is in now. */
   const rootOf = (repo: string, item: Record<string, any>, isPull: boolean, id: string): Inbound => {
     const thread = `${repo}#${item.number}`
@@ -42,7 +78,7 @@ export function github(options: GitHubOptions): Provider {
       thread,
       external: thread,
       text: `${item.title ?? ''}\n\n${item.body ?? ''}`.trim(),
-      labels: { kind: isPull ? 'pr' : 'issue', state: item.state === 'closed' ? (merged ? 'merged' : 'closed') : 'open', ref: thread },
+      labels: { kind: isPull ? 'pr' : 'issue', state: item.state === 'closed' ? (merged ? 'merged' : 'closed') : 'open', ref: thread, ...filing(item).labels },
     }
   }
   const mapping = (place: string) => {
@@ -74,7 +110,7 @@ export function github(options: GitHubOptions): Provider {
       const thread = item ? `${repo}#${item.number}` : ''
       const base = { id: delivery, author, place, self }
       if ((kind === 'issues' || kind === 'pull_request') && payload.action === 'opened') {
-        return [{ ...base, kind: 'root', thread, external: thread, text: `${item.title}\n\n${item.body ?? ''}`.trim(), labels: { kind: isPull ? 'pr' : 'issue', state: 'open', ref: thread } }]
+        return [{ ...base, kind: 'root', thread, external: thread, text: `${item.title}\n\n${item.body ?? ''}`.trim(), labels: { kind: isPull ? 'pr' : 'issue', state: 'open', ref: thread, ...filing(item).labels } }]
       }
       // A comment or review on an issue the board never saw (opened before sync, or while the board was
       // down) carries the issue, so its thread can start from it. A board that has the thread ignores it.
@@ -82,6 +118,11 @@ export function github(options: GitHubOptions): Provider {
         if (!item) return events
         const { author: opener, text, labels } = rootOf(repo, item, isPull, '')
         return events.map((event) => ({ ...event, parent: { author: opener, text: text ?? '', labels: labels ?? {} } }))
+      }
+      // A label or an assignee put on or taken off. The thread is filed as the item is now, and one the board
+      // never saw starts from it.
+      if ((kind === 'issues' || kind === 'pull_request') && ['labeled', 'unlabeled', 'assigned', 'unassigned'].includes(payload.action)) {
+        return withRoot([{ ...base, kind: 'labels', thread, external: delivery, ...filing(item) }])
       }
       if ((kind === 'issues' || kind === 'pull_request') && (payload.action === 'closed' || payload.action === 'reopened')) {
         return [{ ...base, kind: 'labels', thread, external: `${delivery}`, labels: { state: payload.action === 'reopened' ? 'open' : item.merged ? 'merged' : 'closed' } }]
@@ -140,8 +181,10 @@ export function github(options: GitHubOptions): Provider {
           const root = rootOf(repo, item, isPull, `catchup:issue:${repo}#${item.number}`)
           out.push(root)
           parents.set(String(item.number), { author: root.author, text: root.text ?? '', labels: root.labels ?? {} })
-          // Its state now: a close or a merge missed while down. Importing it on a thread that already says so changes nothing.
-          out.push({ ...root, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
+          // Its state now, and what it is filed under: a close, a merge or a label missed while down. Importing it
+          // on a thread that already says so changes nothing.
+          const filedNow = filing(item)
+          out.push({ ...root, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state!, ...filedNow.labels }, owns: filedNow.owns })
         }
         const comments = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
         for (const comment of Array.isArray(comments) ? comments : []) {
@@ -190,6 +233,30 @@ export type LinearOptions = {
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
 export function linear(options: LinearOptions): Provider {
   const team = (place: string) => options.teams[place]
+  /**
+   * What an issue is filed under, as the webhook says it: its labels, its assignee, its priority and its
+   * project. Linear leaves an empty assignee or project out rather than sending `null`, so one that is
+   * missing with no ID either is empty, and one named by its ID alone is left as it was. Its labels are
+   * the whole list when the payload has one, and none when it lists no label IDs.
+   */
+  const filing = (data: Record<string, any>): Required<Pick<Inbound, 'labels' | 'unset' | 'owns'>> => {
+    const labels: Record<string, string> = {}
+    const unset: string[] = []
+    const owns: string[] = []
+    const tags = Array.isArray(data.labels) ? data.labels.map((each: any) => each?.name) : Array.isArray(data.labelIds) && data.labelIds.length === 0 ? [] : null
+    if (tags) owns.push('tag.')
+    // A person's handle is the end of their profile URL; the name they show is the next best.
+    const handle = data.assignee ? (/\/profiles\/([^/?#]+)/.exec(String(data.assignee.url ?? ''))?.[1] ?? data.assignee.displayName ?? data.assignee.name) : null
+    if (data.assignee || !data.assigneeId) owns.push('assignee.')
+    Object.assign(labels, filedUnder(tags ?? [], handle ? [handle] : []))
+    const priority = ['', 'urgent', 'high', 'medium', 'low'][Number(data.priority)]
+    if (priority) labels.priority = priority
+    else if (data.priority === 0) unset.push('priority')
+    const project = typeof data.project?.name === 'string' ? data.project.name.replace(CONTROL, ' ').trim().toLowerCase().slice(0, 256) : ''
+    if (project) labels.project = project
+    else if (!data.project && !data.projectId) unset.push('project')
+    return { labels, unset, owns }
+  }
   return {
     type: 'linear',
     verify({ headers, body }) {
@@ -205,10 +272,11 @@ export function linear(options: LinearOptions): Provider {
       const self = options.bot !== undefined && author === options.bot
       if (payload.type === 'Issue' && payload.action === 'create') {
         const thread = `issue:${data.id}`
-        return [{ id: delivery, author: String(data.creatorId ?? author), place: String(data.team?.key ?? ''), self, kind: 'root', thread, external: thread, text: `${data.title}\n\n${data.description ?? ''}`.trim(), labels: { kind: 'issue', ref: String(data.identifier ?? ''), ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}) } }]
+        return [{ id: delivery, author: String(data.creatorId ?? author), place: String(data.team?.key ?? ''), self, kind: 'root', thread, external: thread, text: `${data.title}\n\n${data.description ?? ''}`.trim(), labels: { kind: 'issue', ref: String(data.identifier ?? ''), ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filing(data).labels } }]
       }
-      if (payload.type === 'Issue' && payload.action === 'update' && data.state?.name) {
-        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, labels: { state: slug(String(data.state.name)) } }]
+      if (payload.type === 'Issue' && payload.action === 'update') {
+        const filed = filing(data)
+        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels } }]
       }
       if (payload.type === 'Comment' && (payload.action === 'update' || payload.action === 'remove')) {
         return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? '') } : {}) }]

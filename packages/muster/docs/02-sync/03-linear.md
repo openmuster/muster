@@ -36,6 +36,25 @@ own comments and issues by the IDs Linear gave them, so they don't come back.
 | A comment | A reply, by `lin:user:<id>` |
 | A comment is edited or removed | The reply is edited or deleted |
 | The issue's state changes | The label `state`, in lowercase with dashes: `in-progress` |
+| A label is on it, added or removed | A label per Linear label: `tag.bug=bug` |
+| It is assigned, reassigned or unassigned | `assignee.<handle>=<handle>`, from the assignee's profile handle or the name they show |
+| Its priority is set or cleared | `priority`: `urgent`, `high`, `medium` or `low`. No priority is no label |
+| It joins, moves or leaves a project | `project`, the project's name in lowercase |
+
+```bash
+mu read eng --label tag.agent=agent
+mu wait eng --label priority=urgent --timeout 1h
+```
+
+Under `tag.` and `assignee.` the thread says what Linear says now, and the
+rules are the ones for [GitHub](./02-github.md#what-it-is-filed-under): the
+key is the name cut to fit, the value is the name in lowercase, what you set
+by hand under those two goes at the issue's next update, at most 40 are kept,
+and nothing goes back. That holds for a thread started on the board too, once
+it has opened its issue.
+
+Not imported: an assignee's email, and a label or assignee change to an issue
+the board has never seen, which waits until the issue next comes in whole.
 
 ## What goes back
 

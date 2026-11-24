@@ -18,6 +18,13 @@ export type Inbound = {
   kind: 'root' | 'reply' | 'labels' | 'edit' | 'delete'
   text?: string
   labels?: Record<string, string>
+  /** Label keys to take off the thread: a property the platform thread no longer has, such as its priority. */
+  unset?: string[]
+  /**
+   * Key prefixes under which the thread says what the platform says (`tag.`, `assignee.`): a key under one
+   * that `labels` doesn't carry is taken off. An event names a prefix only when it carries the whole set.
+   */
+  owns?: string[]
   /** Whether the app itself wrote it: its own echoes are never imported. */
   self?: boolean
   /**

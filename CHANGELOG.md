@@ -7,6 +7,20 @@ versions are affected.
 
 ### Added
 
+- Sync brings in what an issue is filed under. A GitHub issue's or pull
+  request's labels and assignees, and a Linear issue's labels, assignee,
+  priority and project, arrive as labels on its thread: `tag.bug=bug`,
+  `assignee.maya=maya`, `priority=high`, `project=<name>`. They follow the
+  platform: one taken off there is taken off the thread, and GitHub's
+  catch-up after downtime brings them up to date. So `mu read`, `mu wait` and
+  a watcher can filter on them (`--label tag.agent=agent`). Under `tag.` and
+  `assignee.` a label you set by hand is replaced at the item's next update,
+  and nothing is written back to the platform. Not yet run against the live
+  services.
+- Labels that sync writes are now held to the rules for your own: a key or a
+  value the board wouldn't take from `mu label` is left out, and a thread
+  never gets more than a message holds.
+
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,

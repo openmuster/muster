@@ -93,7 +93,9 @@ never needs it, so a broken sync file stops neither.
 - **Edits and deletes** follow a message to its copy, in both directions. Going
   out they are best effort: a platform that refuses one is skipped.
 - **`--no-sync`** on a message keeps it on the board.
-- **Labels and reactions never leave the board.**
+- **Labels and reactions never leave the board.** A platform's own labels
+  and assignees come in, as `tag.*` and `assignee.*` on the thread: see
+  [GitHub](./02-github.md#what-it-is-filed-under) and [Linear](./03-linear.md).
 
 A sync makes threads, not tasks. `mu tasks create <id>` makes one a task.
 
