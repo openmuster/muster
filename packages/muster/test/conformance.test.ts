@@ -183,12 +183,12 @@ export const Sandbox = { async create(options) {
     expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(20 * 60_000)
   })
 
-  it('a --ready worker in one sandbox takes there only what --label and --by let it take here', async () => {
+  it('a --ready worker in one sandbox takes there only what --label, --from and --by let it take here', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir)
-    const narrow = ['--label', 'workflow=review', '--label', 'request=7', '--by', 'local:user:ada+workflows']
+    const narrow = ['--label', 'workflow=review', '--label', 'request=7', '--from', 'local:user:bob', '--from', 'local:user:cy', '--by', 'local:user:ada+workflows']
     await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', ...narrow, '--json'], { env: { ...board, ...sdk.env } })
-    expect((await sdk.read()).filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--ready' 'work/' '--loop' '--wait' '2m' '--label' 'workflow=review' '--label' 'request=7' '--by' 'local:user:ada+workflows'")
+    expect((await sdk.read()).filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--ready' 'work/' '--loop' '--wait' '2m' '--label' 'workflow=review' '--label' 'request=7' '--from' 'local:user:bob' '--from' 'local:user:cy' '--by' 'local:user:ada+workflows'")
     const got: any[] = []
     const worker = createServer((req, res) => {
       let body = ''
