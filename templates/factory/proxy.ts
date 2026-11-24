@@ -1,0 +1,8 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { answersFor } from './lib/host'
+
+/** Every request, before any page or route: one that came for another name is refused. */
+export function proxy(request: NextRequest) {
+  if (answersFor(request.headers.get('host'), process.env.ALLOW_HOSTS)) return NextResponse.next()
+  return new NextResponse('This page answers only for this machine. Name another host in ALLOW_HOSTS, behind something that asks who is there.', { status: 403 })
+}

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,6 +86,8 @@ describe('the swarm template, in a browser', () => {
     writeFileSync(stub, `#!/bin/sh\necho "$@" >> ${spawned}\n`)
     chmodSync(stub, 0o755)
     const { url, team, page, errors } = await start('swarm', { MUSTER_BIN: stub })
+    // The page has no sign-in, so it answers only for this machine: a request that came for another name is refused.
+    expect([await statusAs(url, '/api/live', 'evil.example'), await statusAs(url, '/', 'evil.example'), await statusAs(url, '/api/live', new URL(url).host)]).toEqual([403, 403, 200])
 
     await page.goto(url)
     expect(await page.locator('h1').textContent()).toBe('swarm')
@@ -124,9 +127,21 @@ describe('the swarm template, in a browser', () => {
   }, 180_000)
 })
 
+/** A request under a Host of the caller's choosing, which fetch won't send: what a rebinding page's requests look like here. */
+const statusAs = (url: string, path: string, host: string) =>
+  new Promise<number>((resolve, reject) => {
+    httpRequest(`${url}${path}`, { headers: { host } }, (response) => {
+      response.resume()
+      resolve(response.statusCode ?? 0)
+    })
+      .on('error', reject)
+      .end()
+  })
+
 describe('the factory template, in a browser', () => {
   it('shows what is set up and what is not, lists threads, and a reply from the page is on the board as you', async () => {
     const { url, team, page, errors } = await start('factory')
+    expect([await statusAs(url, '/', 'evil.example'), await statusAs(url, '/', new URL(url).host)]).toEqual([403, 200])
     const issue = await team.as('triage').post({ channel: 'factory/intake', text: 'The login redirect goes to the wrong host\nSeen on staging.' })
     await team.taskCreate({ thread: issue.id })
 
