@@ -15,6 +15,9 @@ async function send(fetcher: typeof fetch, url: string, init: RequestInit): Prom
   return body
 }
 
+/** GitHub catch-up reads at most this many pages of 100 of each list per repo. */
+const GITHUB_CATCHUP_PAGES = 10
+
 export type GitHubOptions = {
   secret: string
   /** A token that may comment. Needed only where a repo mirrors. */
@@ -131,11 +134,28 @@ export function github(options: GitHubOptions): Provider {
       if (!options.token) return []
       const out: Inbound[] = []
       const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
+      const resumes: string[] = []
+      /**
+       * A list oldest change first, up to the page cap. Cut short, the next catch-up starts from the newest change
+       * read, less a millisecond: one made in that same millisecond is read again, not skipped.
+       */
+      const read = async (path: string) => {
+        const out: any[] = []
+        for (let page = 1; page <= GITHUB_CATCHUP_PAGES; page++) {
+          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(since)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
+          if (!Array.isArray(got)) break
+          out.push(...got)
+          if (got.length < 100) return out
+        }
+        const newest = Math.max(...out.map((each) => Date.parse(String(each.updated_at))).filter((time) => !Number.isNaN(time)))
+        if (Number.isFinite(newest)) resumes.push(new Date(newest - 1).toISOString())
+        return out
+      }
       for (const repo of Object.keys(options.repos)) {
         // Issues and pull requests first, so a comment on one opened while the board was down lands in its thread.
-        const items = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues?state=all&sort=updated&direction=asc&since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
+        const items = await read(`${repo}/issues?state=all&`)
         const parents = new Map<string, Inbound['parent']>()
-        for (const item of Array.isArray(items) ? items : []) {
+        for (const item of items) {
           const isPull = item.pull_request !== undefined
           const root = rootOf(repo, item, isPull, `catchup:issue:${repo}#${item.number}`)
           out.push(root)
@@ -144,15 +164,17 @@ export function github(options: GitHubOptions): Provider {
           // The list doesn't say who closed or merged it, so it is put down to the sync, not to whoever opened it.
           out.push({ ...root, author: '', self: false, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state! } })
         }
-        const comments = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
-        for (const comment of Array.isArray(comments) ? comments : []) {
+        const comments = await read(`${repo}/issues/comments?`)
+        for (const comment of comments) {
           const number = String(comment.issue_url ?? '').split('/').pop()
           const isPull = String(comment.html_url ?? '').includes('/pull/')
           const parent = parents.get(number ?? '')
           out.push({ id: `catchup:comment:${comment.id}`, author: String(comment.user?.login ?? 'unknown'), place: `${repo}|${isPull ? 'pulls' : 'issues'}`, self: options.bot !== undefined && comment.user?.login === options.bot, kind: 'reply', thread: `${repo}#${number}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), ...(parent ? { parent } : {}) })
         }
       }
-      return out
+      // Cut short, the next catch-up starts where the list read least far got to; what is read again is known already.
+      resumes.sort()
+      return resumes.length ? { events: out, resume: resumes[0]! } : out
     },
     mirrors(place) {
       const { to } = mapping(place)

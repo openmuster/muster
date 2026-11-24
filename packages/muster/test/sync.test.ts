@@ -567,6 +567,58 @@ describe('sync: GitHub threads the board never saw opened', () => {
     second.close()
   })
 
+  it('more changes than one catch-up reads: the oldest come first, and the next start goes on from there, none twice', async () => {
+    const time = clock()
+    // GitHub, faked as it documents itself: `since` is inclusive, the list sorted as asked, 100 a page.
+    const changedAt = (index: number) => new Date(Date.UTC(2026, 0, 1, 0, 1) + index * 1000).toISOString()
+    const items = Array.from({ length: 1050 }, (_, index) => ({ number: 100 + index, title: `Issue ${100 + index}`, body: '', state: 'open', user: { login: 'maya' }, updated_at: changedAt(index) }))
+    const comments = [{ id: 901, body: 'on the last one', user: { login: 'nico' }, issue_url: 'https://api.github.com/repos/acme/web/issues/1149', html_url: 'https://github.com/acme/web/issues/1149#issuecomment-901', updated_at: changedAt(1049) }]
+    const asked: string[] = []
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      asked.push(url.pathname + url.search)
+      const since = url.searchParams.get('since')!
+      const page = Number(url.searchParams.get('page'))
+      expect([url.searchParams.get('sort'), url.searchParams.get('direction')]).toEqual(['updated', 'asc'])
+      const list = (url.pathname.endsWith('/comments') ? comments : items).filter((each) => each.updated_at >= since)
+      return Response.json(list.slice((page - 1) * 100, page * 100))
+    }) as typeof fetch
+    const dir = tempDir()
+    const sync = { gh: github({ secret: SECRET, token: 't', repos: { 'acme/web': 'web' } }) }
+    /** Every thread in the channel, a page at a time. */
+    const everyThread = async (backend: ReturnType<typeof file>) => {
+      const all: Awaited<ReturnType<ReturnType<typeof board>['readChannel']>>['threads'] = []
+      let before: number | undefined
+      for (;;) {
+        const page = await board({ backend }).readChannel({ channel: 'web', limit: 500, ...(before === undefined ? {} : { before }) })
+        all.push(...page.threads)
+        if (!page.more || page.older === null) return all
+        before = page.older
+      }
+    }
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    const payload = JSON.stringify({ action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    await first.syncReceive('gh', { headers: { 'x-github-event': 'issues', 'x-github-delivery': 'c-1', 'x-hub-signature-256': `sha256=${sign(SECRET, payload)}` }, body: payload })
+    first.close()
+    time.advance(3_600_000)
+    const second = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    await second.syncTick()
+    // Ten pages of issues: the oldest thousand, and the one comment, whose thread starts from its own text for now.
+    expect(await everyThread(second)).toHaveLength(1002)
+    second.close()
+    time.advance(3_600_000)
+    const third = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    const before = asked.length
+    await third.syncTick()
+    expect(asked[before]).toContain(`since=${encodeURIComponent(new Date(Date.parse(changedAt(999)) - 1).toISOString())}`)
+    const threads = await everyThread(third)
+    const refs = threads.map((thread) => thread.message.labels.ref ?? thread.message.text)
+    expect(new Set(refs).size).toBe(refs.length)
+    // #7, and the 1050 changed while down: #1149's thread is the one its comment started.
+    expect(threads).toHaveLength(1051)
+    third.close()
+  })
+
   it('a comment on an issue the board never saw starts its thread from the issue, and later comments only reply', async () => {
     const { team, gh } = setup()
     const old = { number: 3, title: 'Opened before sync was set up', body: 'Old body.', state: 'open', user: { login: 'nico' } }

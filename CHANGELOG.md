@@ -125,6 +125,10 @@ rest to anyone who shares a machine, or whose server's output is kept.
 - GitHub's catch-up put a close or merge it read down to whoever opened the
   issue. It is now put down to the sync (`gh`): GitHub's list doesn't say
   who did it.
+- GitHub's catch-up read at most 100 issues and 100 comments per repository,
+  and what was past that was never read. It now reads up to ten pages of
+  each, oldest change first, and the next start goes on from where it
+  stopped.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
