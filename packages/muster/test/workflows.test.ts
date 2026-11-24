@@ -85,19 +85,22 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...noCwd, runner: 'local' } })).toMatch(/Workflow "release".*"workers.cwd"/)
     expect(bad({ workers: { ...noCwd, cwd: '' } })).toMatch(/Workflow "release".*"workers.cwd"/)
     expect(bad({ workers: { ...noCwd, runner: 'vercel' } })).toBe('loaded')
+    expect(bad({ workers: { ...noCwd, runner: 'cloudflare' } })).toBe('loaded')
   })
 
-  it('says a bad runner needs to be local or vercel', () => {
-    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local" or "vercel"/)
+  it('says a bad runner needs to be local, vercel or cloudflare', () => {
+    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local", "vercel" or "cloudflare"/)
   })
 
-  it('refuses push without a github.com repo and the vercel runner', () => {
+  it('refuses push without a github.com repo and a cloud runner', () => {
     const push = { ...good.workers, push: true }
     expect(bad({ workers: push })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel', repo: 'https://example.com/a/b' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'local', repo: 'https://github.com/a/b' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel', repo: 'https://github.com/a/b' } })).toBe('loaded')
+    expect(bad({ workers: { ...push, runner: 'cloudflare' } })).toMatch(/Workflow "release".*push/)
+    expect(bad({ workers: { ...push, runner: 'cloudflare', repo: 'https://github.com/a/b' } })).toBe('loaded')
   })
 })
 
@@ -269,7 +272,7 @@ describe('the daemon starts a requested workflow', () => {
     const workers = workflow.workers
     return [
       'run', '--ready', run, '--loop', '--wait', '10m',
-      ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
+      ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
       '--agent', workers.agent, '--as', `${workers.as}-${i}`,
       ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
       '--by', `${OWNER}+workflows`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
@@ -334,6 +337,18 @@ describe('the daemon starts a requested workflow', () => {
     expect(same(rec.spawned[1]!.argv, hostile.seq, runs[1]!)).toEqual(same(rec.spawned[0]!.argv, plain.seq, runs[0]!))
     // Filled once, as text: an argument that looks like a placeholder stays as written.
     expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
+  })
+
+  it('starts a cloudflare worker with the runner named and no folder of its own, as a vercel one', async () => {
+    const cloudflare: Workflow = { ...release, workers: { count: 1, agent: 'claude', as: 'w', runner: 'cloudflare', repo: 'https://github.com/a/b', push: true } }
+    const { team, root, rec } = await ready([cloudflare])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '1' } })
+    expect((await runWorkflows(team, [cloudflare], rec.deps)).started).toEqual([seq])
+    expect(rec.spawned[0]!.argv).toEqual([
+      'run', '--ready', `work/app/release-${seq}`, '--loop', '--wait', '10m', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push',
+      '--by', `${OWNER}+workflows`, '--label', 'workflow=release', '--label', `request=${seq}`,
+    ])
+    expect(rec.spawned[0]!.cwd).toBeUndefined()
   })
 
   describe('{thread.text}', () => {

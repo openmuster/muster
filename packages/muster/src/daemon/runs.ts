@@ -8,7 +8,7 @@ import type { Workflow } from './workflows.ts'
 
 /**
  * Starts one worker process, and settles once it has started or couldn't. The daemon passes the real one;
- * tests pass one that only takes notes. A worker with no `cwd` (a Vercel worker) starts where the daemon runs.
+ * tests pass one that only takes notes. A worker with no `cwd` (a Vercel or Cloudflare worker) starts where the daemon runs.
  */
 export type Spawner = (worker: { name: string; argv: string[]; cwd?: string }) => void | Promise<void>
 
@@ -97,7 +97,7 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
   const workers = workflow.workers
   return [
     'run', '--ready', run, '--loop', '--wait', '10m',
-    ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
+    ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
     '--agent', workers.agent, '--as', `${workers.as}-${i}`,
     ...(workers.repo ? ['--repo', workers.repo] : []),
     ...(workers.push ? ['--push'] : []),

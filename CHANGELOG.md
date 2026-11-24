@@ -30,6 +30,17 @@ versions are affected.
   agent has exited and the run is closed. Redeploy
   `templates/cloudflare-runner` to use it.
 
+- `mu run --ready <channel> --loop --runner cloudflare` is a worker on this
+  machine, as on Vercel: it claims each ready task under a claim token made
+  for it and starts a container of its own for that task. It waits for each
+  run and stops it once the agent exits, so the Worker keeps none for its 15
+  minutes. With `--push` each task gets its own pull request. `--ready`
+  without `--loop` is still one container for every task, and can't `--push`.
+  A registered workflow's `workers.runner` can be `cloudflare`, with `push`
+  too; the workers read `MUSTER_CF_WORKER` and `MUSTER_CF_SECRET` from the
+  daemon's environment. Both are covered by tests against a stand-in Worker
+  only, not run live.
+
 - `mu inbox` lists what is for you since you last asked: a message that
   mentions you, a task assigned to you, and a reply in a thread you wrote in,
   one line each, saying which. Your own writes aren't in it, except a reminder

@@ -82,10 +82,10 @@ second workflow, is
 | `count` | 1 to 16 |
 | `agent` | `claude` or `codex` |
 | `as` | The name they act as. The workers are `<as>-1`, `<as>-2` and so on |
-| `runner` | `local` (the default) or `vercel` |
+| `runner` | `local` (the default), `vercel` or `cloudflare` |
 | `cwd` | The folder local workers run in. Required when the runner is `local` |
 | `repo` | The repository each task works on |
-| `push` | Push each task's changes and open a pull request. Needs `runner: "vercel"` and a `repo` on github.com |
+| `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel` or `cloudflare`, and a `repo` on github.com |
 | `timeout` | A limit on each task, as `mu run --timeout` takes it |
 
 The file is checked when it is read. A step that `needs` a key that isn't an
@@ -113,7 +113,7 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   worker's command line.
 - **`{thread.text}` is the asking thread's first message,** quoted into the
   task. Use it rather than telling an agent to `mu read {thread}`: a worker
-  can read only its run's channel (a `vercel` worker's token names that
+  can read only its run's channel (a cloud worker's token names that
   channel alone), so the thread it was asked on is out of its reach.
 - **It is quoted, never pasted.** Anyone may have written that message, a
   synced GitHub issue for one, so it must not read as your instructions. It
@@ -162,7 +162,14 @@ is told apart from anything a person writes.
   key or a cloud token, they hold. For a team, run `mu serve` on a server and
   register the workflows there.
 - **Local workers need a `cwd`.** The daemon never starts them wherever it
-  happened to start. A `vercel` worker needs none: each task gets a sandbox.
+  happened to start. A `vercel` or `cloudflare` worker needs none: each task
+  gets a sandbox or a container.
+- **A cloud worker takes its settings from the daemon's environment,** as
+  `mu run` would: `MUSTER_URL` or `MUSTER_SANDBOX_URL`, and for `vercel` the
+  Vercel token, team and project, for `cloudflare` `MUSTER_CF_WORKER` and
+  `MUSTER_CF_SECRET`, and with `push` the GitHub App's. Set them where the
+  daemon starts. Cloudflare workers are covered by tests only; they have not
+  been run live.
 - **Each request is one run.** Run it twice and the second run is a second
   set of tasks and workers. A `mu workflow run` you retried after a timeout
   may have started one already, so read the thread before you send it again.
