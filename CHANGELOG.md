@@ -151,13 +151,13 @@ rest to anyone who shares a machine, or whose server's output is kept.
   workers started and that the run couldn't be confirmed.
 - A `for` filter of `+<profile>`, an actor ID with nobody before the `+`,
   was taken and matched nothing. It is refused as `invalid_profile`.
+- `mu run --ready <channel> --loop --runner cloudflare` started a new
+  container each time the last one returned, which was at once, so it kept
+  starting them until the board refused to make more tokens. It is now a
+  worker with one container per task.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
-- On Cloudflare, `mu run --ready --loop --push` was refused with a message
-  that asked for the `--loop` it had. It now says why: a Cloudflare worker's
-  tasks share one container and one checkout.
-
 - The Cloudflare runner template now runs. It was written from documentation
   and had never been deployed. On its first deploy:
   - its container stopped as soon as the Worker went idle;
