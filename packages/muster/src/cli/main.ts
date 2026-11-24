@@ -664,10 +664,13 @@ const commands: Record<string, Command> = {
   run: {
     spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
+      // Checked here, on what was typed: a cloud worker passes its flags on to each task it runs by ID.
+      refuseByWithoutReady(parsed)
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
-      // A Vercel worker keeps its own loop here, a sandbox per task.
-      if (str(parsed.flags, 'runner') === 'vercel') return runAgent(run, parsed, () => {}, () => {})
+      // A cloud worker keeps its own loop here, a sandbox (on Cloudflare, a container) per task.
+      const runner = str(parsed.flags, 'runner')
+      if (runner !== undefined && runner !== 'local') return runAgent(run, parsed, () => {}, () => {})
       // A worker: one task after another until the queue has nothing for it.
       let done = 0
       let stopped = ''
@@ -786,7 +789,7 @@ const commands: Record<string, Command> = {
   },
 
   token: {
-    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync'] },
+    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync', 'all'] },
     async run(run, parsed) {
       const verb = parsed.positionals[0]
       const tokens = run.team.backend.tokens
@@ -814,10 +817,14 @@ const commands: Record<string, Command> = {
         print(run, { token: made.token, id: made.record.id, trust: made.trust, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
         return
       }
-      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] [--can <channel>=<permissions>]... [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
-      const me = await run.team.whoami()
+      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
       const can: Record<string, string[]> = {}
       for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
+      // A token held to no channel reaches every one, as its owner does: that is asked for by name, never had by leaving --can out.
+      const all = on(parsed.flags, 'all')
+      if (all && Object.keys(can).length > 0) throw misuse('invalid_token', '--all is a token with your full access, and --can holds one to channels: pass one or the other.')
+      if (!all && Object.keys(can).length === 0) throw misuse('invalid_token', "Name the channels the token reaches with --can <channel>=<permissions>, or pass --all for a token with your full access.", "mu token create --as fixer --can 'work/=read,post,react,label'")
+      const me = await run.team.whoami()
       const ttl = duration(str(parsed.flags, 'ttl') ?? (me.mode === 'file' ? '30d' : '2h'), 'ttl')
       const made = await tokens.create({ profile: me.profile, can, ttl, ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}) })
       print(run, { token: made.token, id: made.record.id, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
@@ -1076,7 +1083,15 @@ function keep(run: Run, me: Holder, task: number, claim: { token: string; until:
   }
 }
 
+/** `--by` narrows which ready task is taken. A task named by its ID is that task, whoever made it, so --by there would be ignored: it is refused. */
+function refuseByWithoutReady(parsed: Parsed) {
+  if (str(parsed.flags, 'by') !== undefined && str(parsed.flags, 'ready') === undefined) {
+    throw misuse('invalid_by', '--by narrows which ready task you take: use it with --ready <channel>.', 'A task named by its ID is that task, whoever made it: leave --by out.')
+  }
+}
+
 async function claimWith(run: Run, parsed: Parsed, target: string | undefined, me: Holder, pid: number | undefined) {
+  refuseByWithoutReady(parsed)
   const ready = str(parsed.flags, 'ready')
   const labels = list(parsed.flags, 'label')
   const from = list(parsed.flags, 'from')
@@ -1468,7 +1483,8 @@ export function repoUrl(value: string): string {
  * itself, through the board at MUSTER_URL, which the sandbox must be able to reach.
  */
 async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
-  if (where === 'vercel' && str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, agent)
+  // --ready --loop is a worker here with a sandbox (on Cloudflare, a container) per task; --ready alone is one sandbox that takes task after task.
+  if (str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, where, agent)
   return cloudTask(run, parsed, where, agent)
 }
 
@@ -1476,13 +1492,17 @@ async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeo
  * A worker that stays here and gives each task a sandbox of its own, as a swarm wants: it claims the
  * next ready task, as the agent, under a claim token made for it, and runs that one task in a new sandbox
  * with the token, so `mu run` there holds the same claim and no other worker can take it. Each task gets
- * its own checkout, so --push makes one pull request per task. It ends when nothing is ready for --wait.
+ * its own checkout, so --push makes one pull request per task. Each run is waited on and ended before the
+ * next task is claimed. It ends when nothing is ready for --wait.
  */
-async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[string]): Promise<number> {
+async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
   const ready = str(parsed.flags, 'ready')!
   const profile = str(parsed.flags, 'as') ?? run.io.env.MUSTER_PROFILE
   if (!profile) throw new Failure('agent_token_missing', 'A worker needs to know who its agents are: pass --as <name>.', { hint: 'Each task gets a token made for that name, held to its channel.' })
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
+  // A runner that can't start, or a --push with nothing to push to, is said once, before any task is claimed for it.
+  repoAndPush(parsed, run.io.env)
+  await cloudRunner(where, run.io.env)
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
   // As a worker here would: --label narrows which ready tasks it takes, and --by to whose.
   const labels = list(parsed.flags, 'label')
@@ -1491,6 +1511,8 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
   let quietSince = Date.now()
   let failed = 0
   let worked = 0
+  // Runs that failed to start, or were lost, in a row: each waits longer, and a few end the worker, as the next would likely fail too.
+  let streak = 0
   while (!run.io.stop.aborted) {
     // One token per task: what the sandbox holds settles that task and no other.
     const claimToken = randomBytes(32).toString('base64url')
@@ -1505,17 +1527,65 @@ async function cloudWorker(run: Run, parsed: Parsed, agent: (typeof AGENTS)[stri
       await sleep(Math.min(5000, idle), run.io.stop)
       continue
     }
-    const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile } }, 'vercel', agent, { claimToken }).catch((error: unknown) => {
-      run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
+    let unstarted: (Error & { worker?: 'retry' | 'stop' }) | undefined
+    const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile } }, where, agent, { claimToken }).catch((error: unknown) => {
+      if (error instanceof Error && 'worker' in error) unstarted = error as Error & { worker: 'retry' | 'stop' }
+      else run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
       return 1
     })
+    quietSince = Date.now()
+    if (unstarted) {
+      // Its claim was given back: the task is ready again for whoever can start it.
+      streak += 1
+      if (unstarted.worker === 'stop' || streak >= START_TRIES) {
+        if (unstarted instanceof Failure) throw unstarted
+        throw new Failure('runner_start_failed', `#${claimed} couldn't be run, so this worker stopped: ${unstarted.message}. Its claim was given back.`, { hint: unstarted.worker === 'stop' ? 'Check the runner\'s settings, such as MUSTER_CF_SECRET, before starting it again.' : 'Try again later.' })
+      }
+      run.io.err(`not done  #${claimed}  ${unstarted.message}; trying again`)
+      await sleep(Math.min(1000 * 2 ** (streak - 1), 30_000), run.io.stop)
+      continue
+    }
+    streak = 0
     worked += 1
     if (code !== 0) failed += 1
-    quietSince = Date.now()
   }
   if (run.io.stop.aborted) return stopCode(run.io.stop)
   if (!run.json) run.io.out(`nothing more is ready: worked ${worked} ${worked === 1 ? 'task' : 'tasks'}${failed ? `, ${failed} of them not cleanly` : ''}`)
   return failed ? 1 : 0
+}
+
+/** The runner a cloud run starts on, from this machine's settings: a misuse or a config error before anything is claimed or started. */
+async function cloudRunner(where: string, env: Run['io']['env']): Promise<CloudRunner> {
+  if (where === 'cloudflare') {
+    if (!env.MUSTER_CF_WORKER || !env.MUSTER_CF_SECRET) throw new Failure('runner_not_configured', 'The Cloudflare runner needs MUSTER_CF_WORKER (your Worker\'s URL) and MUSTER_CF_SECRET.', { hint: 'Deploy templates/cloudflare-runner first.' })
+    return cloudflare({ worker: env.MUSTER_CF_WORKER, secret: env.MUSTER_CF_SECRET })
+  } else if (where === 'vercel') {
+    let sdk: { Sandbox?: unknown }
+    try {
+      sdk = (await import(/* @vite-ignore */ env.MUSTER_VERCEL_SDK ?? '@vercel/sandbox')) as { Sandbox?: unknown }
+    } catch {
+      throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
+    }
+    // GitHub is open only while mu installs; the agent starts with it closed.
+    // A kept base with muster installed is forked for each run, unless MUSTER_VERCEL_BASE=off.
+    return vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env), base: env.MUSTER_VERCEL_BASE !== 'off', bases: fileBases(join(configDir(), 'vercel-bases.json')) })
+  } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
+}
+
+/** The repository a cloud run clones, and with --push what pushing needs: checked before anything is claimed, started or loaded. */
+function repoAndPush(parsed: Parsed, env: Run['io']['env']) {
+  const asked = str(parsed.flags, 'repo')
+  const repo = asked === undefined ? undefined : repoUrl(asked)
+  const gh = repo ? githubRepo(repo) : null
+  const push = on(parsed.flags, 'push')
+  if (push) {
+    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
+    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
+  }
+  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
+  const app = gh ? githubApp(env) : undefined
+  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  return { repo, gh, push, app }
 }
 
 async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string], held: { claimToken?: string } = {}): Promise<number> {
@@ -1532,45 +1602,40 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   if (given !== undefined) agentToken(given)
   else if (!named) throw new Failure('agent_token_missing', 'A cloud run needs to know who the agent is: pass --as <name>, and a token is made for it.', { hint: 'Your own token is never passed on. Or set MUSTER_AGENT_TOKEN to one you made.' })
   // Checked before anything is started or loaded: a bad address should cost nothing.
-  const asked = str(parsed.flags, 'repo')
-  const repo = asked === undefined ? undefined : repoUrl(asked)
-  const gh = repo ? githubRepo(repo) : null
-  const push = on(parsed.flags, 'push')
-  if (push) {
-    if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
-    if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
-    if (str(parsed.flags, 'ready') !== undefined) {
-      throw misuse('push_unsupported', where === 'cloudflare' ? "On Cloudflare a worker's tasks share one container and one checkout, so --ready can't --push." : '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
-    }
+  if (on(parsed.flags, 'push') && str(parsed.flags, 'ready') !== undefined) {
+    throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
   }
-  // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
-  const app = gh ? githubApp(env) : undefined
-  if (push && !app) throw new Failure('runner_not_configured', '--push needs a GitHub App installed on the repository: set GITHUB_APP_ID and GITHUB_APP_KEY_FILE.', { hint: 'The App needs Contents and Pull requests, read and write. Its tokens last an hour and reach one repository.' })
+  const { repo, gh, push, app } = repoAndPush(parsed, env)
   const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
+  // The token made for this run, once it is, and what undoes a start that didn't happen: that token goes, and a
+  // claim a worker made for this task is given back, so the task is ready again and burns no attempt.
+  let made: string | undefined
+  const claimed = held.claimToken ? Number(parsed.positionals[0]) : 0
+  const giveBack = async () => {
+    if (claimed) await run.team.as(named!).taskRelease({ id: claimed, token: held.claimToken }).catch(() => {})
+  }
+  const undo = async () => {
+    if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
+    made = undefined
+    await giveBack()
+  }
+  const starting = <T>(step: Promise<T>): Promise<T> => step.catch(async (error: unknown) => {
+    await undo()
+    throw startFailed(error)
+  })
   // To clone: read only, and only while Vercel clones. A public repository the App isn't on is cloned without one.
   let cloneToken: string | undefined
   if (app && gh) {
     try {
       cloneToken = (await installationToken(app, gh, { contents: 'read' }, githubApi)).token
     } catch (error) {
-      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) throw error
+      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) {
+        await undo()
+        throw startFailed(error)
+      }
     }
   }
-  let runner: CloudRunner
-  if (where === 'cloudflare') {
-    if (!env.MUSTER_CF_WORKER || !env.MUSTER_CF_SECRET) throw new Failure('runner_not_configured', 'The Cloudflare runner needs MUSTER_CF_WORKER (your Worker\'s URL) and MUSTER_CF_SECRET.', { hint: 'Deploy templates/cloudflare-runner first.' })
-    runner = cloudflare({ worker: env.MUSTER_CF_WORKER, secret: env.MUSTER_CF_SECRET })
-  } else if (where === 'vercel') {
-    let sdk: { Sandbox?: unknown }
-    try {
-      sdk = (await import(/* @vite-ignore */ env.MUSTER_VERCEL_SDK ?? '@vercel/sandbox')) as { Sandbox?: unknown }
-    } catch {
-      throw new Failure('runner_not_installed', "The Vercel runner needs @vercel/sandbox, which isn't installed.", { hint: 'npm i @vercel/sandbox' })
-    }
-    // GitHub is open only while mu installs; the agent starts with it closed.
-    // A kept base with muster installed is forked for each run, unless MUSTER_VERCEL_BASE=off.
-    runner = vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env), base: env.MUSTER_VERCEL_BASE !== 'off', bases: fileBases(join(configDir(), 'vercel-bases.json')) })
-  } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
+  const runner = await cloudRunner(where, env)
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
   const task = ready === undefined ? id(parsed.positionals[0], 'a task') : 0
@@ -1578,23 +1643,29 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
   const limit = str(parsed.flags, 'timeout')
-  // A run that is waited on has a bound: Vercel's always are, and a Cloudflare one is with --push.
-  const timeout = limit ?? (where === 'vercel' || push ? DEFAULT_CLOUD_TIMEOUT : undefined)
+  // A Cloudflare run is waited on with --push, and as one of a worker's tasks: the worker starts the next
+  // once it has ended. A Vercel run always is.
+  const waited = push || held.claimToken !== undefined
+  // A run that is waited on has a bound.
+  const timeout = limit ?? (where === 'vercel' || waited ? DEFAULT_CLOUD_TIMEOUT : undefined)
   const seconds = timeout ? duration(timeout, 'timeout') : undefined
   // A --timeout you give is the bound, for a worker too; without one a worker gets time for several tasks.
   const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? WORKER_LIFETIME : seconds + SETTLE
   // A token for this run alone: this agent's name, the task's own channel, gone soon after the run should be,
   // and what it writes stays on the board. It is made by the board, from your token, and can make no others.
   let token = given
-  let made: string | undefined
   if (token === undefined) {
-    const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
-    const minted = await run.team.backend.tokens.create({
-      profile: named!,
-      can: { [channel]: ['read', 'post', 'react', 'label'] },
-      ttl: (lifetime ?? 30 * 60) + 10 * 60,
-      noSync: true,
-    })
+    const minted = await starting(
+      (async () => {
+        const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
+        return run.team.backend.tokens.create({
+          profile: named!,
+          can: { [channel]: ['read', 'post', 'react', 'label'] },
+          ttl: (lifetime ?? 30 * 60) + 10 * 60,
+          noSync: true,
+        })
+      })(),
+    )
     token = minted.token
     made = minted.record.id
   }
@@ -1609,7 +1680,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const chosen = str(parsed.flags, 'agent')
   const inner = [
     'run',
-    ...(ready === undefined ? [String(task)] : ['--ready', ready, '--loop', '--wait', '2m']),
+    // A worker there takes only what --label, --from and --by let one here take.
+    ...(ready === undefined ? [String(task)] : ['--ready', ready, '--loop', '--wait', '2m', ...list(parsed.flags, 'label').flatMap((label) => ['--label', label]), ...list(parsed.flags, 'from').flatMap((owner) => ['--from', owner]), ...(str(parsed.flags, 'by') !== undefined ? ['--by', str(parsed.flags, 'by')!] : [])]),
     ...(profile ? ['--as', profile] : []),
     ...(safe ? [] : ['--bypass-permissions']),
     ...(timeout ? ['--timeout', timeout] : []),
@@ -1619,7 +1691,12 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   ]
   // The agent's small, clean environment must still hold what the sandbox set for it and what its model needs.
   const passed = [...SANDBOX_ENV, ...Object.keys(agent.model?.env('') ?? {})]
-  const started = await runner.start({
+  // Stopped before it started: nothing is started, and the claim goes back.
+  if (run.io.stop.aborted) {
+    await undo()
+    return stopCode(run.io.stop)
+  }
+  const started = await starting(runner.start({
     task,
     agent: { ...agent, command: () => ({ bin: 'mu', args: inner }) },
     prompt: '',
@@ -1638,8 +1715,9 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
     ...(lifetime ? { timeoutMs: lifetime * 1000 } : {}),
     // --push reads the agent's changes out once it exits, so the run is waited on and its sandbox kept until then.
-    ...(push ? { attach: true } : {}),
-  })
+    // A worker's task is waited on too. Either way it is stopped below once it is done, not left to the Worker's keep.
+    ...(waited ? { attach: true } : {}),
+  }))
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200), ...(started.installed ? { deps: started.installed } : {}) } }).catch(() => {})
   if (started.installed?.startsWith('failed')) {
     run.io.err(`warning: the repository's dependencies didn't install (${started.installed}); the agent starts without them`)
@@ -1647,6 +1725,12 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   }
   const what = { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }
   const line = `${task ? `#${task}` : ready}  ${runner.name} ${started.id}`
+  // A worker starts the next task once this one has ended: a run it can't wait on would have it start one per ready task at once.
+  if (claimed && !started.wait) {
+    await started.stop().catch(() => {})
+    await undo()
+    throw Object.assign(new Failure('runner_too_old', "This runner can't be waited on, so a worker can't give each task a sandbox of its own: the run was stopped.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' }), { worker: 'stop' as const })
+  }
   if (on(parsed.flags, 'detach') || !started.wait) {
     print(run, what, () => `started  ${line}`)
     return 0
@@ -1664,6 +1748,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
     if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
+    // Stopped, or ended with no word on how: what ran there didn't settle the task, so a worker's claim goes back.
+    if (run.io.stop.aborted || exitCode === null) await giveBack()
   }
   if (run.io.stop.aborted) {
     run.io.err(`stopped  ${line}  removed`)
@@ -1671,6 +1757,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   }
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
   print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? `\npr       none: ${exitCode === null ? "the run ended before it could be read" : 'nothing changed'}` : ''}`)
+  // A worker's run that ended with no word on how gave its claim back: the worker tries the task again, a few times.
+  if (claimed && exitCode === null) throw Object.assign(new Error('the run ended without saying how: its sandbox may have been removed'), { worker: 'retry' as const })
   return exitCode === 0 ? 0 : 1
 }
 
@@ -1715,16 +1803,33 @@ const DEFAULT_CLOUD_TIMEOUT = '30m'
 const SETTLE = 10 * 60
 /** A --ready worker's sandbox: long enough for several tasks. It is ended as soon as the worker finds none. */
 const WORKER_LIFETIME = 2 * 60 * 60
+/** Starts that may fail in a row before a worker gives up. */
+const START_TRIES = 3
+
+/**
+ * A start that failed, marked for a worker: `retry` when nothing was started (this side failed first, or the
+ * runner answered with a server error), `stop` when the runner refused (a 4xx won't get better) or the outcome
+ * is unknown (a connection lost after the request went out may have started a run).
+ */
+function startFailed(error: unknown): Error {
+  const failure = error instanceof Error ? error : new Error(String(error))
+  const status = (failure as { status?: unknown }).status
+  const retry = failure instanceof Failure || (typeof status === 'number' && status >= 500)
+  return Object.assign(failure, { worker: retry ? ('retry' as const) : ('stop' as const) })
+}
 
 /**
  * Waits for a cloud run to exit. A wait that fails is a dropped connection, not an exit: it is asked
  * again, less often each time, until `deadline`, the sandbox's own timeout. Null when stopped or out of time.
  */
-async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: AbortSignal, deadline: number): Promise<number | null> {
+export async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: AbortSignal, deadline: number): Promise<number | null> {
   let pause = 2000
   while (!stop.aborted && Date.now() < deadline) {
     const stopped = new Promise<null>((resolve) => (stop.aborted ? resolve(null) : stop.addEventListener('abort', () => resolve(null), { once: true })))
-    const outcome = await Promise.race([wait().then((done) => ({ done }), (error: unknown) => ({ error })), stopped])
+    // A wait that never answers (a runner that keeps failing) still ends at the deadline.
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()))))
+    const outcome = await Promise.race([wait().then((done) => ({ done }), (error: unknown) => ({ error })), stopped, late]).finally(() => clearTimeout(timer))
     if (outcome === null) return null
     if ('done' in outcome) return outcome.done.exitCode
     await sleep(Math.min(pause, Math.max(0, deadline - Date.now())), stop)

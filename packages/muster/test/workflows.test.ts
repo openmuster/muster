@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { loadDaemonConfig, tickOnce } from '../src/daemon/daemon.ts'
 import { append } from '../src/store/log.ts'
 import { openDb } from '../src/store/sqlite.ts'
-import { openRuns, runWorkflows, type Spawner } from '../src/daemon/runs.ts'
+import { missingSettings, openRuns, runWorkflows, type Spawner } from '../src/daemon/runs.ts'
 import { loadWorkflows, type Workflow } from '../src/daemon/workflows.ts'
 import { randomBytes } from 'node:crypto'
 import { Failure } from '../src/failure.ts'
@@ -85,19 +85,22 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...noCwd, runner: 'local' } })).toMatch(/Workflow "release".*"workers.cwd"/)
     expect(bad({ workers: { ...noCwd, cwd: '' } })).toMatch(/Workflow "release".*"workers.cwd"/)
     expect(bad({ workers: { ...noCwd, runner: 'vercel' } })).toBe('loaded')
+    expect(bad({ workers: { ...noCwd, runner: 'cloudflare' } })).toBe('loaded')
   })
 
-  it('says a bad runner needs to be local or vercel', () => {
-    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local" or "vercel"/)
+  it('says a bad runner needs to be local, vercel or cloudflare', () => {
+    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local", "vercel" or "cloudflare"/)
   })
 
-  it('refuses push without a github.com repo and the vercel runner', () => {
+  it('refuses push without a github.com repo and a cloud runner', () => {
     const push = { ...good.workers, push: true }
     expect(bad({ workers: push })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel', repo: 'https://example.com/a/b' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'local', repo: 'https://github.com/a/b' } })).toMatch(/Workflow "release".*push/)
     expect(bad({ workers: { ...push, runner: 'vercel', repo: 'https://github.com/a/b' } })).toBe('loaded')
+    expect(bad({ workers: { ...push, runner: 'cloudflare' } })).toMatch(/Workflow "release".*push/)
+    expect(bad({ workers: { ...push, runner: 'cloudflare', repo: 'https://github.com/a/b' } })).toBe('loaded')
   })
 })
 
@@ -195,10 +198,10 @@ describe('mu workflow', () => {
 
   it('token create --as workflows is refused: that profile is the daemon\'s own', async () => {
     const dir = tempDir()
-    const made = await cli(dir, ['token', 'create', '--as', 'workflows', '--json'])
+    const made = await cli(dir, ['token', 'create', '--as', 'workflows', '--all', '--json'])
     expect(made.code).not.toBe(0)
     expect(JSON.parse(made.stderr).error.reason).toBe('invalid_profile')
-    expect((await cli(dir, ['token', 'create', '--as', 'lead', '--json'])).code).toBe(0)
+    expect((await cli(dir, ['token', 'create', '--as', 'lead', '--all', '--json'])).code).toBe(0)
   })
 
   it("list shows this machine's workflows.json; run requests one on a thread and prints it", async () => {
@@ -263,13 +266,15 @@ describe('the daemon starts a requested workflow', () => {
       if (fail?.(calls)) throw Object.assign(new Error('spawn mu ENOENT'), { code: 'ENOENT' })
       spawned.push(worker)
     }
-    return { spawned, deps: { spawn, now, runs: openRuns() } }
+    // A daemon whose environment has what cloud workers need.
+    const env = { MUSTER_URL: 'https://board.example.com/api/board', VERCEL_OIDC_TOKEN: 'oidc', MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's', GITHUB_APP_ID: '1', GITHUB_APP_KEY_FILE: '/k.pem' }
+    return { spawned, deps: { spawn, now, runs: openRuns(), env } }
   }
   const argvFor = (workflow: Workflow, run: string, seq: number, i: number) => {
     const workers = workflow.workers
     return [
       'run', '--ready', run, '--loop', '--wait', '10m',
-      ...(workers.runner === 'vercel' ? ['--runner', 'vercel'] : ['--cwd', workers.cwd!]),
+      ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
       '--agent', workers.agent, '--as', `${workers.as}-${i}`,
       ...(workers.repo ? ['--repo', workers.repo] : []), ...(workers.push ? ['--push'] : []), ...(workers.timeout ? ['--timeout', workers.timeout] : []),
       '--by', `${OWNER}+workflows`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
@@ -334,6 +339,18 @@ describe('the daemon starts a requested workflow', () => {
     expect(same(rec.spawned[1]!.argv, hostile.seq, runs[1]!)).toEqual(same(rec.spawned[0]!.argv, plain.seq, runs[0]!))
     // Filled once, as text: an argument that looks like a placeholder stays as written.
     expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
+  })
+
+  it('starts a cloudflare worker with the runner named and no folder of its own, as a vercel one', async () => {
+    const cloudflare: Workflow = { ...release, workers: { count: 1, agent: 'claude', as: 'w', runner: 'cloudflare', repo: 'https://github.com/a/b', push: true } }
+    const { team, root, rec } = await ready([cloudflare])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '1' } })
+    expect((await runWorkflows(team, [cloudflare], rec.deps)).started).toEqual([seq])
+    expect(rec.spawned[0]!.argv).toEqual([
+      'run', '--ready', `work/app/release-${seq}`, '--loop', '--wait', '10m', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'w-1', '--repo', 'https://github.com/a/b', '--push',
+      '--by', `${OWNER}+workflows`, '--label', 'workflow=release', '--label', `request=${seq}`,
+    ])
+    expect(rec.spawned[0]!.cwd).toBeUndefined()
   })
 
   describe('{thread.text}', () => {
@@ -653,6 +670,24 @@ describe('the daemon starts a requested workflow', () => {
     expect(rec.spawned).toEqual([])
   })
 
+  it('says its workers started when it gives up after starting them: never "couldn\'t start"', async () => {
+    // Writing the run's first message, after the workers started, fails every tick.
+    const { team, rec, root, tick } = await flaky('post', 'bad_answer', () => true)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    for (let i = 1; i < 5; i++) expect((await tick()).started).toEqual([])
+    expect(await tick()).toEqual({ started: [], refused: [seq], why: `release ${seq}: gave up after 5 tries: The board said bad_answer.` })
+    expect(rec.spawned.map((worker) => worker.name)).toEqual(['worker-1', 'worker-2'])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["started 2 workers for release; couldn't confirm the run: The board said bad_answer. (gave up after 5 tries)"])
+  })
+
+  it('says its workers started when the board refuses what comes after them', async () => {
+    const { team, rec, root, tick } = await flaky('post', 'text_too_long', () => true)
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    expect(await tick()).toEqual({ started: [], refused: [seq] })
+    expect(rec.spawned).toHaveLength(2)
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["started 2 workers for release; couldn't confirm the run: The board said text_too_long."])
+  })
+
   it("starts a private thread's run held once before its plan landed: the channel it made is its own", async () => {
     let fails = 1
     const { team, rec, tick } = await flaky('taskPlan', 'busy', () => fails-- > 0)
@@ -717,6 +752,26 @@ describe('the daemon starts a requested workflow', () => {
     expect(await runWorkflows(team, [release], rec.deps)).toEqual({ started: [], refused: [seq], why: `release ${seq}: spawn mu ENOENT` })
     expect(rec.spawned).toEqual([])
     expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual(["couldn't start workers for release: ENOENT (the daemon's log says more)"])
+  })
+
+  it("says on the thread what a cloud worker would miss from the daemon's environment, and starts none", async () => {
+    const cloudflare: Workflow = { ...release, workers: { count: 2, agent: 'claude', as: 'w', runner: 'cloudflare', repo: 'https://github.com/a/b', push: true } }
+    const { team, root, rec } = await ready([cloudflare])
+    const { MUSTER_CF_SECRET: _, ...without } = rec.deps.env
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
+    const ran = await runWorkflows(team, [cloudflare], { ...rec.deps, env: without })
+    expect(ran).toMatchObject({ started: [], refused: [seq] })
+    expect(rec.spawned).toEqual([])
+    const said = (await repliesOn(team, root.id)).map((reply) => reply.text)
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain("couldn't start workers for release")
+    expect(said[0]).toContain('MUSTER_CF_SECRET')
+    expect(said[0]).not.toContain('MUSTER_CF_WORKER')
+    // A Vercel worker with only some of its sign-in, or a board with no URL, is said the same way.
+    expect(missingSettings({ ...cloudflare.workers, runner: 'vercel' }, { ...rec.deps.env, VERCEL_OIDC_TOKEN: undefined, VERCEL_TOKEN: 't' })).toContain('all three')
+    expect(missingSettings(cloudflare.workers, { ...rec.deps.env, MUSTER_URL: undefined })).toContain('MUSTER_URL or MUSTER_SANDBOX_URL')
+    expect(missingSettings(cloudflare.workers, rec.deps.env)).toBeNull()
+    expect(missingSettings(release.workers, {})).toBeNull()
   })
 
   it("says how many workers started when one after the first won't, and doesn't try again", async () => {

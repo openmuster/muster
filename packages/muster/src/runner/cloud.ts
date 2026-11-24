@@ -242,6 +242,9 @@ elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci --ignor
 elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --ignore-scripts; echo installed bun
 else echo installed none; fi`
 
+/** What an install can say it did, and nothing else. */
+const INSTALLED = /^(pnpm|npm|yarn|bun|none|failed \((exit \d{1,3}|no exit code|timeout)\))$/
+
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 /**
@@ -414,7 +417,7 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
   const call = async <T>(path: string, body: unknown): Promise<T> => {
     const response = await send(path, { method: 'POST', body })
     // Why it refused, as far as it says, cut short: it is the Worker's word, read by whoever started the run.
-    if (!response.ok) throw new Error(`the runner Worker answered ${response.status}${response.status === 502 ? `: ${(await response.text().catch(() => '')).slice(0, 600)}` : ''}`)
+    if (!response.ok) throw Object.assign(new Error(`the runner Worker answered ${response.status}${response.status === 502 ? `: ${(await response.text().catch(() => '')).slice(0, 600)}` : ''}`), { status: response.status })
     return (await response.json()) as T
   }
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -424,7 +427,7 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
       secureUrl(base, "The runner Worker's secret, and the credentials a run starts with,")
       const { networkPolicy, env } = boardPolicy(request.board)
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
-      const made = await call<{ id: string; checkout?: { sha?: unknown; branch?: unknown } }>('/runs', {
+      const made = await call<{ id: string; checkout?: { sha?: unknown; branch?: unknown }; installed?: unknown }>('/runs', {
         task: request.task,
         command: [bin, ...args],
         prompt: request.prompt,
@@ -436,6 +439,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         // Added by the Worker to the repository's clone routes while it clones, then that host is closed: never in the container.
         ...(request.repo && request.github ? { repoAuth: `Basic ${Buffer.from(`x-access-token:${request.github.token}`).toString('base64')}` } : {}),
         setup: request.setup ?? [],
+        // The same install as Vercel's, sent so there is one: the Worker opens the package registries, to read, for it alone.
+        ...(request.repo && request.install ? { install: INSTALL } : {}),
         // The Worker adds these to requests for the model's host, as it adds the board's token.
         ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, paths: request.agent.model.paths, headers: request.agent.model.headers(request.model.key) } } : {}),
         ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}),
@@ -443,7 +448,9 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
       })
       const run = `/runs/${encodeURIComponent(made.id)}`
       const stop = async () => void (await call(`${run}/stop`, {}))
-      if (!request.attach) return { id: made.id, stop }
+      // Said by the Worker, so only one of the answers the install gives is taken.
+      const installed = typeof made.installed === 'string' && INSTALLED.test(made.installed) ? made.installed : undefined
+      if (!request.attach) return { id: made.id, stop, ...(installed ? { installed } : {}) }
       // What the Worker says about the checkout came out of the container: it is checked as anything from there is.
       const sha = made.checkout?.sha
       const branch = made.checkout?.branch
@@ -452,6 +459,7 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         id: made.id,
         stop,
         ...(checkout ? { checkout } : {}),
+        ...(installed ? { installed } : {}),
         // Asked until the agent has exited. A run that is gone, timed out or stopped, has no exit code to give.
         async wait() {
           // A dropped connection or a Worker error is asked again: losing the run to one failed question would lose the agent's work.

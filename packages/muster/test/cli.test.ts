@@ -495,6 +495,22 @@ describe('files', () => {
     expect(readFileSync(log, 'utf8')).toContain('connect')
   })
 
+  it('token create makes a token with no channel limit only when asked for with --all', async () => {
+    const dir = tempDir()
+    const bare = await cli(dir, ['token', 'create', '--json'])
+    expect(bare.code).toBe(2)
+    expect(JSON.parse(bare.stderr).error).toMatchObject({ reason: 'invalid_token', message: expect.stringMatching(/--can .*--all/) })
+    const both = await cli(dir, ['token', 'create', '--all', '--can', 'work/=read', '--json'])
+    expect(both.code).toBe(2)
+    expect(JSON.parse(both.stderr).error.reason).toBe('invalid_token')
+    // Neither refusal made a token.
+    expect((await cli(dir, ['token', 'list'])).stdout).toBe('no tokens\n')
+    const all = JSON.parse((await cli(dir, ['token', 'create', '--all', '--ttl', '30d', '--json'])).stdout)
+    expect(all.token).toMatch(/^mu1\./)
+    expect(all.claims).toEqual({ profile: null, can: null, exp: expect.any(Number) })
+    expect((await cli(dir, ['token', 'list'])).stdout).toMatch(new RegExp(`^${all.id}  \\(any profile\\)  everything  until \\d{4}-`))
+  })
+
   it('token list shows what the board has made, and revoke stops one', async () => {
     const dir = tempDir()
     const made = JSON.parse((await cli(dir, ['token', 'create', '--as', 'fixer', '--can', 'work/=read,post', '--ttl', '2h', '--json'])).stdout)

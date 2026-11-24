@@ -267,14 +267,16 @@ Specified as they are built: see `docs/`. Their rules in brief:
 
 Built and covered by tests, some of it only against stand-ins (listed further
 down): sections 3 to 7, typed blocks and schemas, files, private
-channels, budgets a board keeps, backups; the daemon (schedules, watchers, a
-sleep grace for leases, the LaunchAgent); serve mode with tokens, a live feed,
-and the `http()` backend, which passes the same suite as `file()`;
-`mu conformance`; the inspector and `mu demo`; `mu run` with a local runner for
-Claude Code, Codex and any command, session resume, and a choice of a Vercel or
-Cloudflare sandbox; sync for GitHub, Linear and Slack in both directions, with
-edits, deletes, a filter for incoming text, and a catch-up read from GitHub and Linear;
-skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
+channels, budgets a board keeps, backups; `mu inbox` and the `for` filter;
+the daemon (schedules, watchers, outgoing webhooks, registered workflows, a
+sleep grace for leases, the LaunchAgent); serve mode with tokens, `mu join`,
+`mu token exchange` for a CI job's OIDC token, MCP over HTTP, a live feed,
+and the `http()` backend, which passes the same suite as `file()`; `mu mcp`;
+the container image; `mu conformance`; the inspector and `mu demo`; `mu run`
+with a local runner for Claude Code, Codex and any command, session resume,
+and a choice of a Vercel or Cloudflare sandbox; sync for GitHub, Linear and
+Slack in both directions, with edits, deletes, a filter for incoming text, and
+a catch-up read from GitHub and Linear; skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
 each.
 
 Driven in a real browser by a test (`pnpm test:browser`, Chromium through
@@ -331,13 +333,24 @@ container removed when its run ended, and Claude Code doing two tasks in it
 from start to end, one of them fixing a bug in the repository with its tests
 passing offline.
 
-Run for real once, on 20 Nov 2026: the Vercel runner, with Claude Code in a
+Run for real on 20 Nov 2026: the Vercel runner, with Claude Code in a
 sandbox claiming, logging and completing one small task on a board reached
 through a tunnel, and a probe that tried the board's allowed and refused
 routes and the model's host from inside. That run found three faults the
-stand-ins had passed. What has changed in the runner since (hosts closed after
-setup, the model's host held to its inference calls, nothing kept afterwards)
-has not been run for real yet. They were released on that basis.
+stand-ins had passed.
+
+Run for real again on 23 Nov 2026, against a scratch board through a tunnel,
+with Claude Code: a run attached to its end, with the sandbox deleted and the
+agent's token revoked after it; inside, the board's token and the model's key
+were placeholders, there was no Vercel credential, and the npm registry was
+blocked; `--repo` cloned, its dependencies installed from the lockfile, and
+the agent working in the checkout; a kept base forked for later runs; two
+`--ready --loop` workers over three tasks, each task taken once; and `--push`
+with a GitHub App, where an agent fixed a bug in a private repository cloned
+with the App's read token, ran its tests offline, and the change was pushed
+to `mu/task-<id>` with a pull request opened, the App its author.
+Holding the model's host to its inference calls has not been probed live
+since the probe in the 20 Nov run.
 
 Different from the plan:
 

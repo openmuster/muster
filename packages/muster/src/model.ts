@@ -125,6 +125,15 @@ export function profileName(name: string): string {
   return name
 }
 
+/** Checks what a `for` filter names: a profile name, or a whole actor ID whose profile part, if any, is one. */
+export function forName(value: string): string {
+  if (!/[:+]/.test(value)) return profileName(value)
+  // An ID with nothing before its "+" is nobody's, so it could never match.
+  if (value.startsWith('+')) throw misuse('invalid_profile', `"${value}" isn't a profile name or an actor ID.`, 'Use a profile name, or the whole ID from `mu actors`.')
+  if (value.includes('+')) profileName(value.slice(value.indexOf('+') + 1))
+  return value
+}
+
 export function messageText(text: string): string {
   if (text.length === 0) throw misuse('empty_text', 'A message needs text.')
   if (text.length > LIMITS.text) {
