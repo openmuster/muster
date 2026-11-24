@@ -8,8 +8,8 @@ import { loadSync } from '../src/index.ts'
 import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
-import { boardHeaders, modelPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
-import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
+import { REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
+import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, installed, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
 import { boardPolicy } from '../src/runner/policy.ts'
 import { claude } from '../src/runner/agents.ts'
 
@@ -74,6 +74,26 @@ describe('the cloudflare runner gates', () => {
     expect(() => repoProps('https://x:tok@github.com/acme/web.git')).toThrow()
     expect(() => repoProps('http://github.com/acme/web.git')).toThrow()
   })
+
+  it('lets a dependency install read the package registries, and do nothing else there', () => {
+    const get = (url: string, method = 'GET') => registryPasses({ url, method })
+    expect(get('https://registry.npmjs.org/react')).toBe(true)
+    expect(get('https://registry.npmjs.org/react/-/react-19.0.0.tgz')).toBe(true)
+    // A scoped package is asked for with its slash encoded.
+    expect(get('https://registry.npmjs.org/@types%2fnode')).toBe(true)
+    expect(get('https://registry.npmjs.org/@types/node/-/node-24.0.0.tgz')).toBe(true)
+    expect(get('https://registry.npmjs.org/pnpm', 'HEAD')).toBe(true)
+    expect(get('https://registry.yarnpkg.com/react')).toBe(true)
+    expect(get('https://repo.yarnpkg.com/4.5.0/packages/yarnpkg-cli/bin/yarn.js')).toBe(true)
+    // Publishing, logging in, auditing: nothing that writes or sends.
+    for (const method of ['PUT', 'POST', 'DELETE', 'PATCH']) expect(get('https://registry.npmjs.org/react', method)).toBe(false)
+    expect(get('http://registry.npmjs.org/react')).toBe(false)
+    expect(get('https://registry.npmjs.org/a/../-/user/org.couchdb.user:x')).toBe(false)
+    expect(get('https://registry.npmjs.org/a/%2e%2e/b')).toBe(false)
+    // The Host header is the container's to write.
+    expect(get('https://evil.example.com/react')).toBe(false)
+    expect(REGISTRY_HOSTS).toEqual(['registry.npmjs.org', 'registry.yarnpkg.com', 'repo.yarnpkg.com'])
+  })
 })
 
 describe('the cloudflare runner lifecycle', () => {
@@ -119,6 +139,17 @@ describe('the cloudflare runner lifecycle', () => {
     expect(execRequest({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })).toEqual({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })
     expect(execRequest({ cmd: 'sh', args: [] })).toEqual({ cmd: 'sh', args: [], env: {} })
     for (const bad of [null, 'sh', {}, { cmd: '', args: [] }, { cmd: 'sh', args: [1] }, { cmd: 'sh', args: 'x' }, { cmd: 'sh', args: [], env: { A: 1 } }, { cmd: 'sh', args: [], env: ['x'] }]) expect(execRequest(bad)).toBeNull()
+  })
+
+  it("says how dependencies installed from the install's exit code and last line, and nothing else it printed", () => {
+    expect(installed(0, 'installed pnpm\n')).toBe('pnpm')
+    expect(installed(0, 'installed none')).toBe('none')
+    expect(installed(0, 'something else')).toBe('none')
+    expect(installed(0, 'installed pnpm; echo x')).toBe('none')
+    // Stopped at its time limit, timeout exits 124.
+    expect(installed(124, '')).toBe('failed (exit 124)')
+    expect(installed(1, 'installed npm')).toBe('failed (exit 1)')
+    expect(installed(null, '')).toBe('failed (no exit code)')
   })
 
   it('reads an exit code only as a number: what else the agent wrote in that file means nothing', () => {

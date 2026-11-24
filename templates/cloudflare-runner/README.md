@@ -21,7 +21,19 @@ the token, and forwards it. The container's environment holds a placeholder.
 The model's host gets the same treatment, with the key added only to the calls
 that ask the model. With `--repo`, the repository's host is opened only for
 that repository's clone routes while it is cloned, with a private one's read
-token added there, then closed before the agent starts.
+token added there, then closed before anything of the repository runs.
+
+When the CLI asks for its dependencies (`mu run --repo`, unless
+`--no-install`), it sends the install script, and the Worker runs it in the
+checkout for at most three minutes. Only then are `registry.npmjs.org`,
+`registry.yarnpkg.com` and `repo.yarnpkg.com` opened, for reading (`GET` and
+`HEAD`), with nothing added; they are closed again before the agent starts,
+and a run whose registries can't be closed ends there. A failed install
+doesn't stop the run: start answers `installed` with `failed (exit n)`, and
+the agent starts without them. The image runs pnpm (through corepack, at the
+version `packageManager` pins), npm and yarn; it has no bun. Covered by
+tests of the gate and the CLI, not run live. A Worker deployed before this
+ignores the script and installs nothing: redeploy it and rebuild the image.
 
 Each run is a Durable Object. It checks the run every minute, which keeps the
 container alive, and removes the container when the agent exits or the run's
@@ -59,7 +71,8 @@ one is set the Worker answers every request with an error and starts nothing.
 
 The `Dockerfile` is the image a run starts from: Node, git, `mu` from its
 release tarball, and Claude Code. They are installed once, when the image is
-built; a run's container has no internet and installs nothing. It installs
+built; a run's container has no internet, and the only thing it installs is
+the repository's dependencies, from the npm registry. It installs
 one muster release and one version of the agent's CLI, by number, and the
 build stops until you name the agent's:
 

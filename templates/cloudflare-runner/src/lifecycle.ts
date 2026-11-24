@@ -99,3 +99,15 @@ export function execRequest(body: unknown): { cmd: string; args: string[]; env: 
 export function ended(why: string, exitCode: number | null, tail: string, logTail: string | undefined): { event: 'run.ended'; why: string; exitCode: number | null; tail?: string } {
   return { event: 'run.ended', why, exitCode, ...(logTail === '1' ? { tail } : {}) }
 }
+
+/**
+ * How dependencies were installed, from the install script's exit code and the last line it printed:
+ * `pnpm`, `npm`, `yarn`, `bun` or `none`, or `failed (exit n)`
+ * (`failed (no exit code)` when it was killed before it gave one). Anything else it printed means nothing.
+ */
+export function installed(code: number | null, last: string): string {
+  if (code === null) return 'failed (no exit code)'
+  if (code !== 0) return `failed (exit ${code})`
+  const said = /^installed (pnpm|npm|yarn|bun|none)$/.exec(last.trim())
+  return said ? said[1]! : 'none'
+}

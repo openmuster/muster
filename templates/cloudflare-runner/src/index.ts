@@ -1,9 +1,9 @@
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
 import { authorized, usable } from './auth.ts'
-import { type BoardProps, type ModelProps, type RepoProps, boardHeaders, modelPasses, repoPasses, repoProps } from './gates.ts'
-import { capStream, decide, ended, execRequest, exitCode, readCapped } from './lifecycle.ts'
+import { type BoardProps, type ModelProps, type RepoProps, REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from './gates.ts'
+import { capStream, decide, ended, execRequest, exitCode, installed, readCapped } from './lifecycle.ts'
 
-type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; timeoutMs?: number; attach?: boolean }
+type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; /** The script that installs the repository's dependencies, when asked: muster's own, sent by the CLI. */ install?: string; timeoutMs?: number; attach?: boolean }
 type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
 type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance; LOG_TAIL?: string }
 
@@ -25,6 +25,13 @@ const IDLE_MS = 5 * 60_000
  * and `mu` run out of memory in it and stall, with nothing failing.
  */
 const DEFAULT_INSTANCE: Instance = 'standard-1'
+/**
+ * The longest the dependency install takes before it is stopped. The CLI waits for start's answer,
+ * and Node's fetch gives up on one after 5 minutes: the clone and the install fit inside that.
+ */
+const INSTALL_MS = 3 * 60_000
+/** Where the install's output goes, in the container: the agent can read why it failed. */
+const INSTALL_LOG = '/tmp/muster-install.log'
 /** The longest a run lasts when it is given no timeout. */
 const DEFAULT_TIMEOUT_MS = 60 * 60_000
 
@@ -60,6 +67,14 @@ export class RepoGate extends WorkerEntrypoint<Env, RepoProps> {
   }
 }
 
+/** The package registries, while dependencies install: reading only, with no credential added. */
+export class RegistryGate extends WorkerEntrypoint<Env> {
+  fetch(request: Request): Promise<Response> | Response {
+    if (!registryPasses(request)) return new Response('Forbidden', { status: 403 })
+    return fetch(new Request(request.url, request), { redirect: 'manual' })
+  }
+}
+
 /** What a host is left with once its part is done: nothing gets through. */
 export class Closed extends WorkerEntrypoint<Env> {
   fetch(): Response {
@@ -68,7 +83,7 @@ export class Closed extends WorkerEntrypoint<Env> {
 }
 
 /** What `start` hands back: where the checkout started, so what the agent changed can be told from what was there. */
-type Started = { checkout?: { sha: string; branch: string }; /** Why the run didn't start, for whoever asked: answered, never thrown, so it is in no log. */ failed?: string }
+type Started = { checkout?: { sha: string; branch: string }; /** How the dependencies installed, when asked: `pnpm`, `npm`, `yarn`, `none` or `failed (...)`. */ installed?: string; /** Why the run didn't start, for whoever asked: answered, never thrown, so it is in no log. */ failed?: string }
 /** A run as the CLI sees it: `exited` while the container is kept to be read, `running` before. */
 type Status = { state: 'running' | 'exited'; exitCode: number | null }
 
@@ -94,7 +109,8 @@ export class Run extends DurableObject<Env> {
     if (container.running || (await this.ctx.storage.get('started'))) throw new Error('this run has already started')
     const repo = input.repo ? repoProps(input.repo, input.repoAuth) : undefined
     // What is opened is written down first, so it can all be closed again; the credentials stay in the gates' props alone.
-    const hosts = [input.board.host, ...(input.model ? [input.model.host] : []), ...(repo ? [repo.host] : [])]
+    const install = repo && input.install ? input.install : undefined
+    const hosts = [input.board.host, ...(input.model ? [input.model.host] : []), ...(repo ? [repo.host] : []), ...(install ? REGISTRY_HOSTS : [])]
     await this.ctx.storage.put({ started: true, hosts, attach: input.attach === true, repo: Boolean(repo), deadline: Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) })
     // Registered before start, so the certificate is there when the first process runs.
     await container.interceptOutboundHttps(input.board.host, this.ctx.exports.BoardGate({ props: input.board }))
@@ -121,6 +137,17 @@ export class Run extends DurableObject<Env> {
     }
     // The clone is done: the repository's host is closed before anything of it runs.
     if (repo) await container.interceptOutboundHttps(repo.host, this.ctx.exports.Closed)
+    // A failed install costs the agent its tests, not the run: it is said, and the agent starts. A registry
+    // that couldn't be closed again ends the run instead.
+    let deps: string | undefined
+    if (install) {
+      try {
+        deps = await this.install(install, input.env)
+      } catch {
+        await this.end('closing failed')
+        return { failed: 'the package registries could not be closed after the install' }
+      }
+    }
     // The prompt goes in on stdin, so no part of it is read as a flag. The output goes to a file, and the exit code after it.
     await container.exec(['sh', '-c', `printf %s "$MUSTER_PROMPT" | "$@" > ${LOG} 2>&1; echo $? > ${EXIT}`, 'agent', ...input.command], {
       cwd: input.repo ? '/workspace/repo' : '/workspace',
@@ -128,7 +155,7 @@ export class Run extends DurableObject<Env> {
       stdout: 'ignore',
       stderr: 'ignore',
     })
-    return checkout ? { checkout } : {}
+    return { ...(checkout ? { checkout } : {}), ...(deps ? { installed: deps } : {}) }
   }
 
   /** The run as it is now, null when there is none. The agent's exit is checked here too, so the CLI doesn't wait for the next check. */
@@ -251,6 +278,29 @@ export class Run extends DurableObject<Env> {
     } catch (error) {
       // A run that can't be closed is never read from: it ends.
       await this.end('closing failed')
+    }
+  }
+
+  /**
+   * Installs the repository's dependencies with the registries open, for no longer than `INSTALL_MS`, and
+   * closes them again whatever happened, before anything else runs. Throws only when they couldn't be closed.
+   * The repository's own code can run here (a pnpmfile, a yarn plugin), so its host was closed before.
+   */
+  private async install(script: string, env: Record<string, string>): Promise<string> {
+    const container = this.ctx.container!
+    for (const host of REGISTRY_HOSTS) await container.interceptOutboundHttps(host, this.ctx.exports.RegistryGate)
+    try {
+      // The output goes to a file: an install prints more than is worth reading here, and only its last line says how.
+      const process = await container.exec(
+        ['timeout', '--kill-after=5', String(INSTALL_MS / 1000), 'sh', '-c', `sh -c "$MUSTER_INSTALL" > ${INSTALL_LOG} 2>&1; code=$?; tail -n 1 ${INSTALL_LOG}; exit $code`],
+        { cwd: '/workspace/repo', env: { ...BASE_ENV, ...env, MUSTER_INSTALL: script }, stderr: 'ignore' },
+      )
+      const last = await readCapped(process.stdout, OUTPUT_MAX, () => process.kill())
+      return installed(await process.exitCode, new TextDecoder().decode(last))
+    } catch {
+      return installed(null, '')
+    } finally {
+      for (const host of REGISTRY_HOSTS) await container.interceptOutboundHttps(host, this.ctx.exports.Closed)
     }
   }
 

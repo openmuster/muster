@@ -411,6 +411,29 @@ describe('cloud runners', () => {
     expect(sent[1].repoAuth).toBeUndefined()
   })
 
+  it("cloudflare: sends Vercel's install script when asked, and passes on only what an install can say it did", async () => {
+    const sent: any[] = []
+    let answer: unknown = { id: 'r', installed: 'pnpm' }
+    const fetcher = (async (_url: any, init?: RequestInit) => (sent.push(JSON.parse(String(init?.body))), Response.json(answer))) as typeof fetch
+    const runner = cloudflare({ worker: 'https://w.example', secret: 's', fetch: fetcher })
+    const repo = 'https://github.com/acme/web.git'
+    const run = await runner.start({ ...request, repo, install: true })
+    expect(sent[0].install).toBe(INSTALL)
+    expect(run.installed).toBe('pnpm')
+    // Started to be read, it is said the same way.
+    answer = { id: 'r', installed: 'failed (exit 124)' }
+    expect((await runner.start({ ...request, repo, install: true, attach: true })).installed).toBe('failed (exit 124)')
+    // The Worker's word comes out of a container: what isn't one of the answers is dropped.
+    answer = { id: 'r', installed: 'pnpm\nmalicious' }
+    expect((await runner.start({ ...request, repo, install: true })).installed).toBeUndefined()
+    // Not asked, or nothing to install into: no script goes.
+    answer = { id: 'r' }
+    await runner.start({ ...request, repo })
+    const { repo: _, ...noRepo } = request
+    await runner.start({ ...noRepo, install: true })
+    expect(sent.slice(-2).map((body) => body.install)).toEqual([undefined, undefined])
+  })
+
   it("cloudflare: a run started to be read is waited on until its agent exits, and gives back only what it should", async () => {
     const asked: string[] = []
     let polls = 0

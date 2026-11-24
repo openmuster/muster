@@ -76,7 +76,7 @@ See [Running agents](../03-guides/05-running-agents.md) for local runs and
 | Set up once | The agent's CLI, signed in | `@vercel/sandbox` installed; a Vercel token, team and project; a model API key | `templates/cloudflare-runner` deployed to a Workers Paid account, which builds the image with `mu` and the agent's CLI in it; its secret; a model API key |
 | Credentials the agent holds | Yours, as on this machine | None: placeholders, with the board's token and the model's key added by Vercel's network policy on the way out | None: placeholders, with the board's token and the model's key added by your Worker on the way out |
 | What the agent can reach | What this machine can | The board's routes and the model's calls | The board's routes and the model's calls; nothing else resolves |
-| The code it works on | This folder, or `--worktree` for a git worktree per task | `--repo`, cloned into the sandbox, with its dependencies installed from the lockfile | `--repo`, cloned into the container through the Worker; no dependency install |
+| The code it works on | This folder, or `--worktree` for a git worktree per task | `--repo`, cloned into the sandbox, with its dependencies installed from the lockfile | `--repo`, cloned into the container through the Worker, with its dependencies installed from the lockfile while only the npm registry is open to read |
 | Private repository | Your own git access | A GitHub App's read token, used only while cloning | A GitHub App's read token, added by the Worker only while cloning |
 | `mu run` waits for it | Yes | Yes; `--detach` returns at once | With `--push`; otherwise it returns at once and the Worker ends the container when the agent exits |
 | `--push` (a pull request) | No | Yes | Yes |

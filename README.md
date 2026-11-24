@@ -71,7 +71,7 @@ agent died goes back to the queue on its own.
   | | On this machine | Vercel Sandbox | Cloudflare container |
   | --- | --- | --- | --- |
   | Credentials in the agent's reach | Yours | None | None |
-  | Clones `--repo` | No | Yes, with dependencies | Yes, without dependencies |
+  | Clones `--repo` | No | Yes, with dependencies | Yes, with dependencies (pnpm, npm, yarn) |
   | `--push` opens a pull request | No | Yes | Yes |
   | A worker's tasks each get their own | Process | Sandbox | No: one container for all |
   | Registered workflows | Yes | Yes | No |

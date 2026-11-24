@@ -64,8 +64,9 @@ describe('mu run in a cloud sandbox', () => {
     // What runs in the container is mu run itself: it claims the task, keeps the claim alive, and settles it.
     expect(got[0].body.command).toEqual(['mu', 'run', '12', '--as', 'fixer', '--bypass-permissions', '--agent', 'claude'])
     expect(got[0].body.env).toMatchObject({ IS_SANDBOX: '1', MUSTER_AGENT_ENV: expect.stringContaining('NODE_EXTRA_CA_CERTS') })
-    // A container has no internet, so nothing is installed at run time: mu is in the image.
+    // mu is in the image: setup installs nothing. The repository's dependencies are asked for, with the script that installs them.
     expect(got[0].body.setup).toEqual([])
+    expect(got[0].body.install).toContain('--frozen-lockfile --ignore-scripts')
     expect(JSON.stringify(got[0].body.env)).not.toContain('mu1.')
     expect(run.stderr + run.stdout).toMatch(/network_error|cf-run-1/)
   })
