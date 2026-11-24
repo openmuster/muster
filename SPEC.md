@@ -269,7 +269,8 @@ Built and covered by tests, some of it only against stand-ins (listed further
 down): sections 3 to 7, typed blocks and schemas, files, private
 channels, budgets a board keeps, backups; `mu inbox` and the `for` filter;
 the daemon (schedules, watchers, outgoing webhooks, registered workflows, a
-sleep grace for leases, the LaunchAgent); serve mode with tokens, `mu join`,
+sleep grace for leases, the LaunchAgent, a restart-storm guard and a slower
+pace for a watcher whose command keeps failing); serve mode with tokens, `mu join`,
 `mu token exchange` for a CI job's OIDC token, MCP over HTTP, a live feed,
 and the `http()` backend, which passes the same suite as `file()`; `mu mcp`;
 the container image; `mu conformance`; the inspector and `mu demo`; `mu run`
@@ -353,6 +354,10 @@ to `mu/task-<id>` with a pull request opened, the App its author.
 Holding the model's host to its inference calls has not been probed live
 since the probe in the 20 Nov run.
 
+The restart-storm guard (5 starts in 10 minutes, none up 2 minutes, then the
+daemon stops itself for an hour or until `mu daemon reset`) is covered by
+tests only, with `launchctl` faked. It has not been run under real launchd.
+
 Different from the plan:
 
 - Sync talks to each platform directly, with no Chat SDK adapters.
@@ -366,7 +371,6 @@ Not built:
   issue or comment, and documents none for a token to read an attachment in a
   private repository. A board file is named in the comment instead; an
   attachment that comes in stays a link in the text.
-- A restart-storm guard beyond launchd's own throttle.
 
 ## 10. What a session costs to start
 
