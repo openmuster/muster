@@ -258,9 +258,9 @@ export const Sandbox = { async create(options) {
     const reasonOf = async (args: string[], env: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
     expect(await reasonOf(['--runner', 'cloudflare'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'cloudflare', ...repo, '--detach'])).toBe('push_unsupported')
-    // A Cloudflare worker is one container for all its tasks: there is no task's own checkout to push from.
-    const worker = await cli(dir, ['run', '--ready', 'work/', '--loop', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'w', '--push', '--json', ...repo], { env: { ...board, ...appEnv(), MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })
-    expect(JSON.parse(worker.stderr).error).toMatchObject({ reason: 'push_unsupported', message: expect.stringContaining('one container') })
+    // --ready without --loop is one container for all its tasks: there is no task's own checkout to push from.
+    const worker = await cli(dir, ['run', '--ready', 'work/', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'w', '--push', '--json', ...repo], { env: { ...board, ...appEnv(), MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })
+    expect(JSON.parse(worker.stderr).error).toMatchObject({ reason: 'push_unsupported', message: expect.stringContaining('needs --loop') })
     expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', ...repo, '--detach'])).toBe('push_unsupported')
@@ -423,6 +423,251 @@ export const Sandbox = { async create(options) {
     // --push with --ready needs the worker: a sandbox per task.
     const refused = await cli(dir, ['run', '--ready', 'swarm/web', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--repo', 'https://github.com/acme/web.git', '--push', '--json'], { env: local })
     expect(JSON.parse(refused.stderr).error.reason).toBe('push_unsupported')
+  })
+
+  it('cloudflare: a --ready --loop worker stays here and gives each task a container of its own, waits for it, and stops it', async () => {
+    const seen: { method: string; path: string; body: string }[] = []
+    let made = 0
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        const at = (req.url ?? '').slice('/worker'.length)
+        seen.push({ method: req.method!, path: at, body })
+        if (at === '/runs') return json(200, { id: `0b0d6b1e-9f43-4c2a-8d43-1b2c3d4e5f6${made++}` })
+        if (req.method === 'GET') return json(200, { state: 'exited', exitCode: 0 })
+        if (at.endsWith('/stop')) return json(200, {})
+        return json(404, {})
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const dir = tempDir()
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', MUSTER_CF_WORKER: `http://127.0.0.1:${(server.address() as { port: number }).port}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789' }
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'agent-1'], { env: local })
+    server.close()
+    expect(run.code).toBe(0)
+    const starts = seen.filter((each) => each.path === '/runs').map((each) => JSON.parse(each.body))
+    expect(starts).toHaveLength(2)
+    // Each container runs one task, by ID, waited on, with the token of the claim made for it here: no two alike.
+    expect(starts.map((body) => body.command.slice(0, 3))).toEqual(ids.map((id) => ['mu', 'run', String(id)]))
+    expect(starts.every((body) => body.attach === true && body.timeoutMs === 40 * 60_000)).toBe(true)
+    const tokens = starts.map((body) => body.env.MUSTER_CLAIM_TOKEN)
+    expect(tokens.every((token: string) => /^[\w-]{43}$/.test(token))).toBe(true)
+    expect(new Set(tokens).size).toBe(2)
+    // Each run is stopped once it has exited, before the next task's starts: the Worker keeps none of them.
+    const steps = seen.map((each) => `${each.method} ${each.path.replace(/^\/runs\/[^/]+?(5f6\d)/, '/runs/$1')}`)
+    expect(steps).toEqual(['POST /runs', 'GET /runs/5f60', 'POST /runs/5f60/stop', 'POST /runs', 'GET /runs/5f61', 'POST /runs/5f61/stop'])
+    for (const id of ids) expect(JSON.parse((await cli(dir, ['read', String(id), '--json'])).stdout).task.claim.by.profile).toBe('agent-1')
+    // Without the Worker's settings it says so before it claims anything.
+    const third = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'third', '--json'])).stdout).task.id
+    const unset = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'agent-1', '--json'], { env: { MUSTER_SANDBOX_URL: local.MUSTER_SANDBOX_URL } })
+    expect(JSON.parse(unset.stderr).error.reason).toBe('runner_not_configured')
+    expect(JSON.parse((await cli(dir, ['read', String(third), '--json'])).stdout).task.state).toBe('ready')
+  })
+
+  /** A runner Worker standing in: `start` is the status POST /runs answers, `state` what a run's status says (`gone` is a 404). */
+  const standIn = async (opts: { start?: number; state?: 'exited' | 'gone' | 'running' }) => {
+    const seen: { method: string; path: string }[] = []
+    let made = 0
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        const at = (req.url ?? '').slice('/worker'.length)
+        seen.push({ method: req.method!, path: at.replace(/^\/runs\/[^/]+/, '/runs/:id') })
+        if (at === '/runs') return (opts.start ?? 200) === 200 ? json(200, { id: `0b0d6b1e-9f43-4c2a-8d43-1b2c3d4e5f6${made++}` }) : json(opts.start!, {})
+        if (at.endsWith('/stop')) return json(200, {})
+        if (req.method === 'GET') return opts.state === 'gone' ? json(404, {}) : json(200, opts.state === 'running' ? { state: 'running', exitCode: null } : { state: 'exited', exitCode: 0 })
+        return json(404, {})
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', MUSTER_CF_WORKER: `http://127.0.0.1:${(server.address() as { port: number }).port}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789' }
+    return { seen, env, close: () => server.close() }
+  }
+  const workerArgs = ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'agent-1']
+  const stateOf = async (dir: string, id: number) => JSON.parse((await cli(dir, ['read', String(id), '--json'])).stdout).task.state
+  const errorOf = (stderr: string) => JSON.parse(stderr.slice(stderr.search(/^\{/m))).error
+  const liveTokens = async (dir: string) => JSON.parse((await cli(dir, ['token', 'list', '--json'])).stdout).tokens.filter((token: { revoked: boolean }) => !token.revoked)
+
+  it('cloudflare: a worker whose Worker refuses the start gives the claim back, revokes the token it made, and stops', async () => {
+    const worker = await standIn({ start: 401 })
+    const dir = tempDir()
+    const ids = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, [...workerArgs, '--json'], { env: worker.env })
+    worker.close()
+    expect(run.code).toBe(1)
+    expect(errorOf(run.stderr)).toMatchObject({ reason: 'runner_start_failed', message: expect.stringContaining('401') })
+    // One try: a refusal won't get better, so the second task isn't claimed and failed after it.
+    expect(worker.seen.filter((each) => each.path === '/runs')).toHaveLength(1)
+    for (const id of ids) expect(await stateOf(dir, id)).toBe('ready')
+    expect(await liveTokens(dir)).toEqual([])
+  })
+
+  it('cloudflare: a worker whose Worker fails with a server error tries again, a few times, then stops with the task still ready', async () => {
+    const worker = await standIn({ start: 502 })
+    const dir = tempDir()
+    const id = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'only', '--json'])).stdout).task.id
+    const run = await cli(dir, [...workerArgs, '--json'], { env: worker.env })
+    worker.close()
+    expect(run.code).toBe(1)
+    expect(run.stderr).toContain('not done  #')
+    expect(errorOf(run.stderr).reason).toBe('runner_start_failed')
+    expect(worker.seen.filter((each) => each.path === '/runs')).toHaveLength(3)
+    expect(await stateOf(dir, id)).toBe('ready')
+    expect(await liveTokens(dir)).toEqual([])
+  }, 20_000)
+
+  it('cloudflare: a run that is gone before it says how it ended gives its claim back, and a worker stops after a few; one that ended revokes its token', async () => {
+    const gone = await standIn({ state: 'gone' })
+    const dir = tempDir()
+    const id = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'only', '--json'])).stdout).task.id
+    const run = await cli(dir, workerArgs, { env: gone.env })
+    gone.close()
+    // No word on how it ended: stopped, the task back to ready, and tried again a few times, not for ever.
+    expect(gone.seen.map((each) => `${each.method} ${each.path}`).slice(0, 3)).toEqual(['POST /runs', 'GET /runs/:id', 'POST /runs/:id/stop'])
+    expect(gone.seen.filter((each) => each.path === '/runs')).toHaveLength(3)
+    expect(run.code).toBe(1)
+    expect(run.stdout).toContain('exit unknown')
+    expect(run.stderr).toContain('ended without saying how')
+    expect(await stateOf(dir, id)).toBe('ready')
+    expect(await liveTokens(dir)).toEqual([])
+    // Ended: what ran there settles the task (here, nothing did), and the token made for it is gone.
+    const ended = await standIn({ state: 'exited' })
+    const again = await cli(dir, workerArgs, { env: ended.env })
+    ended.close()
+    expect(again.code).toBe(0)
+    expect(await stateOf(dir, id)).toBe('claimed')
+    expect(await liveTokens(dir)).toEqual([])
+  }, 20_000)
+
+  it('cloudflare: Ctrl-C while a worker waits on a task stops the container and gives the claim back', async () => {
+    const worker = await standIn({ state: 'running' })
+    const dir = tempDir()
+    const id = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'only', '--json'])).stdout).task.id
+    const run = cliStart(dir, workerArgs, { ...worker.env })
+    for (let i = 0; i < 200 && !run.output().includes('started'); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    run.child.kill('SIGINT')
+    const ended = await run.done
+    worker.close()
+    expect(ended.code).toBe(130)
+    expect(worker.seen.some((each) => each.path === '/runs/:id/stop')).toBe(true)
+    expect(await stateOf(dir, id)).toBe('ready')
+    expect(await liveTokens(dir)).toEqual([])
+  }, 20_000)
+
+  it('vercel: a worker whose SDK hands back a run it can\'t wait on stops that sandbox, gives the claim back, and stops', async () => {
+    const dir = tempDir()
+    const log = join(dir, 'sdk.log')
+    mkdirSync(join(dir, 'sdk'))
+    // An old SDK: a detached command comes back with nothing to wait on.
+    writeFileSync(join(dir, 'sdk', 'index.mjs'), `import { appendFileSync } from 'node:fs'\nconst log = (e) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(e) + '\\n')\nexport const Sandbox = { async create() { log({ create: true }); return { sandboxId: 'sbx_old', runCommand: async () => {}, update: async () => {}, stop: async () => log({ stopped: true }) } } }\n`)
+    const ids = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--json'], { env: { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', MUSTER_VERCEL_SDK: join(dir, 'sdk', 'index.mjs'), MUSTER_VERCEL_BASE: 'off' } })
+    expect(run.code).toBe(1)
+    expect(errorOf(run.stderr).reason).toBe('runner_too_old')
+    const lines = (await import('node:fs')).readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    // One sandbox, stopped: not one per ready task, all at once.
+    expect(lines.filter((e) => e.create)).toHaveLength(1)
+    expect(lines.some((e) => e.stopped)).toBe(true)
+    for (const id of ids) expect(await stateOf(dir, id)).toBe('ready')
+    expect(await liveTokens(dir)).toEqual([])
+  })
+
+  it('a wait that never answers still ends at the deadline', async () => {
+    const { attend } = await import('../src/cli/main.ts')
+    const began = Date.now()
+    // As a runner that answers 5xx for ever: wait() never settles.
+    const exit = await attend(() => new Promise(() => {}), new AbortController().signal, Date.now() + 300)
+    expect(exit).toBeNull()
+    expect(Date.now() - began).toBeLessThan(2000)
+  })
+
+  it('cloudflare: a --ready --loop worker with --push opens a pull request per task, each from its own container', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(work, 'mu.bundle'))
+
+    // GitHub's API and the runner Worker, standing in. Each container's run has its own ID.
+    const pulls: any[] = []
+    const seen: { method: string; path: string; body: string }[] = []
+    let made = 0
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        const path = req.url ?? ''
+        if (path.startsWith('/worker/')) {
+          const at = path.slice('/worker'.length)
+          seen.push({ method: req.method!, path: at, body })
+          if (at === '/runs') return json(200, { id: `0b0d6b1e-9f43-4c2a-8d43-1b2c3d4e5f6${made++}`, checkout: { sha: base, branch: 'main' } })
+          if (at.endsWith('/close')) return json(200, { closed: true })
+          if (at.endsWith('/exec')) return json(200, { exitCode: 0, stdout: 'bundle\n' })
+          if (at.includes('/file?')) return res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(bundle)
+          if (at.endsWith('/stop')) return json(200, {})
+          if (req.method === 'GET') return json(200, { state: 'exited', exitCode: 0 })
+          return json(404, {})
+        }
+        const parsed = body ? JSON.parse(body) : null
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        pulls.push(parsed)
+        json(201, { html_url: `https://github.com/acme/web/pull/${pulls.length}` })
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const dir = tempDir()
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...appEnv(), MUSTER_CF_WORKER: `${origin}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789', MUSTER_GITHUB_API: origin, MUSTER_GITHUB_REMOTE: remote }
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'agent-1', '--repo', 'https://github.com/acme/web.git', '--push'], { env })
+    server.close()
+    expect(run.code).toBe(0)
+    // A branch and a pull request per task, each read out of that task's own container.
+    expect(pulls.map((pull) => pull.head)).toEqual(ids.map((id) => `mu/task-${id}`))
+    for (const id of ids) expect(execFileSync('git', ['-C', remote, 'show', `refs/heads/mu/task-${id}:README.md`], { encoding: 'utf8' })).toBe('hello, fixed\n')
+    const runOf = (each: { path: string }) => /\/runs\/[^/?]+?(5f6\d)/.exec(each.path)?.[1]
+    for (const [i, id] of ids.entries()) {
+      const mine = seen.filter((each) => runOf(each) === `5f6${i}`).map((each) => `${each.method} ${each.path.replace(/^\/runs\/[^/?]+/, '').replace(/\?.*$/, '')}`)
+      expect(mine).toEqual(['GET ', 'POST /close', 'POST /exec', 'GET /file', 'POST /stop'])
+      expect(JSON.parse(seen.filter((each) => each.path === '/runs')[i]!.body)).toMatchObject({ attach: true, command: ['mu', 'run', String(id), '--as', 'agent-1', '--bypass-permissions', '--timeout', '30m', '--agent', 'claude'] })
+    }
+    expect(JSON.stringify(seen)).not.toContain('ghs_write')
+  })
+
+  it('a --ready --loop --push worker with nothing to push to is refused before it claims a task, on either cloud', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' }
+    const task = JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', 'only', '--json'])).stdout).task.id
+    for (const runner of ['vercel', 'cloudflare']) {
+      const reasonOf = async (args: string[], more: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', runner, '--agent', 'claude', '--as', 'agent-1', '--push', '--json', ...args], { env: { ...env, ...more } })).stderr).error.reason
+      expect(await reasonOf([])).toBe('invalid_repo')
+      expect(await reasonOf(['--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
+      expect(await reasonOf(['--repo', 'https://github.com/acme/web.git'], {})).toBe('runner_not_configured')
+    }
+    // Nothing was claimed, so nothing was failed, and no sandbox was made.
+    expect(JSON.parse((await cli(dir, ['read', String(task), '--json'])).stdout).task.state).toBe('ready')
+    expect((await import('node:fs')).existsSync(join(dir, 'sdk.log'))).toBe(false)
   })
 
   it('vercel: a --ready --loop worker with --label and --by takes only the ready tasks that carry it, made by that actor', async () => {

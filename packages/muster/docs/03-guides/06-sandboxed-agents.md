@@ -47,7 +47,8 @@ how the task ended. Ctrl-C does the same, sooner. A dropped connection is
 waited out, not taken for an exit. `--detach` starts the run and returns,
 and the sandbox is left to its timeout, holding the agent's token in its
 policy until then. On Cloudflare the command returns once the run starts,
-unless it is a `--push` run, which is waited on in the same way.
+unless it is a `--push` run or a task of a `--ready --loop` worker, which
+are waited on in the same way.
 
 One length of time sets the rest. `--timeout`, 30 minutes when you don't
 pass one, is how long the agent works on the task. The sandbox lives ten
@@ -61,19 +62,26 @@ minutes past the sandbox, and an attached run revokes it as soon as it ends.
 
 ```bash
 mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo https://github.com/acme/web.git --push
+mu run --ready work/ --loop --runner cloudflare --agent claude --as worker-2 --repo https://github.com/acme/web.git --push
 ```
 
-On Vercel, `--ready` with `--loop` is a worker that stays on this machine.
+On either cloud, `--ready` with `--loop` is a worker that stays on this machine.
 It claims the next ready task as `worker-1`, under a claim token made for
 that task, and runs it as above in a sandbox of its own, which takes the same
 claim: no other worker can have it, and each task gets its own clone, its own
 token and, with `--push`, its own pull request. Then the next, until nothing
 is ready for `--wait` (ten minutes by default). Start as many as you want
 running at once; the swarm template starts one per agent. The sandbox holds
-the claim token for its one task.
+the claim token for its one task. On Cloudflare each task's container is
+waited on and stopped once its agent exits, before the next task is claimed,
+so the Worker keeps none of them for its 15 minutes. A task whose run
+doesn't start, or ends without saying how, is given back, ready, and its
+token revoked. A worker stops at once when the runner refuses a start, and
+after three failures in a row otherwise (`runner_start_failed`). The Cloudflare worker
+is covered by tests against a stand-in Worker only; it has not been run live.
 
-Without `--loop`, `--ready` is one sandbox that takes task after task itself,
-as on Cloudflare, sharing one checkout, so it can't `--push`.
+Without `--loop`, `--ready` is one sandbox, or one container, that takes
+task after task itself, sharing one checkout, so it can't `--push`.
 
 `MUSTER_SANDBOX_URL` is the board's address for sandboxes, when this machine
 has the board itself: `mu run` then reads and claims on the board here, and
@@ -185,7 +193,7 @@ reply. Nothing changed, no pull request.
   `--push`, a Cloudflare run is waited on, like a Vercel one, and the
   container is kept for up to 15 minutes after the agent exits for `mu run`
   to read; `mu run` removes it as soon as it has. A Cloudflare run without
-  `--push` still returns once it starts.
+  `--push` still returns once it starts, unless it is a worker's task.
 - Without `--push`, a GitHub App that is set is used to clone a private
   repository, the same way, and nothing is pushed. A public repository the
   App isn't installed on is cloned without it.
