@@ -3,7 +3,8 @@ import { authorized, usable } from './auth.ts'
 import { type BoardProps, type ModelProps, type RepoProps, boardHeaders, modelPasses, repoPasses, repoProps } from './gates.ts'
 
 type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; timeoutMs?: number }
-type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run> }
+type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
+type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance }
 
 /** Where Cloudflare puts the certificate its intercepts present. It exists once an HTTPS intercept is registered. */
 const CA = '/etc/cloudflare/certs/cloudflare-containers-ca.crt'
@@ -18,6 +19,11 @@ const EXIT = '/workspace/.muster-run.exit'
 /** How often the run is checked. Each check keeps the container running, and the idle timeout covers the gap between two. */
 const CHECK_MS = 60_000
 const IDLE_MS = 5 * 60_000
+/**
+ * The container's size when `INSTANCE` names none. Cloudflare's own default, `lite`, has 256 MiB: an agent's CLI
+ * and `mu` run out of memory in it and stall, with nothing failing.
+ */
+const DEFAULT_INSTANCE: Instance = 'standard-1'
 /** The longest a run lasts when it is given no timeout. */
 const DEFAULT_TIMEOUT_MS = 60 * 60_000
 
@@ -77,7 +83,7 @@ export class Run extends DurableObject<Env> {
     await container.interceptOutboundHttps(input.board.host, this.ctx.exports.BoardGate({ props: input.board }))
     if (input.model) await container.interceptOutboundHttps(input.model.host, this.ctx.exports.ModelGate({ props: input.model }))
     if (repo) await container.interceptOutboundHttps(repo.host, this.ctx.exports.RepoGate({ props: repo }))
-    container.start({ image: container.images.base, enableInternet: false, entrypoint: ['sleep', 'infinity'], env: { ...BASE_ENV, ...input.env } })
+    container.start({ image: container.images.base, instance: this.env.INSTANCE || DEFAULT_INSTANCE, enableInternet: false, entrypoint: ['sleep', 'infinity'], env: { ...BASE_ENV, ...input.env } })
     await container.setInactivityTimeout(IDLE_MS)
     await this.ctx.storage.put('deadline', Date.now() + (input.timeoutMs ?? DEFAULT_TIMEOUT_MS))
     await this.ctx.storage.setAlarm(Date.now() + CHECK_MS)

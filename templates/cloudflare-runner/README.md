@@ -4,13 +4,15 @@ A Worker that runs muster agents in Cloudflare containers. muster's
 `cloudflare()` runner asks it to start and stop runs.
 
 > [!WARNING]
-> Deployed and run once, on 24 Nov 2026, with the `durable_object` scheduling
-> policy (in beta at Cloudflare). A Claude Code agent hasn't yet done a task
-> in it from start to end. Needs a Workers Paid account, for Containers.
+> Deployed and run on 24 Nov 2026, with the `durable_object` scheduling policy
+> (in beta at Cloudflare): Claude Code fixed a bug in a private repository in
+> it, from start to end. Needs a Workers Paid account, for Containers.
 
 `wrangler.jsonc` builds the container from this folder's `Dockerfile` and
 binds the `Run` Durable Object as `RUNS`. Set the agent's version in its
-`build_vars`.
+`build_vars`, and the container's size in `vars.INSTANCE`: `standard-1` (half
+a vCPU, 4 GiB) by default. Cloudflare's own default, `lite` (256 MiB), is too
+small for an agent's CLI, which stalls in it without failing.
 
 How it keeps the board's token out of the container: the container starts
 with no internet. The Worker intercepts requests to the board's host, checks
