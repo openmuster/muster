@@ -38,9 +38,11 @@ export function exitCode(text: string): number | null {
 }
 
 /** A stream read to its end or to `max + 1` bytes, whichever comes first; past `max`, `stop` is called once and no more is read. */
-export async function readCapped(stream: ReadableStream<Uint8Array> | null | undefined, max: number, stop: () => void): Promise<Uint8Array> {
+export async function readCapped(stream: ReadableStream<Uint8Array> | null | undefined, max: number, stop: () => void, signal?: AbortSignal): Promise<Uint8Array> {
   if (!stream) return new Uint8Array()
   const reader = stream.getReader()
+  // Aborted, the read waiting on the stream ends at once, with what was read so far.
+  signal?.addEventListener('abort', () => void reader.cancel().catch(() => {}), { once: true })
   const chunks: Uint8Array[] = []
   let size = 0
   try {
@@ -171,4 +173,38 @@ export function agentExited(agentStarted: boolean | undefined, marker: string): 
 /** Whether a run is still going, as start needs before it gives the agent its gates: not stopped, timed out or closed. */
 export function stillGoing(state: { started: boolean; running: boolean; closed: boolean; exitedAt?: number }): boolean {
   return state.started && state.running && !state.closed && state.exitedAt === undefined
+}
+
+/** How long a command is given past its own `timeout` before it is let go of here. */
+export const KILL_GRACE_MS = 10_000
+
+/**
+ * A command's output, read as `readCapped` does, for no longer than `ms` of wall-clock time. `timeout` in the
+ * container kills its command's process group, but a child that left it (setsid, a daemon) can hold the pipe
+ * open for ever: then `stop` is called, the read is given up, and what was read so far comes back.
+ */
+export async function readWithin(stream: ReadableStream<Uint8Array> | null | undefined, max: number, ms: number, stop: () => void): Promise<{ bytes: Uint8Array; timedOut: boolean }> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    stop()
+    controller.abort()
+  }, ms)
+  try {
+    return { bytes: await readCapped(stream, max, stop, controller.signal), timedOut }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** What a promise gives within `ms`, or `fallback` once that has passed: an exit code that never comes is not waited on. */
+export async function within<T, F>(promise: Promise<T>, ms: number, fallback: F): Promise<T | F> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<F>((resolve) => (timer = setTimeout(() => resolve(fallback), ms)))
+  try {
+    return await Promise.race([promise, late])
+  } finally {
+    clearTimeout(timer)
+  }
 }

@@ -1,7 +1,7 @@
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers'
 import { authorized, usable } from './auth.ts'
 import { type BoardProps, type ModelProps, type RepoProps, REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from './gates.ts'
-import { INSTALL_SKIPPED, agentExited, capStream, decide, ended, execRequest, exitCode, installBudget, installSteps, installed, readCapped, stillGoing, timeLeft } from './lifecycle.ts'
+import { INSTALL_SKIPPED, KILL_GRACE_MS, agentExited, capStream, decide, ended, execRequest, exitCode, installBudget, installSteps, installed, readWithin, stillGoing, timeLeft, within } from './lifecycle.ts'
 
 type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; /** The script that installs the repository's dependencies, when asked: muster's own, sent by the CLI. */ install?: string; timeoutMs?: number; attach?: boolean }
 type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
@@ -118,10 +118,10 @@ export class Run extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + CHECK_MS)
     let checkout: Started['checkout']
     try {
-      for (const command of input.setup) await this.run(command, '/workspace', input.env)
+      for (const command of input.setup) await this.run(command, '/workspace', input.env, timeLeft(startedAt, Date.now()))
       if (input.repo) {
         const left = Math.max(1, Math.floor(timeLeft(startedAt, Date.now()) / 1000))
-        await this.run(['timeout', '--kill-after=5', String(left), 'git', 'clone', '--depth', '1', '--', input.repo, 'repo'], '/workspace', input.env)
+        await this.run(['timeout', '--kill-after=5', String(left), 'git', 'clone', '--depth', '1', '--', input.repo, 'repo'], '/workspace', input.env, left * 1000 + KILL_GRACE_MS)
         // Read before anything the agent decides runs, with none of the repository's own git configuration.
         const head = await this.capture(['sh', '-c', 'git rev-parse HEAD && git symbolic-ref --short -q HEAD'], '/workspace/repo', GIT_ENV)
         const [sha, branch] = head.trim().split('\n')
@@ -214,8 +214,8 @@ export class Run extends DurableObject<Env> {
         stderr: 'ignore',
       })
       // Read no further than the limit, whatever the command prints: then it is stopped.
-      const stdout = await readCapped(process.stdout, OUTPUT_MAX, () => process.kill())
-      return { exitCode: await process.exitCode, stdout: new TextDecoder().decode(stdout) }
+      const stdout = await readWithin(process.stdout, OUTPUT_MAX, CALL_MS + KILL_GRACE_MS, () => process.kill())
+      return { exitCode: await within(process.exitCode, KILL_GRACE_MS, null), stdout: new TextDecoder().decode(stdout.bytes) }
     }
   }
 
@@ -338,25 +338,31 @@ export class Run extends DurableObject<Env> {
         ['timeout', '--kill-after=5', String(Math.floor(budget / 1000)), 'sh', '-c', `sh -c "$MUSTER_INSTALL" > ${INSTALL_LOG} 2>&1; code=$?; tail -n 1 ${INSTALL_LOG}; exit $code`],
         { cwd: '/workspace/repo', env: { ...BASE_ENV, ...env, MUSTER_INSTALL: script }, stderr: 'ignore' },
       )
-      const last = await readCapped(process.stdout, OUTPUT_MAX, () => process.kill())
-      return installed(await process.exitCode, new TextDecoder().decode(last))
+      // Bounded here too: something the install left outside `timeout`'s reach can hold its output open.
+      const last = await readWithin(process.stdout, OUTPUT_MAX, budget + KILL_GRACE_MS, () => process.kill())
+      if (last.timedOut) return INSTALL_SKIPPED
+      return installed(await within(process.exitCode, KILL_GRACE_MS, null), new TextDecoder().decode(last.bytes))
     } catch {
       return installed(null, '')
     }
   }
 
   /** Runs one setup command and waits for it: a failed one ends the run, not the agent's start. */
-  private async run(command: string[], cwd: string, env: Record<string, string>): Promise<void> {
-    const process = await this.ctx.container!.exec(command, { cwd, env: { ...BASE_ENV, ...env } })
-    const output = await process.output()
-    if (output.exitCode !== 0) throw new Error(`${command[0]} exited ${output.exitCode}: ${new TextDecoder().decode(output.stderr).slice(-500)}`)
+  private async run(command: string[], cwd: string, env: Record<string, string>, ms: number): Promise<void> {
+    const process = await this.ctx.container!.exec(command, { cwd, env: { ...BASE_ENV, ...env }, stdout: 'ignore' })
+    // Held to `ms` of wall-clock time, whatever the command left holding its output open.
+    const stderr = await readWithin(process.stderr, OUTPUT_MAX, ms, () => process.kill())
+    if (stderr.timedOut) throw new Error(`${command[0]} took longer than ${Math.round(ms / 1000)} seconds`)
+    const code = await within(process.exitCode, KILL_GRACE_MS, null)
+    if (code !== 0) throw new Error(`${command[0]} exited ${code ?? 'without an exit code'}: ${new TextDecoder().decode(stderr.bytes).slice(-500)}`)
   }
 
+  /** A command's output, waited on no longer than `CALL_MS`: what it printed by then. */
   private async capture(command: string[], cwd?: string, env: Record<string, string> = {}): Promise<string> {
     const process = await this.ctx.container!.exec(command, { ...(cwd ? { cwd } : {}), env: { ...BASE_ENV, ...env }, stderr: 'ignore' })
-    const stdout = await readCapped(process.stdout, OUTPUT_MAX, () => process.kill())
-    await process.exitCode
-    return new TextDecoder().decode(stdout)
+    const stdout = await readWithin(process.stdout, OUTPUT_MAX, CALL_MS, () => process.kill())
+    await within(process.exitCode, KILL_GRACE_MS, null)
+    return new TextDecoder().decode(stdout.bytes)
   }
 
   /** Ends the run: why and the agent's exit code go to the Worker's logs (and the tail of its output with LOG_TAIL=1), then the container and this object's state go. */

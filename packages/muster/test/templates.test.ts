@@ -9,7 +9,7 @@ import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
 import { REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
-import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, INSTALL_MIN_MS, INSTALL_MS, START_BUDGET_MS, agentExited, installBudget, installSteps, installed, readCapped, stillGoing, timeLeft } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
+import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, INSTALL_MIN_MS, INSTALL_MS, START_BUDGET_MS, agentExited, installBudget, installSteps, installed, readCapped, readWithin, stillGoing, timeLeft, within } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
 import { boardPolicy } from '../src/runner/policy.ts'
 import { claude } from '../src/runner/agents.ts'
 
@@ -127,6 +127,25 @@ describe('the cloudflare runner lifecycle', () => {
     expect([...(await readCapped(stream([1, 2], [3, 4, 5]), 3, stop))]).toEqual([1, 2, 3, 4])
     expect(stopped).toBe(1)
     expect([...(await readCapped(null, 3, stop))]).toEqual([])
+  })
+
+  it("lets go of a command's output at its deadline, even when something keeps the pipe open for ever", async () => {
+    let stopped = 0
+    // A daemon the install left behind, outside timeout's reach: the stream never ends.
+    const open = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([7])) } })
+    const began = Date.now()
+    const held = await readWithin(open, 10, 30, () => void stopped++)
+    expect(held.timedOut).toBe(true)
+    expect([...held.bytes]).toEqual([7])
+    expect(stopped).toBe(1)
+    expect(Date.now() - began).toBeLessThan(1000)
+    // One that ends in time is read whole, and nothing is stopped.
+    const done = await readWithin(stream([1], [2]), 10, 1000, () => void stopped++)
+    expect(done).toEqual({ bytes: new Uint8Array([1, 2]), timedOut: false })
+    expect(stopped).toBe(1)
+    // An exit code that never comes isn't waited on.
+    expect(await within(new Promise<number>(() => {}), 20, null)).toBeNull()
+    expect(await within(Promise.resolve(3), 1000, null)).toBe(3)
   })
 
   it('passes a file on as a stream, and errors it once it grows past its limit', async () => {
