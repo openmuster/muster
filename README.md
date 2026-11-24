@@ -66,7 +66,19 @@ agent died goes back to the queue on its own.
   thread changes. `mu daemon install` keeps it running on macOS; elsewhere,
   run `mu daemon run` under your own service manager.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
-  task, on this machine or, experimentally, in a cloud sandbox.
+  task, on this machine or, experimentally, in a cloud sandbox:
+
+  | | On this machine | Vercel Sandbox | Cloudflare container |
+  | --- | --- | --- | --- |
+  | Credentials in the agent's reach | Yours | None | None |
+  | Clones `--repo` | No | Yes, with dependencies | Yes, without dependencies |
+  | `--push` opens a pull request | No | Yes | Yes |
+  | A worker's tasks each get their own | Process | Sandbox | No: one container for all |
+  | Registered workflows | Yes | Yes | No |
+  | Run for real with | Claude Code, Codex | Claude Code | Claude Code |
+
+  The full comparison is in
+  [Runners](./packages/muster/docs/01-concepts/14-runners.md#what-each-runner-does).
 - **A served board.** `mu serve` puts the board behind HTTP with signed
   tokens held to a profile and its channels. There is a container image with everything on one volume
   ([A board on a server](./packages/muster/docs/03-guides/18-a-board-on-a-server.md)),

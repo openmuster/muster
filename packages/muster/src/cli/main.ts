@@ -1328,6 +1328,9 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const where = str(parsed.flags, 'runner') ?? 'local'
   // Checked before the board is asked anything: starting a sandbox needs only where the board is.
   if (where !== 'local') return runInCloud(run, parsed, where, agent)
+  // These are about a sandbox: on this machine they would do nothing, so they are refused, not ignored.
+  const cloudOnly = (['repo', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
+  if (cloudOnly) throw misuse(cloudOnly === 'push' ? 'push_unsupported' : 'unknown_flag', `--${cloudOnly} is for a cloud runner, and this run is on this machine.`, 'Add --runner vercel or --runner cloudflare, or leave it out.')
   const me = await run.team.whoami()
   const cwd = resolvePath(str(parsed.flags, 'cwd') ?? process.cwd())
   const worktree = str(parsed.flags, 'worktree')
@@ -1525,10 +1528,11 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const gh = repo ? githubRepo(repo) : null
   const push = on(parsed.flags, 'push')
   if (push) {
-    if (where === 'local') throw misuse('push_unsupported', '--push works with a cloud runner: --runner vercel or cloudflare.')
     if (!gh) throw misuse('invalid_repo', '--push needs --repo with a github.com repository: https://github.com/acme/web.git')
     if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "--push can't --detach: the push happens here, once the agent is done.")
-    if (str(parsed.flags, 'ready') !== undefined) throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
+    if (str(parsed.flags, 'ready') !== undefined) {
+      throw misuse('push_unsupported', where === 'cloudflare' ? "On Cloudflare a worker's tasks share one container and one checkout, so --ready can't --push." : '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
+    }
   }
   // The GitHub App mints each token here, for this repository alone, and none of it enters the sandbox.
   const app = gh ? githubApp(env) : undefined
