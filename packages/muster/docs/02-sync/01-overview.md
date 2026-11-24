@@ -130,7 +130,8 @@ of a platform's labels or assignees, which come in as labels.
 
 Platforms resend what wasn't answered, for a while. Beyond that, the ticker
 asks GitHub and Linear for the issues, pull requests and comments since the
-last event it received, and imports what it missed.
+last event it received, and Slack for each mapped channel's messages and
+thread replies, and imports what it missed.
 
 - **Where it starts** is noted when `mu serve` or the daemon starts, before
   the first webhook, five minutes before the last event received, in case
@@ -146,8 +147,6 @@ last event it received, and imports what it missed.
 - **More changes made at one moment than a read can take** are gone past.
   The daemon logs `skipped   sync <key>: changes made at <time> may not have
   been read`.
-
-Slack has no catch-up yet.
 
 ## Reaching the board
 

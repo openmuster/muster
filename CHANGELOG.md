@@ -43,6 +43,23 @@ versions are affected.
   A state change is put down to the sync (`lin`), since Linear's list doesn't
   say who made it. One start reads up to 500 of each, oldest first; the next
   goes on from there. Covered by tests against a faked Linear API only.
+- Linear sync catches up after downtime, as GitHub's does. When the ticker
+  starts it asks Linear for the issues and comments in the mapped teams
+  updated since the last event it received, and imports what the webhooks
+  missed: new issues, new comments and state changes. What the board already
+  has is not imported twice. Edits and removals made meanwhile are not read.
+  A state change is put down to the sync (`lin`), since Linear's list doesn't
+  say who made it. One start reads up to 500 of each, oldest first; the next
+  goes on from there. Covered by tests against a faked Linear API only.
+- Slack sync catches up after downtime too. The ticker reads each mapped
+  channel's history, oldest first, and the new replies in threads started
+  meanwhile, and imports what the webhooks missed, once. The app's own
+  messages are skipped. A tick makes up to 24 requests and moves every channel
+  on; the next goes on from there. A minute busier than a tick can read is
+  gone past and logged as skipped. Replies in threads started before the
+  downtime are read for up to two threads a channel. Edits and deletes made
+  meanwhile are not read. Covered by tests against a faked Slack API only. See
+  [Slack](./packages/muster/docs/02-sync/04-slack.md#after-downtime).
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,

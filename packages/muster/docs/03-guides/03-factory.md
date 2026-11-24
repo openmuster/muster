@@ -183,8 +183,9 @@ What to know before you rely on it:
 - **"Label only" is an instruction, not a limit.** The router reads text
   strangers wrote. On a served board give it a
   [token](../01-concepts/11-access.md) held to that channel.
-- **Messages sent while the board is down are lost.** There is no catch-up
-  for [Slack](../02-sync/04-slack.md) yet.
+- **Messages sent while the board is down come in late.** When the board
+  starts again it reads what [Slack](../02-sync/04-slack.md) has since, with
+  limits that page gives.
 
 ## Keep people in the loop
 

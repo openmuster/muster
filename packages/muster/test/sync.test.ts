@@ -1106,6 +1106,246 @@ describe('sync: Linear catch-up after downtime', () => {
   })
 })
 
+describe('sync: Slack catch-up after downtime', () => {
+  // The clock starts at 2026-01-01T00:00:00Z, which is Slack ts 1767225600.
+  const T0 = 1767225600
+  const ts = (seconds: number) => `${T0 + seconds}.000100`
+  const us = (ts: string) => Math.round(Number(ts) * 1e6)
+  const slackSync = (time: ReturnType<typeof clock>, channels: Record<string, string> = { C123: 'general' }) => ({ chat: slack({ secret: SECRET, token: 'xoxb', bot: 'B0BOT', channels, now: () => time.now().getTime() }) })
+  const signed = (time: ReturnType<typeof clock>, payload: unknown) => {
+    const body = JSON.stringify(payload)
+    const stamp = String(Math.floor(time.now().getTime() / 1000))
+    return { headers: { 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${sign(SECRET, `v0:${stamp}:${body}`)}` }, body }
+  }
+  const webhook = (time: ReturnType<typeof clock>, id: string, channel: string, user: string, text: string, at: string) => signed(time, { type: 'event_callback', event_id: id, event: { type: 'message', channel, user, text, ts: at } })
+  type Message = Record<string, unknown> & { ts: string }
+  /**
+   * Slack's Web API, faked from what is in each channel: history newest first between two points, left out at
+   * both ends, `pageSize` a page; a thread's first message, then its replies after a point. Every request is kept.
+   */
+  const fakeSlack = (channels: Record<string, Message[]>, threads: Record<string, Message[]> = {}, options: { pageSize?: number; refuse?: () => Response | null } = {}) => {
+    const asked: { method: string; query: URLSearchParams }[] = []
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      const method = url.pathname.split('/').pop()!
+      const query = url.searchParams
+      asked.push({ method, query })
+      const refused = options.refuse?.()
+      if (refused) return refused
+      const after = (at: string, point: string | null) => point === null || us(at) > us(point)
+      const page = (list: Message[]) => {
+        const from = Number(query.get('cursor') ?? 0)
+        const size = options.pageSize ?? 200
+        const more = from + size < list.length
+        return Response.json({ ok: true, messages: list.slice(from, from + size), has_more: more, ...(more ? { response_metadata: { next_cursor: String(from + size) } } : {}) })
+      }
+      if (method === 'conversations.history') {
+        const latest = query.get('latest')
+        return page((channels[query.get('channel')!] ?? []).filter((each) => after(each.ts, query.get('oldest')) && (latest === null || us(each.ts) < us(latest))).sort((a, b) => us(b.ts) - us(a.ts)))
+      }
+      if (method === 'conversations.replies') {
+        const parent = (channels[query.get('channel')!] ?? []).find((each) => each.ts === query.get('ts'))!
+        return page([parent, ...(threads[parent.ts] ?? []).filter((each) => after(each.ts, query.get('oldest')))])
+      }
+      return Response.json({ ok: false, error: 'unknown_method' })
+    }) as typeof fetch
+    return { fetcher, asked }
+  }
+  const read = async (backend: ReturnType<typeof file>, channel = 'general') => {
+    const team = board({ backend })
+    const threads = (await team.readChannel({ channel })).threads
+    return Promise.all(threads.map(async (each) => [each.message.text, each.message.by.principal, (await team.readThread({ id: each.message.id })).replies.map((reply) => [reply.text, reply.by.principal])]))
+  }
+
+  it("imports messages and thread replies posted while down, once; skips the app's own and system messages, and what was before the downtime", async () => {
+    const time = clock()
+    const dir = tempDir()
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: fakeSlack({}).fetcher })
+    await first.syncReceive('chat', webhook(time, 'E1', 'C123', 'U1', 'before the downtime', ts(0)))
+    first.close()
+    time.advance(3_600_000)
+
+    const channel: Message[] = [
+      { ts: ts(-86_400), user: 'U9', text: 'a day old, seen long ago' },
+      { ts: ts(-1000), user: 'U5', text: 'an older thread', thread_ts: ts(-1000), reply_count: 2, latest_reply: ts(900) },
+      // Posted just before the last webhook, and never delivered: Slack's retries take minutes.
+      { ts: ts(-200), user: 'U4', text: 'posted just before the board stopped' },
+      { ts: ts(0), user: 'U1', text: 'before the downtime', thread_ts: ts(0), reply_count: 2, latest_reply: ts(1150) },
+      { ts: ts(1200), user: 'U2', text: 'posted while down', thread_ts: ts(1200), reply_count: 1 },
+      { ts: ts(1300), subtype: 'channel_join', user: 'U3', text: '<@U3> has joined the channel' },
+      { ts: ts(1400), bot_id: 'B0BOT', text: 'posted by the app' },
+    ]
+    const threads: Record<string, Message[]> = {
+      [ts(-1000)]: [{ ts: ts(-900), thread_ts: ts(-1000), user: 'U5', text: 'heard long ago' }, { ts: ts(900), thread_ts: ts(-1000), user: 'U2', text: 'reply in an older thread' }],
+      [ts(0)]: [{ ts: ts(1100), thread_ts: ts(0), user: 'U2', text: 'reply while down' }, { ts: ts(1150), thread_ts: ts(0), bot_id: 'B0BOT', text: 'the app replied' }],
+      [ts(1200)]: [{ ts: ts(1250), thread_ts: ts(1200), user: 'U1', text: 'reply on the new thread' }],
+    }
+    const api = fakeSlack({ C123: channel }, threads, { pageSize: 2 })
+    const second = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: api.fetcher })
+    expect((await second.syncTick()).skipped).toBeUndefined()
+    // Read to the end in one tick, oldest first, from five minutes before the board stopped hearing; the next tick asks nothing.
+    const asked = api.asked.length
+    await second.syncTick()
+    expect(api.asked.length).toBe(asked)
+    const history = api.asked.filter((each) => each.method === 'conversations.history')
+    expect(history[0]!.query.get('latest')).toBe(`${T0 - 300}.000000`)
+    expect(history[1]!.query.get('oldest')).toBe(`${T0 - 301}.999999`)
+    const expected = [
+      ['posted while down', 'chat:user:U2', [['reply on the new thread', 'chat:user:U1']]],
+      ['before the downtime', 'chat:user:U1', [['reply while down', 'chat:user:U2']]],
+      // A thread the board never saw starts from its first message, as GitHub's catch-up does for an issue.
+      // Older threads are read first.
+      ['an older thread', 'chat:user:U5', [['reply in an older thread', 'chat:user:U2']]],
+      ['posted just before the board stopped', 'chat:user:U4', []],
+    ]
+    expect(await read(second)).toEqual(expected)
+    second.close()
+
+    // Read again on the next start: the same messages change nothing.
+    time.advance(60_000)
+    const third = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: fakeSlack({ C123: channel }, threads).fetcher })
+    await third.syncTick()
+    expect(await read(third)).toEqual(expected)
+    third.close()
+  })
+
+  it('a busy channel is read over several ticks, oldest first: each goes on from where the last stopped, and nothing is skipped', async () => {
+    const time = clock()
+    const dir = tempDir()
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: fakeSlack({}).fetcher })
+    await first.syncReceive('chat', webhook(time, 'E1', 'C123', 'U1', 'before the downtime', ts(0)))
+    first.close()
+    time.advance(3_600_000)
+    // A message every two seconds while down, and Slack giving 20 a page: more than a tick's requests.
+    const busy: Message[] = Array.from({ length: 1800 }, (_, n) => ({ ts: ts(1 + n * 2), user: 'U2', text: `busy ${n}` }))
+    const api = fakeSlack({ C123: busy }, {}, { pageSize: 20 })
+    const backend = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: api.fetcher })
+    const froms: number[] = []
+    for (let tick = 0; tick < 30; tick++) {
+      const before = api.asked.length
+      expect((await backend.syncTick()).skipped).toBeUndefined()
+      const asked = api.asked.slice(before)
+      if (asked.length === 0) break
+      expect(asked.length).toBeLessThanOrEqual(25)
+      froms.push(Number(asked[1]!.query.get('oldest')))
+      // A read cut short goes on a minute later.
+      time.advance(60_000)
+    }
+    expect(froms.length).toBeGreaterThan(1)
+    expect(froms.every((from, n) => n === 0 || from > froms[n - 1]!)).toBe(true)
+    const texts: string[] = []
+    for (let after = 0; ; ) {
+      const page = await board({ backend }).events({ after, limit: 1000 })
+      if (page.events.length === 0) break
+      texts.push(...page.events.filter((event) => event.type === 'message.posted').map((event) => String((event.data as { text: string }).text)))
+      after = page.cursor
+    }
+    expect(texts).toHaveLength(1801)
+    expect(new Set(texts).size).toBe(1801)
+    // Oldest first.
+    expect(texts.slice(1, 4)).toEqual(['busy 0', 'busy 1', 'busy 2'])
+    backend.close()
+  })
+
+  it('a moment busier than a tick can read is gone past and said to be, never read forever', async () => {
+    const time = clock()
+    const dir = tempDir()
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: fakeSlack({}).fetcher })
+    await first.syncReceive('chat', webhook(time, 'E1', 'C123', 'U1', 'before the downtime', ts(0)))
+    first.close()
+    time.advance(3_600_000)
+    // A thousand messages within one second, then one more later.
+    const flood: Message[] = Array.from({ length: 1000 }, (_, n) => ({ ts: `${T0 + 600}.${String(n).padStart(6, '0')}`, user: 'U2', text: `flood ${n}` }))
+    const api = fakeSlack({ C123: [...flood, { ts: ts(1800), user: 'U3', text: 'after the flood' }] }, {}, { pageSize: 20 })
+    const backend = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time), fetch: api.fetcher })
+    const skipped: string[] = []
+    let ticks = 0
+    for (; ticks < 30; ticks++) {
+      const before = api.asked.length
+      skipped.push(...((await backend.syncTick()).skipped ?? []))
+      if (api.asked.length === before) break
+      time.advance(60_000)
+    }
+    expect(ticks).toBeLessThan(30)
+    // Said once, from the start of the shortest stretch, a minute at most, that held the flood (at 00:10:00).
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0]).toMatch(/^chat: changes made at 2026-01-01T00:(09:\d\d|10:00)\.\d{3}Z may not have been read$/)
+    const texts = (await board({ backend }).readChannel({ channel: 'general', limit: 500 })).threads.map((each) => each.message.text)
+    expect(texts).toContain('after the flood')
+    backend.close()
+  })
+
+  it('with many channels mapped, each tick still moves every channel on', async () => {
+    const time = clock()
+    const channels = Object.fromEntries(Array.from({ length: 9 }, (_, n) => [`C${n}`, n === 0 ? 'general' : `other${n}`]))
+    const dir = tempDir()
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: fakeSlack({}).fetcher })
+    await first.syncReceive('chat', webhook(time, 'E1', 'C0', 'U1', 'before the downtime', ts(0)))
+    first.close()
+    time.advance(600_000)
+    // Three requests a channel a tick, and a busy channel: a message every two seconds, 20 a page.
+    const busy: Message[] = Array.from({ length: 300 }, (_, n) => ({ ts: ts(1 + n * 2), user: 'U2', text: `busy ${n}` }))
+    const api = fakeSlack({ C0: busy }, {}, { pageSize: 20 })
+    const backend = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: api.fetcher })
+    let ticks = 0
+    for (; ticks < 30; ticks++) {
+      const before = api.asked.length
+      expect((await backend.syncTick()).skipped).toBeUndefined()
+      if (api.asked.length === before) break
+      time.advance(60_000)
+    }
+    expect(ticks).toBeLessThan(30)
+    expect((await board({ backend }).readChannel({ channel: 'general', limit: 500 })).threads).toHaveLength(301)
+    backend.close()
+  })
+
+  it('a refused read keeps its point: it is asked again from there, though webhooks came in meanwhile', async () => {
+    const time = clock()
+    const channels = { C123: 'general', C456: 'ops' }
+    const dir = tempDir()
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: fakeSlack({}).fetcher })
+    await first.syncReceive('chat', webhook(time, 'E1', 'C123', 'U1', 'before the downtime', ts(0)))
+    first.close()
+
+    // A rate limit is a refusal: nothing more is asked, and not again for five minutes.
+    time.advance(3_600_000)
+    const limited = fakeSlack({}, {}, { refuse: () => new Response('', { status: 429, headers: { 'retry-after': '30' } }) })
+    const second = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: limited.fetcher })
+    await second.syncTick()
+    expect(limited.asked.map((each) => each.query.get('channel'))).toEqual(['C123'])
+    await second.syncReceive('chat', webhook(time, 'E2', 'C123', 'U1', 'after the restart', ts(3700)))
+    time.advance(60_000)
+    await second.syncTick()
+    expect(limited.asked).toHaveLength(1)
+    second.close()
+
+    time.advance(3_600_000)
+    const ok = fakeSlack({ C123: [{ ts: ts(1800), user: 'U2', text: 'posted while down' }] })
+    const third = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: ok.fetcher })
+    await third.syncTick()
+    const windows = (channel: string) => ok.asked.filter((each) => each.query.get('channel') === channel && each.method === 'conversations.history').slice(1, 2).map((each) => each.query.get('oldest'))
+    expect(windows('C123')).toEqual([`${T0 - 301}.999999`])
+    expect(windows('C456')).toEqual([`${T0 - 301}.999999`])
+    expect((await read(third)).map((each) => each[0])).toEqual(['posted while down', 'after the restart', 'before the downtime'])
+    third.close()
+
+    // Slack's "no" with a 200 is a refusal too: the point stays, past the webhook that came in since.
+    time.advance(3_600_000)
+    const refused = fakeSlack({}, {}, { refuse: () => Response.json({ ok: false, error: 'not_in_channel' }) })
+    const fourth = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: refused.fetcher })
+    await fourth.syncTick()
+    const point = refused.asked[0]!.query.get('latest')
+    await fourth.syncReceive('chat', webhook(time, 'E3', 'C123', 'U1', 'heard by webhook', ts(10_900)))
+    fourth.close()
+    time.advance(3_600_000)
+    const again = fakeSlack({})
+    const fifth = file({ dir, principal: 'local:user:ada', now: time.now, sync: slackSync(time, channels), fetch: again.fetcher })
+    await fifth.syncTick()
+    expect(again.asked[0]!.query.get('latest')).toBe(point)
+    fifth.close()
+  })
+})
+
 describe('sync: config and the webhook route', () => {
   it('reads platforms from the operator\'s file, with secrets named by environment variable and never written', () => {
     const dir = tempDir()
