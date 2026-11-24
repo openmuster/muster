@@ -18,6 +18,13 @@ export type Inbound = {
   kind: 'root' | 'reply' | 'labels' | 'edit' | 'delete'
   text?: string
   labels?: Record<string, string>
+  /** Label keys to take off the thread: a property the platform thread no longer has, such as its priority. */
+  unset?: string[]
+  /**
+   * Key prefixes under which the thread says what the platform says (`tag.`, `assignee.`): a key under one
+   * that `labels` doesn't carry is taken off. An event names a prefix only when it carries the whole set.
+   */
+  owns?: string[]
   /**
    * When the platform says it changed, for a `labels` event read on catching up: a label the board has changed
    * since then is newer than it, and is left as it is.
