@@ -32,14 +32,16 @@ Its log is in `~/.config/muster/logs/`.
 ## When it keeps crashing
 
 launchd restarts a crashed daemon after 30 seconds, for ever. muster adds a
-guard of its own. Each start is noted in `~/.config/muster/daemon/<board>.json`
-before the board is opened. A start that ends cleanly is taken off again, and
-a run that stays up two minutes and ticks clears the list.
+guard of its own. Each start is noted in `~/.config/muster/daemon/`, in a
+file named for the board and where it is, before the board is opened. A
+start that ends cleanly is taken off again, and a run that stays up two
+minutes and ticks clears the list.
 
 If the daemon starts five times in ten minutes and none of those runs stayed
-up, the fifth start doesn't run. It writes the reason to its log and exits
-cleanly, so launchd leaves it stopped. It stays stopped, however long you
-wait, until you say otherwise:
+up, the fifth start doesn't open the board. It writes the reason to its log
+and stays up doing nothing, so launchd has nothing to restart. An hour after
+it stopped it tries again, as a first start, so a fault that went away on
+its own costs an hour at most. To try now:
 
 ```bash
 mu daemon status
@@ -47,21 +49,28 @@ mu daemon reset
 ```
 
 ```text
-stopped   since 2026-11-25T09:12:41.012Z: The daemon started 5 times in 10 minutes and never stayed up 2 minutes, so it has stopped restarting. Fix it, then: mu daemon reset
+stopped   since 2026-11-25T09:12:41.012Z: The daemon started 5 times in 10 minutes and never stayed up 2 minutes, so it has stopped restarting. It tries again at 2026-11-25T10:12:41.012Z, or now with mu daemon reset.
 ```
 
-`status` shows how many quick starts it has had, or that it has stopped.
-`mu daemon check` says `daemon_stopped` rather than `no_ticker`. Read the log
-for what failed, fix it, and run `mu daemon reset`: it clears the list and,
-if the service is installed, starts it. `mu daemon install` clears it too.
+`status` shows how many quick starts it has had, or that it has stopped and
+when it tries again. `mu daemon check` says `daemon_stopped` rather than
+`no_ticker`. Read the log for what failed, fix it, and run `mu daemon reset`:
+it clears the list, a stopped daemon starts within a few seconds, and an
+installed service that isn't running is started. `mu daemon install` clears
+it too. `--board`, `--dir` and `--url` pick the board for each of these, as
+they do for `mu daemon run`.
 
 The same applies under systemd or any supervisor that restarts on failure,
 since the guard is in `mu daemon run` itself.
 
-A daemon that starts but can't tick, such as one whose board file can't be
-read, doesn't crash: it logs the error once, then again at 2, 4, 8 failed
-ticks in a row, and waits longer between ticks, up to 30 seconds. It never
-counts as having stayed up.
+Some failures aren't crashes, and never count:
+
+- **A board at a URL that can't be reached yet,** such as at login before the
+  network is up, or while its server restarts. The daemon logs it once, then
+  at 2, 4, 8 tries in a row, and waits up to 30 seconds between tries.
+- **A board that opens but can't tick,** such as one whose file can't be read.
+  The daemon logs the error the same way and waits up to 30 seconds between
+  ticks. It never counts as having stayed up.
 
 ## One per board
 

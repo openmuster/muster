@@ -341,8 +341,8 @@ setup, the model's host held to its inference calls, nothing kept afterwards)
 has not been run for real yet. They were released on that basis.
 
 The restart-storm guard (5 starts in 10 minutes, none up 2 minutes, then the
-daemon stops itself until `mu daemon reset`) is covered by tests only, with
-`launchctl` faked. It has not been run under real launchd.
+daemon stops itself for an hour or until `mu daemon reset`) is covered by
+tests only, with `launchctl` faked. It has not been run under real launchd.
 
 Different from the plan:
 

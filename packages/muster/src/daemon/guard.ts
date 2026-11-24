@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 
@@ -8,16 +9,22 @@ export const RESTART_LIMIT = 5
 export const RESTART_WINDOW = 10 * 60_000
 /** How long a run must stay up, with a tick that worked, for its start not to count. */
 export const STEADY_AFTER = 2 * 60_000
+/** How long a stopped daemon waits before it tries again on its own, as a first start. */
+export const STOPPED_FOR = 60 * 60_000
 
 export type Parked = { at: string; why: string }
 /** What the guard keeps for a board: when each recent start was, and whether it has stopped restarting. */
 export type GuardRecord = { starts: number[]; parked?: Parked }
 
 /**
- * Where the guard keeps its record: beside the daemon's config, named for the board like its log and its
- * LaunchAgent, so it can be read before the board is opened. Opening the board is one of the things that fails.
+ * Where the guard keeps its record: beside the daemon's config, named for the board and where it is (its
+ * file, or its URL), so two boards of one name in different folders never share one. It is worked out
+ * without opening the board, since opening the board is one of the things that fails.
  */
-export const guardPath = (board: string) => join(configDir(), 'daemon', `${board}.json`)
+export const guardPath = (name: string, where: string) => join(configDir(), 'daemon', `${name}-${createHash('sha256').update(where).digest('hex').slice(0, 16)}.json`)
+
+/** When a stopped daemon tries again on its own. */
+export const retryAt = (parked: Parked) => new Date(Date.parse(parked.at) + STOPPED_FOR).toISOString()
 
 export function readGuard(path: string): GuardRecord {
   try {
@@ -28,23 +35,27 @@ export function readGuard(path: string): GuardRecord {
   }
 }
 
+/** Written whole or not at all: a crash halfway through never leaves a record that can't be read. */
 function writeGuard(path: string, record: GuardRecord) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  writeFileSync(path, JSON.stringify(record), { mode: 0o600 })
-  chmodSync(path, 0o600)
+  const temp = `${path}.${process.pid}.tmp`
+  writeFileSync(temp, JSON.stringify(record), { mode: 0o600 })
+  chmodSync(temp, 0o600)
+  renameSync(temp, path)
 }
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} minutes`
 
 /**
  * Notes a start. Returns why the daemon must not run when it has stopped restarting, now or before:
- * the starts in the window, this one included, reached the limit and none of them stayed up. Nothing
- * is timed: the record is read and compared with the clock when the daemon starts.
+ * the starts in the window, this one included, reached the limit and none of them stayed up. A stop
+ * lasts `STOPPED_FOR`; after that the start is let through and counts as the first. Nothing is timed:
+ * the record is read and compared with the clock.
  */
 export function begin(path: string, now: number): Parked | null {
   const record = readGuard(path)
-  if (record.parked) return record.parked
-  const starts = [...record.starts.filter((at) => now - at < RESTART_WINDOW && at <= now), now]
+  if (record.parked && now - Date.parse(record.parked.at) < STOPPED_FOR) return record.parked
+  const starts = [...(record.parked ? [] : record.starts.filter((at) => now - at < RESTART_WINDOW && at <= now)), now]
   if (starts.length < RESTART_LIMIT) {
     writeGuard(path, { starts })
     return null

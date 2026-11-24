@@ -112,7 +112,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
 | `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
 | `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
-| `daemon_stopped` | The daemon crashed on start too often and stopped restarting. Fix what its log says, then `mu daemon reset` |
+| `daemon_stopped` | The daemon crashed on start too often and stopped restarting. It tries again after an hour; fix what its log says, then `mu daemon reset` to try now |
 | `allow_host_required` | `mu serve --host` beyond this machine needs `--allow-host`, or `MUSTER_ALLOW_HOSTS` |
 | `wake_failed` | The watcher ran its command five times and it failed each time. Its log says why |
 | `hook_failed` | `mu daemon check` sent a signed ping to an outgoing webhook, and nothing answered or the receiver refused it. `data.status` is the HTTP status, or null |

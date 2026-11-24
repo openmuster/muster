@@ -106,6 +106,8 @@ export type DaemonOptions = {
    * `mu daemon run` uses it to forget its recent starts: a run that stays up was not part of a storm.
    */
   steady?: { after: number; then: () => void }
+  /** Waits between ticks, until the time is up or the daemon is told to stop. Faked in tests. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 /**
@@ -153,6 +155,18 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
   const workflows: Workflows | undefined = options.workflows ? { list: options.workflows, deps: { spawn: options.deps?.spawnWorker ?? spawnWorker, now: deps.now, runs: openRuns() } } : undefined
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(done, ms)
+        function done() {
+          clearTimeout(timer)
+          options.stop.removeEventListener('abort', done)
+          resolve()
+        }
+        options.stop.addEventListener('abort', done)
+      }))
   const began = deps.now()
   let steadied = !options.steady
   // Ticks that failed in a row, and the last error said: the same error is logged once, then at 2, 4, 8... in a row.
@@ -193,15 +207,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
         said = message
       }
       const interval = options.interval ?? 1000
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(done, failing ? Math.min(FAILING_PAUSE, Math.max(interval, interval * 2 ** failing)) : interval)
-        function done() {
-          clearTimeout(timer)
-          options.stop.removeEventListener('abort', done)
-          resolve()
-        }
-        options.stop.addEventListener('abort', done)
-      })
+      await sleep(failing ? Math.min(FAILING_PAUSE, Math.max(interval, interval * 2 ** failing)) : interval)
     }
     return 'stopped'
   } finally {

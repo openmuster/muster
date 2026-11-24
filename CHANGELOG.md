@@ -9,11 +9,12 @@ versions are affected.
 
 - The daemon stops crash-looping. If `mu daemon run` starts five times in ten
   minutes and none of those runs stayed up two minutes, the fifth start writes
-  why to its log and exits cleanly, so launchd (or systemd) leaves it stopped.
+  why to its log and stays up doing nothing, so launchd (or systemd) has
+  nothing to restart. An hour later it tries again as a first start.
   `mu daemon status` shows it, `mu daemon check` says `daemon_stopped`, and
-  `mu daemon reset` clears it and starts the service again. Installing again
-  clears it too. A clean stop never counts, and a run that stays up clears the
-  count.
+  `mu daemon reset` clears it so it starts now. Installing again clears it
+  too. A clean stop never counts, a run that stays up clears the count, and a
+  board at a URL that can't be reached yet is waited for, not counted.
 - A watcher whose command keeps failing is slowed. After more failures in a
   row than one event is tried, each failure doubles the wait before its next
   run, up to ten minutes, and the daemon logs `slowed`. One run that works

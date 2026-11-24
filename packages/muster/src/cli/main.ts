@@ -10,7 +10,8 @@ import { processStart } from '../process.ts'
 import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
-import { loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { FAILING_PAUSE, loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
+import { boardPath } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
@@ -72,7 +73,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
  * Writes something a watcher's filter matches and waits for a reply: proof that the daemon is running,
  * the filter matches, the gate lets it through, and the command it runs wakes something that answers.
  */
-async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string): Promise<number> {
+async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string, guardAt: string): Promise<number> {
   const wanted = parsed.positionals[1]
   if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher or outgoing webhook: mu daemon check <name>.')
   const config = loadDaemonConfig(run.io.env)
@@ -101,8 +102,8 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
     const free = takeLock(lock)
     if (free) {
       free.release()
-      const { parked } = guard.readGuard(guard.guardPath(run.io.env.MUSTER_BOARD ?? 'main'))
-      if (parked) throw new Failure('daemon_stopped', parked.why, { hint: `Stopped since ${parked.at}. Its log says what failed: ${join(configDir(), 'logs')}.`, next: ['mu daemon reset'] })
+      const { parked } = guard.readGuard(guardAt)
+      if (parked) throw new Failure('daemon_stopped', parked.why, { hint: `Stopped since ${parked.at}; it tries again at ${guard.retryAt(parked)}. Its log says what failed: ${join(configDir(), 'logs')}.`, next: ['mu daemon reset'] })
       throw new Failure('no_ticker', 'Nothing is running the watchers for this board.', { next: ['mu daemon run', 'mu daemon install'] })
     }
   }
@@ -981,12 +982,16 @@ const commands: Record<string, Command> = {
   daemon: {
     spec: { value: ['in', 'timeout'], many: ['env'] },
     async run(run, parsed) {
-      const me = await run.team.whoami()
-      const name = run.io.env.MUSTER_BOARD ?? 'main'
+      const { name, path: guardAt } = guardOf(parsed.flags, run.io.env)
       const verb = parsed.positionals[0] ?? 'status'
-      const lock = `${me.where}.tick.lock`
-      if (verb === 'check') return checkWatcher(run, parsed, me.mode, lock)
+      if (verb === 'check') {
+        const me = await run.team.whoami()
+        return checkWatcher(run, parsed, me.mode, `${me.where}.tick.lock`, guardAt)
+      }
       if (verb === 'run') {
+        const me = await reach(run)
+        if (!me) return 0
+        const lock = `${me.where}.tick.lock`
         let watchers
         let hooks
         let workflows
@@ -1007,7 +1012,7 @@ const commands: Record<string, Command> = {
         if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
         if (workflows.length) run.io.out(`workflows ${workflows.length}`)
         // A run that stays up, and ticks, clears the restart guard's count: the starts before it were not a storm.
-        const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guard.guardPath(name)) }
+        const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guardAt) }
         const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
@@ -1019,13 +1024,15 @@ const commands: Record<string, Command> = {
         // launchd starts it with almost no environment: it needs a PATH to find agents and mu, and which board and config.
         const env: Record<string, string> = { PATH: run.io.env.PATH ?? '/usr/bin:/bin' }
         for (const key of ['MUSTER_BOARD', 'MUSTER_CONFIG']) if (run.io.env[key]) env[key] = run.io.env[key]!
+        // A board named with --board is the one the service runs, and the one its restart guard is kept for.
+        if (str(parsed.flags, 'board') !== undefined) env.MUSTER_BOARD = name
         // What your sync and watchers need, by name: its value now is written into the file, which only you can read.
         for (const key of list(parsed.flags, 'env')) {
           if (run.io.env[key] === undefined) throw misuse('missing_env', `${key} isn't set, so there is nothing to give the daemon.`)
           env[key] = run.io.env[key]!
         }
         // Installing again is trying again: a daemon the restart guard stopped starts afresh.
-        guard.reset(guard.guardPath(name))
+        guard.reset(guardAt)
         const path = launchd.install({ board: name, program, ...(run.io.env.MUSTER_DIR ? { dir: run.io.env.MUSTER_DIR } : {}), env, log, home: run.io.env.HOME ?? homedir() })
         return print(run, { installed: path, log }, () => [`installed  ${path}`, `log        ${log}`, 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
       }
@@ -1034,7 +1041,7 @@ const commands: Record<string, Command> = {
         return print(run, removed, () => (removed.wasLoaded ? `removed  ${removed.path}` : 'not installed'))
       }
       if (verb === 'reset') {
-        const parked = guard.reset(guard.guardPath(name))
+        const parked = guard.reset(guardAt)
         const installed = launchd.loaded(name)
         if (installed) launchd.start(name)
         return print(run, { reset: parked !== null, started: installed }, () =>
@@ -1046,14 +1053,14 @@ const commands: Record<string, Command> = {
       }
       if (verb === 'status') {
         // A stopped daemon is said first: it is the line that matters most.
-        const kept = guard.readGuard(guard.guardPath(name))
+        const kept = guard.readGuard(guardAt)
         const recent = kept.starts.filter((at) => run.now() - at < guard.RESTART_WINDOW).length
         const { watchers, hooks } = loadDaemonConfig(run.io.env)
         const running = launchd.loaded(name)
-        return print(run, { installed: running, parked: kept.parked ?? null, starts: recent, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
+        return print(run, { installed: running, parked: kept.parked ? { ...kept.parked, retry: guard.retryAt(kept.parked) } : null, starts: recent, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
           [
             `service   ${running ? 'loaded' : 'not installed'}`,
-            kept.parked ? `stopped   since ${kept.parked.at}: ${kept.parked.why} Fix it, then: mu daemon reset` : `restarts  ${recent} quick starts in ${guard.RESTART_WINDOW / 60_000} minutes; it stops at ${guard.RESTART_LIMIT}`,
+            kept.parked ? `stopped   since ${kept.parked.at}: ${kept.parked.why} It tries again at ${guard.retryAt(kept.parked)}, or now with mu daemon reset.` : `restarts  ${recent} quick starts in ${guard.RESTART_WINDOW / 60_000} minutes; it stops at ${guard.RESTART_LIMIT}`,
             `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
             `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
           ].join('\n'),
@@ -1875,14 +1882,22 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     // The restart guard counts each start of the daemon before anything that can fail is opened: the
     // board, the sync config. A start that ends cleanly is taken off again; one that crashed stays counted.
     if (name === 'daemon' && parsed.positionals[0] === 'run') {
-      const path = guard.guardPath(io.env.MUSTER_BOARD ?? 'main')
-      const at = Date.now()
-      const parked = guard.begin(path, at)
+      const { path } = guardOf(parsed.flags, io.env)
+      let at = Date.now()
+      let parked = guard.begin(path, at)
       if (parked) {
+        // Stopped, it stays up doing nothing, so the service manager has nothing to restart. It reads its
+        // record again now and then: an hour on, or once someone runs mu daemon reset, it starts afresh.
         io.err(`error: ${parked.why}`)
         io.err(`  Stopped since ${parked.at}. What made it fail is earlier in this log.`)
-        io.err('  Fix it, then: mu daemon reset')
-        return 0
+        io.err(`  It tries again at ${guard.retryAt(parked)}. Fix it, then, to try now: mu daemon reset`)
+        while (parked) {
+          await sleep(GUARD_POLL, io.stop)
+          if (io.stop.aborted) return 0
+          at = Date.now()
+          parked = guard.begin(path, at)
+        }
+        io.err('trying again')
       }
       const code = await dispatch(name, command, parsed, io, json)
       if (code === 0) guard.ended(path, at)
@@ -1891,6 +1906,42 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     return await dispatch(name, command, parsed, io, json)
   } catch (error) {
     return fail(io, json, error)
+  }
+}
+
+/** How often a stopped daemon reads its record again, to see whether it may start. */
+const GUARD_POLL = 2000
+
+/**
+ * The board the daemon's restart guard is kept for: from --board, --dir and --url as the board itself is
+ * opened, and worked out without opening it.
+ */
+function guardOf(flags: Flags, env: NodeJS.ProcessEnv): { name: string; path: string } {
+  const name = str(flags, 'board') ?? env.MUSTER_BOARD ?? 'main'
+  const url = str(flags, 'url') ?? env.MUSTER_URL
+  const dir = str(flags, 'dir') ?? env.MUSTER_DIR
+  return { name, path: guard.guardPath(name, url ?? boardPath({ ...(dir ? { dir } : {}), name })) }
+}
+
+/** Failures that mean the board is out of reach for now, not that anything is wrong with this daemon. */
+const UNREACHABLE = new Set(['network_error', 'bad_answer'])
+
+/**
+ * Who the daemon is on its board. A board at a URL that can't be reached yet (the network is still
+ * coming up, the server is restarting) is waited for, as a tick that fails is, never taken for a crash.
+ * Returns null when stopped while waiting.
+ */
+async function reach(run: Run): Promise<Awaited<ReturnType<Board['whoami']>> | null> {
+  for (let failing = 1; ; failing++) {
+    try {
+      return await run.team.whoami()
+    } catch (error) {
+      if (!UNREACHABLE.has((error as Failure).reason)) throw error
+      if (failing === 1) run.io.err(`error     ${(error as Error).message} Trying again.`)
+      else if ((failing & (failing - 1)) === 0) run.io.err(`error     ${(error as Error).message}  (${failing} tries in a row)`)
+      await sleep(Math.min(FAILING_PAUSE, 1000 * 2 ** failing), run.io.stop)
+      if (run.io.stop.aborted) return null
+    }
   }
 }
 
