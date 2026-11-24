@@ -46,7 +46,8 @@ sandbox to exit, then closes the sandbox's way out and removes it, and says
 how the task ended. Ctrl-C does the same, sooner. A dropped connection is
 waited out, not taken for an exit. `--detach` starts the run and returns,
 and the sandbox is left to its timeout, holding the agent's token in its
-policy until then. On Cloudflare the command always returns once it starts.
+policy until then. On Cloudflare the command returns once the run starts,
+unless it is a `--push` run, which is waited on in the same way.
 
 One length of time sets the rest. `--timeout`, 30 minutes when you don't
 pass one, is how long the agent works on the task. The sandbox lives ten

@@ -57,6 +57,13 @@ versions are affected.
 
 ### Fixed
 
+- `mu run` on this machine refused nothing of what is only for a sandbox:
+  `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
+  They are now refused before any agent starts.
+- On Cloudflare, `mu run --ready --loop --push` was refused with a message
+  that asked for the `--loop` it had. It now says why: a Cloudflare worker's
+  tasks share one container and one checkout.
+
 - The Cloudflare runner template now runs. It was written from documentation
   and had never been deployed. On its first deploy:
   - its container stopped as soon as the Worker went idle;

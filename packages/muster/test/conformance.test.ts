@@ -216,6 +216,18 @@ export const Sandbox = { async create(options) {
     return { GITHUB_APP_ID: '123', GITHUB_APP_KEY_FILE: file }
   }
 
+  it('local: the flags that are about a sandbox are refused on this machine, before any agent starts', async () => {
+    const dir = tempDir()
+    const marker = join(dir, 'started')
+    const reasonOf = async (...args: string[]) => JSON.parse((await cli(dir, ['run', '12', '--json', ...args, '--', 'sh', '-c', `touch ${marker}`], { env: board })).stderr).error.reason
+    expect(await reasonOf('--push')).toBe('push_unsupported')
+    expect(await reasonOf('--repo', 'https://github.com/acme/web.git')).toBe('unknown_flag')
+    expect(await reasonOf('--detach')).toBe('unknown_flag')
+    expect(await reasonOf('--no-install')).toBe('unknown_flag')
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('vercel: --push is refused where it can\'t work, before anything starts', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir)
@@ -223,6 +235,9 @@ export const Sandbox = { async create(options) {
     const reasonOf = async (args: string[], env: Record<string, string> = appEnv()) => JSON.parse((await cli(dir, ['run', '12', '--agent', 'claude', '--push', '--json', ...args], { env: { ...board, ...sdk.env, ...env, MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })).stderr).error.reason
     expect(await reasonOf(['--runner', 'cloudflare'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'cloudflare', ...repo, '--detach'])).toBe('push_unsupported')
+    // A Cloudflare worker is one container for all its tasks: there is no task's own checkout to push from.
+    const worker = await cli(dir, ['run', '--ready', 'work/', '--loop', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'w', '--push', '--json', ...repo], { env: { ...board, ...appEnv(), MUSTER_CF_WORKER: 'https://w.example', MUSTER_CF_SECRET: 's' } })
+    expect(JSON.parse(worker.stderr).error).toMatchObject({ reason: 'push_unsupported', message: expect.stringContaining('one container') })
     expect(await reasonOf(['--runner', 'vercel'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', '--repo', 'https://gitlab.com/acme/web.git'])).toBe('invalid_repo')
     expect(await reasonOf(['--runner', 'vercel', ...repo, '--detach'])).toBe('push_unsupported')
