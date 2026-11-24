@@ -421,6 +421,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         // The Worker enforces this itself: the board's host with these routes, and the token it adds.
         board: { host: new URL(request.board.url).host, rules: networkPolicy.allow[new URL(request.board.url).host], token: request.board.token },
         ...(request.repo ? { repo: request.repo } : {}),
+        // Added by the Worker to the repository's clone routes while it clones, then that host is closed: never in the container.
+        ...(request.repo && request.github ? { repoAuth: `Basic ${Buffer.from(`x-access-token:${request.github.token}`).toString('base64')}` } : {}),
         setup: request.setup ?? [],
         // The Worker adds these to requests for the model's host, as it adds the board's token.
         ...(request.model && request.agent.model ? { model: { host: request.agent.model.host, paths: request.agent.model.paths, headers: request.agent.model.headers(request.model.key) } } : {}),

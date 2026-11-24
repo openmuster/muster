@@ -4,17 +4,27 @@ A Worker that runs muster agents in Cloudflare containers. muster's
 `cloudflare()` runner asks it to start and stop runs.
 
 > [!WARNING]
-> This template has not been deployed or run. It is written against
-> Cloudflare's Containers documentation (outbound intercepts,
-> `enableInternet: false`) and needs checking against the current API before
-> use. It also needs a `wrangler.jsonc` with a container built from this
-> folder's `Dockerfile` and a Durable Object binding named `RUNS` for the
-> `Run` class.
+> Deployed and run once, on 24 Nov 2026, with the `durable_object` scheduling
+> policy (in beta at Cloudflare). A Claude Code agent hasn't yet done a task
+> in it from start to end. Needs a Workers Paid account, for Containers.
+
+`wrangler.jsonc` builds the container from this folder's `Dockerfile` and
+binds the `Run` Durable Object as `RUNS`. Set the agent's version in its
+`build_vars`.
 
 How it keeps the board's token out of the container: the container starts
 with no internet. The Worker intercepts requests to the board's host, checks
 each against the rules muster sent (the board's own routes, by method), adds
 the token, and forwards it. The container's environment holds a placeholder.
+The model's host gets the same treatment, with the key added only to the calls
+that ask the model. With `--repo`, the repository's host is opened only for
+that repository's clone routes while it is cloned, with a private one's read
+token added there, then closed before the agent starts.
+
+Each run is a Durable Object. It checks the run every minute, which keeps the
+container alive, and removes the container when the agent exits or the run's
+time is up. The tail of the agent's output goes to the Worker's logs
+(`wrangler tail`).
 
 ```bash
 npx wrangler secret put RUNNER_SECRET    # what cloudflare({ secret }) sends: 16 characters or more

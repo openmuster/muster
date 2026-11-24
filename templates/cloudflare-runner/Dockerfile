@@ -19,3 +19,6 @@ RUN test -n "$AGENT_VERSION" || { echo "pass --build-arg AGENT_VERSION=<version>
  && npm install --global "${AGENT_PACKAGE}@${AGENT_VERSION}"
 
 WORKDIR /workspace
+
+# The Worker passes its own entrypoint; this keeps the container up when it is started some other way.
+CMD ["sleep", "infinity"]
