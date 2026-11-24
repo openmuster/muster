@@ -1511,6 +1511,8 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
   let quietSince = Date.now()
   let failed = 0
   let worked = 0
+  // Runs that failed to start, or were lost, in a row: each waits longer, and a few end the worker, as the next would likely fail too.
+  let streak = 0
   while (!run.io.stop.aborted) {
     // One token per task: what the sandbox holds settles that task and no other.
     const claimToken = randomBytes(32).toString('base64url')
@@ -1525,13 +1527,27 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
       await sleep(Math.min(5000, idle), run.io.stop)
       continue
     }
+    let unstarted: (Error & { worker?: 'retry' | 'stop' }) | undefined
     const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile } }, where, agent, { claimToken }).catch((error: unknown) => {
-      run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
+      if (error instanceof Error && 'worker' in error) unstarted = error as Error & { worker: 'retry' | 'stop' }
+      else run.io.err(`failed   #${claimed}  ${error instanceof Error ? error.message : String(error)}`)
       return 1
     })
+    quietSince = Date.now()
+    if (unstarted) {
+      // Its claim was given back: the task is ready again for whoever can start it.
+      streak += 1
+      if (unstarted.worker === 'stop' || streak >= START_TRIES) {
+        if (unstarted instanceof Failure) throw unstarted
+        throw new Failure('runner_start_failed', `#${claimed} couldn't be run, so this worker stopped: ${unstarted.message}. Its claim was given back.`, { hint: unstarted.worker === 'stop' ? 'Check the runner\'s settings, such as MUSTER_CF_SECRET, before starting it again.' : 'Try again later.' })
+      }
+      run.io.err(`not done  #${claimed}  ${unstarted.message}; trying again`)
+      await sleep(Math.min(1000 * 2 ** (streak - 1), 30_000), run.io.stop)
+      continue
+    }
+    streak = 0
     worked += 1
     if (code !== 0) failed += 1
-    quietSince = Date.now()
   }
   if (run.io.stop.aborted) return stopCode(run.io.stop)
   if (!run.json) run.io.out(`nothing more is ready: worked ${worked} ${worked === 1 ? 'task' : 'tasks'}${failed ? `, ${failed} of them not cleanly` : ''}`)
@@ -1591,13 +1607,32 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   }
   const { repo, gh, push, app } = repoAndPush(parsed, env)
   const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
+  // The token made for this run, once it is, and what undoes a start that didn't happen: that token goes, and a
+  // claim a worker made for this task is given back, so the task is ready again and burns no attempt.
+  let made: string | undefined
+  const claimed = held.claimToken ? Number(parsed.positionals[0]) : 0
+  const giveBack = async () => {
+    if (claimed) await run.team.as(named!).taskRelease({ id: claimed, token: held.claimToken }).catch(() => {})
+  }
+  const undo = async () => {
+    if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
+    made = undefined
+    await giveBack()
+  }
+  const starting = <T>(step: Promise<T>): Promise<T> => step.catch(async (error: unknown) => {
+    await undo()
+    throw startFailed(error)
+  })
   // To clone: read only, and only while Vercel clones. A public repository the App isn't on is cloned without one.
   let cloneToken: string | undefined
   if (app && gh) {
     try {
       cloneToken = (await installationToken(app, gh, { contents: 'read' }, githubApi)).token
     } catch (error) {
-      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) throw error
+      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) {
+        await undo()
+        throw startFailed(error)
+      }
     }
   }
   const runner = await cloudRunner(where, env)
@@ -1619,15 +1654,18 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   // A token for this run alone: this agent's name, the task's own channel, gone soon after the run should be,
   // and what it writes stays on the board. It is made by the board, from your token, and can make no others.
   let token = given
-  let made: string | undefined
   if (token === undefined) {
-    const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
-    const minted = await run.team.backend.tokens.create({
-      profile: named!,
-      can: { [channel]: ['read', 'post', 'react', 'label'] },
-      ttl: (lifetime ?? 30 * 60) + 10 * 60,
-      noSync: true,
-    })
+    const minted = await starting(
+      (async () => {
+        const channel = ready ?? (await run.team.readThread({ id: task })).message.channel
+        return run.team.backend.tokens.create({
+          profile: named!,
+          can: { [channel]: ['read', 'post', 'react', 'label'] },
+          ttl: (lifetime ?? 30 * 60) + 10 * 60,
+          noSync: true,
+        })
+      })(),
+    )
     token = minted.token
     made = minted.record.id
   }
@@ -1653,7 +1691,12 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   ]
   // The agent's small, clean environment must still hold what the sandbox set for it and what its model needs.
   const passed = [...SANDBOX_ENV, ...Object.keys(agent.model?.env('') ?? {})]
-  const started = await runner.start({
+  // Stopped before it started: nothing is started, and the claim goes back.
+  if (run.io.stop.aborted) {
+    await undo()
+    return stopCode(run.io.stop)
+  }
+  const started = await starting(runner.start({
     task,
     agent: { ...agent, command: () => ({ bin: 'mu', args: inner }) },
     prompt: '',
@@ -1674,7 +1717,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     // --push reads the agent's changes out once it exits, so the run is waited on and its sandbox kept until then.
     // A worker's task is waited on too. Either way it is stopped below once it is done, not left to the Worker's keep.
     ...(waited ? { attach: true } : {}),
-  })
+  }))
   if (task) await run.team.label({ id: task, set: { runner: runner.name, run: started.id.slice(0, 200), ...(started.installed ? { deps: started.installed } : {}) } }).catch(() => {})
   if (started.installed?.startsWith('failed')) {
     run.io.err(`warning: the repository's dependencies didn't install (${started.installed}); the agent starts without them`)
@@ -1682,6 +1725,12 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   }
   const what = { ...(task ? { task } : { ready }), runner: runner.name, run: started.id }
   const line = `${task ? `#${task}` : ready}  ${runner.name} ${started.id}`
+  // A worker starts the next task once this one has ended: a run it can't wait on would have it start one per ready task at once.
+  if (claimed && !started.wait) {
+    await started.stop().catch(() => {})
+    await undo()
+    throw Object.assign(new Failure('runner_too_old', "This runner can't be waited on, so a worker can't give each task a sandbox of its own: the run was stopped.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' }), { worker: 'stop' as const })
+  }
   if (on(parsed.flags, 'detach') || !started.wait) {
     print(run, what, () => `started  ${line}`)
     return 0
@@ -1699,6 +1748,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
     if (made) await run.team.backend.tokens.revoke({ id: made }).catch(() => {})
+    // Stopped, or ended with no word on how: what ran there didn't settle the task, so a worker's claim goes back.
+    if (run.io.stop.aborted || exitCode === null) await giveBack()
   }
   if (run.io.stop.aborted) {
     run.io.err(`stopped  ${line}  removed`)
@@ -1706,6 +1757,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   }
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
   print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? `\npr       none: ${exitCode === null ? "the run ended before it could be read" : 'nothing changed'}` : ''}`)
+  // A worker's run that ended with no word on how gave its claim back: the worker tries the task again, a few times.
+  if (claimed && exitCode === null) throw Object.assign(new Error('the run ended without saying how: its sandbox may have been removed'), { worker: 'retry' as const })
   return exitCode === 0 ? 0 : 1
 }
 
@@ -1750,16 +1803,33 @@ const DEFAULT_CLOUD_TIMEOUT = '30m'
 const SETTLE = 10 * 60
 /** A --ready worker's sandbox: long enough for several tasks. It is ended as soon as the worker finds none. */
 const WORKER_LIFETIME = 2 * 60 * 60
+/** Starts that may fail in a row before a worker gives up. */
+const START_TRIES = 3
+
+/**
+ * A start that failed, marked for a worker: `retry` when nothing was started (this side failed first, or the
+ * runner answered with a server error), `stop` when the runner refused (a 4xx won't get better) or the outcome
+ * is unknown (a connection lost after the request went out may have started a run).
+ */
+function startFailed(error: unknown): Error {
+  const failure = error instanceof Error ? error : new Error(String(error))
+  const status = (failure as { status?: unknown }).status
+  const retry = failure instanceof Failure || (typeof status === 'number' && status >= 500)
+  return Object.assign(failure, { worker: retry ? ('retry' as const) : ('stop' as const) })
+}
 
 /**
  * Waits for a cloud run to exit. A wait that fails is a dropped connection, not an exit: it is asked
  * again, less often each time, until `deadline`, the sandbox's own timeout. Null when stopped or out of time.
  */
-async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: AbortSignal, deadline: number): Promise<number | null> {
+export async function attend(wait: () => Promise<{ exitCode: number | null }>, stop: AbortSignal, deadline: number): Promise<number | null> {
   let pause = 2000
   while (!stop.aborted && Date.now() < deadline) {
     const stopped = new Promise<null>((resolve) => (stop.aborted ? resolve(null) : stop.addEventListener('abort', () => resolve(null), { once: true })))
-    const outcome = await Promise.race([wait().then((done) => ({ done }), (error: unknown) => ({ error })), stopped])
+    // A wait that never answers (a runner that keeps failing) still ends at the deadline.
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()))))
+    const outcome = await Promise.race([wait().then((done) => ({ done }), (error: unknown) => ({ error })), stopped, late]).finally(() => clearTimeout(timer))
     if (outcome === null) return null
     if ('done' in outcome) return outcome.done.exitCode
     await sleep(Math.min(pause, Math.max(0, deadline - Date.now())), stop)

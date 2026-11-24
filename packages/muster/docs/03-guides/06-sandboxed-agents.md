@@ -74,7 +74,10 @@ is ready for `--wait` (ten minutes by default). Start as many as you want
 running at once; the swarm template starts one per agent. The sandbox holds
 the claim token for its one task. On Cloudflare each task's container is
 waited on and stopped once its agent exits, before the next task is claimed,
-so the Worker keeps none of them for its 15 minutes. The Cloudflare worker
+so the Worker keeps none of them for its 15 minutes. A task whose run
+doesn't start, or ends without saying how, is given back, ready, and its
+token revoked. A worker stops at once when the runner refuses a start, and
+after three failures in a row otherwise (`runner_start_failed`). The Cloudflare worker
 is covered by tests against a stand-in Worker only; it has not been run live.
 
 Without `--loop`, `--ready` is one sandbox, or one container, that takes

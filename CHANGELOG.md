@@ -159,6 +159,18 @@ rest to anyone who shares a machine, or whose server's output is kept.
   not on github.com, or no GitHub App set claimed each ready task and then
   failed it. It is now refused before it claims anything, on Vercel and on
   Cloudflare.
+- A cloud worker (`--ready --loop`) whose run didn't start, or ended without
+  saying how, left the task claimed and the agent's token live, and went on
+  to claim the next. It now gives the claim back and revokes the token. It
+  stops at once when the runner refuses the start (a wrong
+  `MUSTER_CF_SECRET`, say) or the start's outcome is unknown, and after three
+  failures in a row otherwise. Ctrl-C gives the claim back too, and a Ctrl-C
+  right after a claim starts nothing. A run whose status never comes back is
+  given up at its deadline. A Vercel SDK too old to be waited on stops the
+  worker (`runner_too_old`) instead of starting a sandbox per ready task.
+- A registered workflow with cloud workers checks the daemon's environment
+  first, and says on the thread what is missing, such as `MUSTER_CF_SECRET`,
+  instead of starting workers that exit at once.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
