@@ -76,7 +76,13 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     return Buffer.concat(parts).toString('latin1')
   }
   const kept = () => readdirSync(dir).filter((name) => name.endsWith('.files')).flatMap((name) => readdirSync(join(dir, name)))
-  return { team, backend, calls, chat, lin, stored, time, kept }
+  /** The board restarted: a new process on the same file, which catches up on what it missed. */
+  const restart = () => {
+    backend.close()
+    const again = file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    return { backend: again, team: board({ backend: again }) }
+  }
+  return { team, backend, calls, chat, lin, stored, time, kept, restart }
 }
 
 const slackFile = (over: Record<string, unknown> = {}) => ({ id: 'F1', name: 'trace.json', mimetype: 'application/json', size: TRACE.length, url_private: 'https://files.slack.com/files-pri/T1-F1/trace.json', ...over })
@@ -458,5 +464,38 @@ describe('sync: files and credentials', () => {
     expect((await team.readChannel({ channel: 'eng' })).threads[0]!.message.attachments).toHaveLength(1)
     const everything = stored()
     for (const token of [SLACK_TOKEN, LINEAR_TOKEN, 'ghs_github-credential']) expect(everything).not.toContain(token)
+  })
+})
+
+describe('sync: files read on catching up', () => {
+  it('Slack: a file posted while the board was down arrives through catch-up, once', async () => {
+    const at = `${Date.parse('2025-12-31T23:58:00Z') / 1000}.000100`
+    const down = { type: 'message', subtype: 'file_share', user: 'U1', text: 'while down', ts: at, files: [slackFile({ id: 'FD' })] }
+    const { calls, chat, restart } = setup({ 'https://slack.com/api/conversations.history': () => Response.json({ ok: true, messages: [down], has_more: false }) })
+    await chat({ user: 'U1', text: 'before', ts: '1.1' }, 'Ev1')
+    const { backend, team } = restart()
+    for (let tick = 0; tick < 3; tick++) await backend.syncTick()
+    const threads = (await team.readChannel({ channel: 'general' })).threads.map((thread) => thread.message)
+    expect(threads.find((message) => message.text === 'while down')!.attachments).toHaveLength(1)
+    expect(calls.filter((call) => call.url.startsWith('https://files.slack.com/files-pri/'))).toHaveLength(1)
+  })
+
+  it('Linear: a file linked from a comment made while the board was down arrives through catch-up, once', async () => {
+    const issueNode = { id: 'iss-1', identifier: 'ENG-1', title: 'Crash', description: 'none', creator: { id: 'u1' }, team: { key: 'ENG' }, state: { name: 'Todo' }, updatedAt: '2025-12-31T23:57:00.000Z' }
+    const comment = { id: 'c-down', body: 'trace: ![t.png](https://uploads.linear.app/org/d/e)', updatedAt: '2025-12-31T23:58:00.000Z', user: { id: 'u2' }, issue: issueNode }
+    const { calls, lin, restart } = setup({
+      'https://api.linear.app/graphql': (call) => {
+        const query = String((call.body as { query: string }).query)
+        if (query.includes('issues(')) return Response.json({ data: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } })
+        if (query.includes('comments(')) return Response.json({ data: { comments: { nodes: [comment], pageInfo: { hasPreviousPage: false } } } })
+        return undefined
+      },
+    })
+    await lin({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'Crash', description: 'none', team: { key: 'ENG' }, creatorId: 'u1' } })
+    const { backend, team } = restart()
+    for (let tick = 0; tick < 3; tick++) await backend.syncTick()
+    const [thread] = (await team.readChannel({ channel: 'eng' })).threads
+    expect((await team.readThread({ id: thread!.message.id })).replies.map((reply) => [reply.text, reply.attachments.length])).toEqual([[comment.body, 1]])
+    expect(calls.filter((call) => call.url.startsWith('https://uploads.linear.app/'))).toHaveLength(1)
   })
 })

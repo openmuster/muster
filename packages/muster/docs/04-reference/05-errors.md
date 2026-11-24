@@ -77,7 +77,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_claim_token` | A claim token you choose is 32 to 200 characters of base64url |
 | `invalid_needs` | Not a task, canceled, too many, or it would wait for itself |
 | `invalid_from` | Not an owner's ID |
-| `invalid_by` | Not an actor's whole ID |
+| `invalid_by` | Not an actor's whole ID, or `--by` with a task named by its ID instead of `--ready` |
 | `invalid_kind` | Not a hold kind |
 | `reserved_kind` | A kind only the board uses: `edited`, `failing` |
 | `invalid_state` | Not a task state |
@@ -155,10 +155,11 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_ttl` | A token's lifetime is too short, or over a day for one made from another machine |
 | `not_a_terminal_command` | `mu mcp` was typed at a terminal; it is started by an agent |
 | `invalid_repo` | A repository address that isn't HTTPS, or has a credential in it |
-| `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts |
+| `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts, or a worker's run can't be waited on |
 | `runner_not_configured` | The runner's settings are missing |
+| `runner_start_failed` | A `--ready --loop` cloud worker couldn't run a task: the runner refused the start, the start's outcome is unknown, or three runs in a row failed to start or ended without saying how. The task's claim was given back |
 | `runner_setup_failed` | A step that prepares the sandbox failed; the sandbox was removed |
-| `push_unsupported` | `--push` was asked of a run that can't push: `--runner local`, `--detach`, `--ready`, or an SDK or runner Worker too old |
+| `push_unsupported` | `--push` was asked of a run that can't push: `--runner local`, `--detach`, `--ready` without `--loop`, or an SDK or runner Worker too old |
 | `push_failed` | Pushing the agent's branch from the sandbox failed |
 | `pull_request_failed` | The branch is pushed, and GitHub didn't open the pull request |
 | `github_app_not_installed` | The GitHub App isn't installed on the run's repository |

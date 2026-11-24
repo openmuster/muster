@@ -74,6 +74,26 @@ or redirects to a storage host. The board follows no redirect, so if Linear
 sends one, the file is named in the text instead of attached. This has not
 been tried against Linear. See [Files](./01-overview.md#files) for the limits.
 
+## Catching up
+
+After downtime, and when a token is set, the ticker asks Linear for the issues in
+the mapped teams updated since the last event it received, then the comments
+on them. An issue created while the board was down arrives whole, with its
+title, description and labels, and its comments as replies. A state change
+missed meanwhile sets `state`, by `lin`: Linear's list doesn't say who
+moved the issue, so the change is put down to the sync. An older issue updated while the board was down
+starts a thread too. What the board already has, by webhook or because it
+sent it, isn't imported again.
+
+Edits and removals made while the board was down are not read; nor are they
+for GitHub. One read takes up to 500 issues and 500 comments, oldest change
+first, in pages of 50. If there are more, the next read goes on a minute
+later from the newest change it read. If Linear refuses, a rate limit among
+the reasons, it is asked again from the same point five minutes later. See
+[After downtime](./01-overview.md#after-downtime) for the rest.
+A file linked from an issue or comment read this way is fetched as one from a
+webhook would be, with the same limits.
+
 ## Set it up
 
 1. Create a key: Settings, Security & access, Personal API keys, with read

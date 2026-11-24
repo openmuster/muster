@@ -30,7 +30,7 @@ other: `mu token list` shows it, and the line that prints it names the
 `mu token revoke` that stops it. Each start in a terminal prints a new one.
 When the output is piped or kept (a service manager, a container, CI) none is
 made: a token there is a token anyone reading the log holds. Make one with
-`mu token create`, or pass `--print-token` to have it printed anyway. To reach it from elsewhere put a proxy or
+`mu token create --all`, or pass `--print-token` to have it printed anyway. To reach it from elsewhere put a proxy or
 a tunnel with a name in front and pass that name with `--allow-host`.
 
 | Flag | What it does |
@@ -48,6 +48,7 @@ To keep a board running on a server, see
 ```bash
 mu token create --as fixer --can 'factory/=read,post,react,label' --ttl 2h
 mu token create --can '*=read'
+mu token create --all --ttl 30d
 mu token list
 mu token revoke Xk3v9QmB2a1c
 ```
@@ -55,7 +56,8 @@ mu token revoke Xk3v9QmB2a1c
 | Flag | What it does |
 | --- | --- |
 | `--as <profile>` | Holds the token to one profile: it writes as that profile whatever a request asks |
-| `--can <pattern>=<permissions>` | What it may do where. Repeatable. Without any, everything |
+| `--can <pattern>=<permissions>` | What it may do where. Repeatable. A token needs `--can` or `--all` |
+| `--all` | No channel limit: the token has your full access, as the one `mu serve` prints does. `mu token list` shows it as `everything`. Not with `--can` |
 | `--ttl` | How long it works. Default 30 days |
 | `--no-sync` | What its bearer writes stays on the board, never mirrored to a synced platform |
 
