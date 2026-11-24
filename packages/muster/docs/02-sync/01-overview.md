@@ -125,9 +125,26 @@ It runs with `PATH` and `HOME` only.
 
 ## After downtime
 
-Platforms resend what wasn't answered, for a while. Beyond that, when the
-ticker starts it asks GitHub for the issues, pull requests and comments since
-the last event it received, and imports what it missed. Linear and Slack have no catch-up yet.
+Platforms resend what wasn't answered, for a while. Beyond that, the ticker
+asks GitHub and Linear for the issues, pull requests and comments since the
+last event it received, and imports what it missed.
+
+- **Where it starts** is noted when `mu serve` or the daemon starts, before
+  the first webhook, five minutes before the last event received, in case
+  the clocks differ. What it reads again is known already.
+- **Every tick** goes on with it until a read gets to the end. That includes
+  one noted by a `mu serve` restarted while the daemon kept running.
+- **A refusal**, such as a rate limit, waits five minutes, then the platform
+  is asked again from the same point.
+- **A read cut short** by its page cap goes on a minute later from the
+  newest change it read.
+- **A state the board changed after the platform's copy was read** is left
+  as it is.
+- **More changes made at one moment than a read can take** are gone past.
+  The daemon logs `skipped   sync <key>: changes made at <time> may not have
+  been read`.
+
+Slack has no catch-up yet.
 
 ## Reaching the board
 
