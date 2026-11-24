@@ -9,7 +9,7 @@ import { tempDir } from './helpers.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
 import { REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
-import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, installed, readCapped } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
+import { KEEP_MS, capStream, decide, ended, execRequest, exitCode, INSTALL_MIN_MS, INSTALL_MS, START_BUDGET_MS, agentExited, installBudget, installSteps, installed, readCapped, stillGoing, timeLeft } from '../../../templates/cloudflare-runner/src/lifecycle.ts'
 import { boardPolicy } from '../src/runner/policy.ts'
 import { claude } from '../src/runner/agents.ts'
 
@@ -139,6 +139,55 @@ describe('the cloudflare runner lifecycle', () => {
     expect(execRequest({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })).toEqual({ cmd: 'sh', args: ['-c', 'x'], env: { A: 'b' } })
     expect(execRequest({ cmd: 'sh', args: [] })).toEqual({ cmd: 'sh', args: [], env: {} })
     for (const bad of [null, 'sh', {}, { cmd: '', args: [] }, { cmd: 'sh', args: [1] }, { cmd: 'sh', args: 'x' }, { cmd: 'sh', args: [], env: { A: 1 } }, { cmd: 'sh', args: [], env: ['x'] }]) expect(execRequest(bad)).toBeNull()
+  })
+
+  it("installs with the board and the model closed, and gives them back only once nothing of the install is left", () => {
+    const line = (step: ReturnType<typeof installSteps>[number]) => (step.do === 'open' ? `open ${step.host} ${step.gate}` : step.do === 'close' ? `close ${step.host}` : step.do)
+    expect(installSteps({ board: 'b.example', model: 'm.example', registries: ['r1', 'r2'] }).map(line)).toEqual([
+      'close b.example',
+      'close m.example',
+      'open r1 registry',
+      'open r2 registry',
+      'install',
+      'close r1',
+      'close r2',
+      'kill',
+      'check',
+      'open b.example board',
+      'open m.example model',
+    ])
+    expect(installSteps({ board: 'b.example', registries: ['r1'] }).map(line)).toEqual(['close b.example', 'open r1 registry', 'install', 'close r1', 'kill', 'check', 'open b.example board'])
+  })
+
+  it("gives the install what is left of start's time, and none when too little is", () => {
+    const t = 1_000_000
+    expect(installBudget(t, t)).toBe(INSTALL_MS)
+    // Setup and the clone took most of it: the install gets the rest, so start answers before the CLI gives up.
+    expect(installBudget(t, t + START_BUDGET_MS - 60_000)).toBe(60_000)
+    expect(installBudget(t, t + START_BUDGET_MS - INSTALL_MIN_MS)).toBe(INSTALL_MIN_MS)
+    expect(installBudget(t, t + START_BUDGET_MS - INSTALL_MIN_MS + 1)).toBeNull()
+    expect(installBudget(t, t + START_BUDGET_MS + 1)).toBeNull()
+    expect(timeLeft(t, t + 1000)).toBe(START_BUDGET_MS - 1000)
+    expect(timeLeft(t, t + START_BUDGET_MS * 2)).toBe(0)
+    // Node's fetch waits 5 minutes for an answer: the whole budget, and the install's kill grace, fit inside it.
+    expect(START_BUDGET_MS + 5_000).toBeLessThan(300_000)
+  })
+
+  it("reads the exit file only once the agent has started: before, the repository's install could have written it", () => {
+    expect(agentExited(false, '0\n')).toBe(false)
+    expect(agentExited(true, '0\n')).toBe(true)
+    expect(agentExited(true, '')).toBe(false)
+    // A run started by a Worker from before the flag: its agent had started.
+    expect(agentExited(undefined, '1')).toBe(true)
+  })
+
+  it('gives the agent its gates only in a run still going', () => {
+    const going = { started: true, running: true, closed: false }
+    expect(stillGoing(going)).toBe(true)
+    expect(stillGoing({ ...going, started: false })).toBe(false)
+    expect(stillGoing({ ...going, running: false })).toBe(false)
+    expect(stillGoing({ ...going, closed: true })).toBe(false)
+    expect(stillGoing({ ...going, exitedAt: 5 })).toBe(false)
   })
 
   it("says how dependencies installed from the install's exit code and last line, and nothing else it printed", () => {

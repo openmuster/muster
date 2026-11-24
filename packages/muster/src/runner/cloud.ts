@@ -243,7 +243,7 @@ elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --i
 else echo installed none; fi`
 
 /** What an install can say it did, and nothing else. */
-const INSTALLED = /^(pnpm|npm|yarn|bun|none|failed \((exit \d{1,3}|no exit code)\))$/
+const INSTALLED = /^(pnpm|npm|yarn|bun|none|failed \((exit \d{1,3}|no exit code|timeout)\))$/
 
 const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 

@@ -129,7 +129,7 @@ The agent needs `mu` and its own CLI where it runs.
   clone routes, adds the GitHub App's read token for a private one, and
   closes GitHub again before anything of the repository runs. Its
   dependencies are then installed with the same script as on Vercel, for at
-  most three minutes, while the Worker lets the container read the public
+  most three minutes (less when the clone was slow), while the Worker lets the container read the public
   npm registry (`registry.npmjs.org`, `registry.yarnpkg.com`,
   `repo.yarnpkg.com`) and nothing else there; those hosts are closed again
   before the agent starts. The image is built for pnpm, npm and yarn; it has no bun, so
@@ -205,8 +205,10 @@ Code that ran while setting up could reach the internet, but there was
 nothing to take: the tokens only ever go on requests after that.
 
 A Cloudflare container never has that: while dependencies install, the
-registries are open to read and nothing more, and the board and the model's
-host stay as the agent will have them, behind the Worker.
+registries are open to read and nothing else is, the board and the model's
+host included. Once the install is done, the registries close, every process
+it left running is killed, and only then do the board and the model's host
+open again, for the agent.
 
 A repository's own configuration still runs at install, scripts or not: a
 `.pnpmfile.cjs`, a yarn plugin, an `.npmrc` pointing at a registry of its

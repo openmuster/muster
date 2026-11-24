@@ -25,14 +25,25 @@ token added there, then closed before anything of the repository runs.
 
 When the CLI asks for its dependencies (`mu run --repo`, unless
 `--no-install`), it sends the install script, and the Worker runs it in the
-checkout for at most three minutes. Only then are `registry.npmjs.org`,
+checkout. Only then are `registry.npmjs.org`,
 `registry.yarnpkg.com` and `repo.yarnpkg.com` opened, for reading (`GET` and
-`HEAD`), with nothing added; they are closed again before the agent starts,
-and a run whose registries can't be closed ends there. A failed install
-doesn't stop the run: start answers `installed` with `failed (exit n)`, and
-the agent starts without them. The image runs pnpm (through corepack, at the
+`HEAD`), with nothing added, and the board's and the model's hosts are
+closed: the install runs the repository's own code (a pnpmfile, a yarn
+plugin). After it the registries are closed, every process it left running
+is killed, the exit file it may have written is removed, and only then do the
+board and the model get their gates back and the agent start. Until the agent
+has started, that exit file means nothing. A run where any of that fails, or
+that was stopped or timed out meanwhile, ends there and nothing is opened
+again. A failed install doesn't stop the run: start answers `installed` with
+`failed (exit n)`, and the agent starts without them.
+
+The CLI waits for start's answer, and Node's fetch gives up after 5 minutes
+without one, which would leave a run nobody can stop. So start keeps to 4
+minutes: the clone gets what is left of them, and the install what is left
+after the clone, 3 minutes at most. With less than 15 seconds left it doesn't
+start, and says `failed (timeout)`. The image runs pnpm (through corepack, at the
 version `packageManager` pins), npm and yarn; it has no bun. Covered by
-tests of the gate and the CLI, not run live. A Worker deployed before this
+tests of the gate, the order of these steps and the CLI, not run live. A Worker deployed before this
 ignores the script and installs nothing: redeploy it and rebuild the image.
 
 Each run is a Durable Object. It checks the run every minute, which keeps the

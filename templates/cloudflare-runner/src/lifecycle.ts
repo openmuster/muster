@@ -111,3 +111,64 @@ export function installed(code: number | null, last: string): string {
   const said = /^installed (pnpm|npm|yarn|bun|none)$/.exec(last.trim())
   return said ? said[1]! : 'none'
 }
+
+/** One step of a dependency install: a host given its gate or closed, the install itself, or every process it left killed. */
+export type InstallStep = { do: 'open'; host: string; gate: 'board' | 'model' | 'registry' } | { do: 'close'; host: string } | { do: 'install' } | { do: 'kill' } | { do: 'check' }
+
+/**
+ * The order a dependency install runs in. The repository's own code runs during it (a pnpmfile, a yarn
+ * plugin), so the board and the model are closed first and only the registries are open, to read. After
+ * it the registries close, everything it left running is killed (and the exit file it may have written
+ * removed), the run is checked to be still going, and only then are the board and the model given back
+ * their gates, for the agent.
+ */
+export function installSteps(hosts: { board: string; model?: string; registries: string[] }): InstallStep[] {
+  const credentialed: { do: 'open'; host: string; gate: 'board' | 'model' }[] = [{ do: 'open', host: hosts.board, gate: 'board' }, ...(hosts.model ? [{ do: 'open' as const, host: hosts.model, gate: 'model' as const }] : [])]
+  return [
+    ...credentialed.map((step) => ({ do: 'close' as const, host: step.host })),
+    ...hosts.registries.map((host) => ({ do: 'open' as const, host, gate: 'registry' as const })),
+    { do: 'install' },
+    ...hosts.registries.map((host) => ({ do: 'close' as const, host })),
+    { do: 'kill' },
+    // A run stopped or timed out meanwhile gets nothing opened again.
+    { do: 'check' },
+    ...credentialed,
+  ]
+}
+
+/**
+ * The most `start` may take before the agent starts: the CLI waits for its answer, and Node's fetch gives
+ * up after 5 minutes without one. What is left of it after setup and the clone is the install's.
+ */
+export const START_BUDGET_MS = 4 * 60_000
+/** The longest an install runs, whatever is left of the budget; and the least worth starting one with. */
+export const INSTALL_MS = 3 * 60_000
+export const INSTALL_MIN_MS = 15_000
+
+/** How long the install may run, `startedAt` being when start began: null when too little is left to try. */
+/** What is left of start's budget, `startedAt` being when start began: what setup and the clone may still take. */
+export function timeLeft(startedAt: number, now: number): number {
+  return Math.max(0, START_BUDGET_MS - (now - startedAt))
+}
+
+/** What start says of an install it didn't begin, for want of time. */
+export const INSTALL_SKIPPED = 'failed (timeout)'
+
+export function installBudget(startedAt: number, now: number): number | null {
+  const left = Math.min(INSTALL_MS, timeLeft(startedAt, now))
+  return left >= INSTALL_MIN_MS ? left : null
+}
+
+/**
+ * Whether the exit file says the agent exited. Before the agent has started, it is the repository's
+ * install that could have written it, and it means nothing.
+ */
+export function agentExited(agentStarted: boolean | undefined, marker: string): boolean {
+  // Unset in a run a Worker started before this flag was written down: its agent had started.
+  return agentStarted !== false && marker.trim() !== ''
+}
+
+/** Whether a run is still going, as start needs before it gives the agent its gates: not stopped, timed out or closed. */
+export function stillGoing(state: { started: boolean; running: boolean; closed: boolean; exitedAt?: number }): boolean {
+  return state.started && state.running && !state.closed && state.exitedAt === undefined
+}

@@ -423,6 +423,8 @@ describe('cloud runners', () => {
     // Started to be read, it is said the same way.
     answer = { id: 'r', installed: 'failed (exit 124)' }
     expect((await runner.start({ ...request, repo, install: true, attach: true })).installed).toBe('failed (exit 124)')
+    answer = { id: 'r', installed: 'failed (timeout)' }
+    expect((await runner.start({ ...request, repo, install: true })).installed).toBe('failed (timeout)')
     // The Worker's word comes out of a container: what isn't one of the answers is dropped.
     answer = { id: 'r', installed: 'pnpm\nmalicious' }
     expect((await runner.start({ ...request, repo, install: true })).installed).toBeUndefined()
