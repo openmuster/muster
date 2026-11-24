@@ -55,9 +55,9 @@ set by hand on a synced thread is replaced, or taken off when the issue has
 none. All of this holds for a thread started on the board too, once it has
 opened its issue.
 
-Not imported: an assignee's email. A change to an issue the board has never
-seen, one made before sync was set up, is dropped: its thread starts only
-when an issue is created.
+Not imported: an assignee's email. A webhook about a change to an issue the
+board has never seen, one made before sync was set up, is dropped: its thread
+starts when the issue is created, or when [catching up](#catching-up) reads it.
 
 ## What goes back
 
@@ -68,6 +68,25 @@ when an issue is created.
 
 What the board sent is not imported back, and neither are comments by the
 user named in `bot`.
+
+## Catching up
+
+After downtime, and when a token is set, the ticker asks Linear for the issues in
+the mapped teams updated since the last event it received, then the comments
+on them. An issue created while the board was down arrives whole, with its
+title, description and labels, and its comments as replies. A state change
+missed meanwhile sets `state`, and what the issue is filed under now (its
+labels, assignee, priority and project) is brought up to date, by `lin`: Linear's list doesn't say who
+moved the issue, so the change is put down to the sync. An older issue updated while the board was down
+starts a thread too. What the board already has, by webhook or because it
+sent it, isn't imported again.
+
+Edits and removals made while the board was down are not read; nor are they
+for GitHub. One read takes up to 500 issues and 500 comments, oldest change
+first, in pages of 50. If there are more, the next read goes on a minute
+later from the newest change it read. If Linear refuses, a rate limit among
+the reasons, it is asked again from the same point five minutes later. See
+[After downtime](./01-overview.md#after-downtime) for the rest.
 
 ## Set it up
 

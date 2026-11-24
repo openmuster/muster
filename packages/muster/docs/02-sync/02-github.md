@@ -91,12 +91,16 @@ Nothing, unless the repository sets `"mirror": true`. With it:
 
 ## Catching up
 
-When the ticker starts, and a token is set, it asks each mapped repository for
+After downtime, and when a token is set, the ticker asks each mapped repository for
 the issues and pull requests updated since the last event it received, then
 their comments. An issue opened while the board was down arrives whole, with
 its title, body and labels, and its comments as replies. A close or merge
 missed meanwhile sets `state`, and a label or an assignee put on or taken off
-meanwhile is put on or taken off the thread. Up to 100 of each are read per repository.
+meanwhile is put on or taken off the thread, by the sync's key (`gh`): the list
+doesn't say who did it. One read takes up to 1,000 of each per repository,
+oldest change first. Each page is asked for from the newest change read so
+far, so an issue changed during the read is not skipped. If there are more,
+the next read goes on a minute later from the newest change it read.
 
 A comment, a review, a label or an assignee on an issue the board never saw, such as one opened
 before sync was set up, starts its thread from the issue itself. Catch-up

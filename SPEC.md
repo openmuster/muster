@@ -276,7 +276,7 @@ the container image; `mu conformance`; the inspector and `mu demo`; `mu run`
 with a local runner for Claude Code, Codex and any command, session resume,
 and a choice of a Vercel or Cloudflare sandbox; sync for GitHub, Linear and
 Slack in both directions, with edits, deletes, a filter for incoming text, and
-a catch-up read from GitHub; skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
+a catch-up read from GitHub and Linear; skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
 each.
 
 Driven in a real browser by a test (`pnpm test:browser`, Chromium through
@@ -361,7 +361,7 @@ Different from the plan:
 
 Not built:
 
-- Sync of files; a catch-up read for Linear and Slack.
+- Sync of files; a catch-up read for Slack.
 - A restart-storm guard beyond launchd's own throttle.
 
 ## 10. What a session costs to start

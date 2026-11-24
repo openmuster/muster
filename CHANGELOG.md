@@ -11,8 +11,8 @@ versions are affected.
   request's labels and assignees, and a Linear issue's labels, assignee,
   priority and project, arrive as labels on its thread: `tag.bug=bug`,
   `assignee.maya=maya`, `priority=high`, `project=<name>`. They follow the
-  platform: one taken off there is taken off the thread, and GitHub's
-  catch-up after downtime brings them up to date. So `mu read`, `mu wait` and
+  platform: one taken off there is taken off the thread, and catching up
+  after downtime brings them up to date, for GitHub and for Linear. So `mu read`, `mu wait` and
   a watcher can filter on them (`--label tag.agent=agent`). These keys are now
   the platform's on a synced thread: a label you set by hand under `tag.` or
   `assignee.`, or as `priority` or `project` on a Linear thread, is replaced
@@ -35,6 +35,14 @@ versions are affected.
   `templates/cloudflare-runner` and rebuild its image to use it. Covered by
   tests, not run live.
 
+- Linear sync catches up after downtime, as GitHub's does. When the ticker
+  starts it asks Linear for the issues and comments in the mapped teams
+  updated since the last event it received, and imports what the webhooks
+  missed: new issues, new comments and state changes. What the board already
+  has is not imported twice. Edits and removals made meanwhile are not read.
+  A state change is put down to the sync (`lin`), since Linear's list doesn't
+  say who made it. One start reads up to 500 of each, oldest first; the next
+  goes on from there. Covered by tests against a faked Linear API only.
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
@@ -186,6 +194,31 @@ rest to anyone who shares a machine, or whose server's output is kept.
 - A registered workflow with cloud workers checks the daemon's environment
   first, and says on the thread what is missing, such as `MUSTER_CF_SECRET`,
   instead of starting workers that exit at once.
+- A catch-up that failed, for GitHub or Linear, no longer loses its place.
+  The next start asked from the last event received, so a webhook that came
+  in after the failure moved it past what was missed. It now asks again from
+  where the failed one started. A webhook that arrives after a restart but
+  before the first catch-up no longer moves it either.
+- GitHub's catch-up put a close or merge it read down to whoever opened the
+  issue. It is now put down to the sync (`gh`): GitHub's list doesn't say
+  who did it.
+- GitHub's catch-up read at most 100 issues and 100 comments per repository,
+  and what was past that was never read. It now reads up to ten pages of
+  each, oldest change first, and the next start goes on from where it
+  stopped.
+- Catch-up runs on every tick until a read gets to the end, not once per
+  process. A `mu serve` restarted while the daemon kept running is now caught
+  up on the daemon's next tick. A refused read waits five minutes, a deadline
+  stored on the board. A read cut short goes on a minute later.
+- Catch-up starts five minutes before the last event received, for a
+  platform's clock that is behind the board's.
+- A state read on catching up no longer replaces a newer one that a webhook
+  brought while the read was out.
+- More changes at one moment than a catch-up can read no longer stall it.
+  It goes past that moment, and the daemon logs what may have been skipped.
+- GitHub's catch-up asks for each page from the newest change read, so an
+  issue changed during the read isn't skipped. An answer that isn't a list
+  counts as a refusal.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

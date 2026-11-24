@@ -40,6 +40,35 @@ async function send(fetcher: typeof fetch, url: string, init: RequestInit): Prom
   return body
 }
 
+/** GitHub catch-up reads at most this many pages of 100 of each list per repo. */
+const GITHUB_CATCHUP_PAGES = 10
+
+/** Past a catch-up's page cap, how many more pages it reads while all of it changed at one time. */
+const CATCHUP_EXTRA_PAGES = 5
+
+/** Of several lists cut short, the next catch-up starts where the one read least far got to. */
+const soonest = (cuts: { resume: string; skipped?: string }[]) => {
+  const first = [...cuts].sort((a, b) => Date.parse(a.resume) - Date.parse(b.resume))[0]!
+  const skipped = cuts.flatMap((cut) => (cut.skipped ? [cut.skipped] : []))
+  return { resume: first.resume, ...(skipped.length ? { skipped: skipped.sort()[0]! } : {}) }
+}
+
+const newestOf = (times: number[]) => Math.max(...times.filter((time) => !Number.isNaN(time)))
+
+/**
+ * Where the next catch-up starts after one cut short, given when the changes it read were made. It goes back to
+ * the newest of them, so others made at that same time are read again, not skipped. Unless that is no later than
+ * where this one started: then so many changed at one time that reading them again would never move on, so it
+ * goes past that time and says so (`skipped`). A platform whose `since` takes what changed at that time
+ * (`inclusive`) has times to the second (`step`).
+ */
+function cutShort(times: number[], since: string, inclusive: boolean, step: number): { resume: string; skipped?: string } {
+  const newest = newestOf(times)
+  const again = inclusive ? newest : newest - 1
+  if (again > Date.parse(since)) return { resume: new Date(again).toISOString() }
+  return { resume: new Date(newest + (inclusive ? step : 0)).toISOString(), skipped: new Date(newest).toISOString() }
+}
+
 export type GitHubOptions = {
   secret: string
   /** A token that may comment. Needed only where a repo mirrors. */
@@ -172,29 +201,59 @@ export function github(options: GitHubOptions): Provider {
       if (!options.token) return []
       const out: Inbound[] = []
       const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
+      const cuts: { resume: string; skipped?: string }[] = []
+      const when = (list: any[]) => list.map((each) => Date.parse(String(each.updated_at)))
+      /**
+       * A list oldest change first, up to the page cap. Each page after the first is asked for from the newest change
+       * read so far, not by its number: something changed during the read moves to the end, not past a page already
+       * read. Only a whole page changed in the same second goes by number, and that may run a few pages past the cap.
+       */
+      const read = async (path: string) => {
+        const out: any[] = []
+        let from = since
+        let page = 1
+        for (let asked = 1; asked <= GITHUB_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; asked++) {
+          if (asked > GITHUB_CATCHUP_PAGES && page === 1) break
+          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
+          // Not a list is not "nothing changed": refused, the next catch-up asks from the same point.
+          if (!Array.isArray(got)) throw new Failure('platform_refused', 'GitHub did not answer with a list.')
+          out.push(...got)
+          if (got.length < 100) return out
+          const newest = newestOf(when(got))
+          if (!Number.isFinite(newest)) throw new Failure('platform_refused', 'GitHub listed changes without when they were made.')
+          if (newest > Date.parse(from)) {
+            from = new Date(newest).toISOString()
+            page = 1
+          } else page++
+        }
+        cuts.push(cutShort(when(out), since, true, 1000))
+        return out
+      }
       for (const repo of Object.keys(options.repos)) {
         // Issues and pull requests first, so a comment on one opened while the board was down lands in its thread.
-        const items = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues?state=all&sort=updated&direction=asc&since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
+        const items = await read(`${repo}/issues?state=all&`)
         const parents = new Map<string, Inbound['parent']>()
-        for (const item of Array.isArray(items) ? items : []) {
+        for (const item of items) {
           const isPull = item.pull_request !== undefined
           const root = rootOf(repo, item, isPull, `catchup:issue:${repo}#${item.number}`)
           out.push(root)
           parents.set(String(item.number), { author: root.author, text: root.text ?? '', labels: root.labels ?? {} })
           // Its state now, and what it is filed under: a close, a merge or a label missed while down. Importing it
           // on a thread that already says so changes nothing.
+          // The list doesn't say who closed, merged or labelled it, so it is put down to the sync, not to whoever opened it.
           const filedNow = filing(item)
-          out.push({ ...root, id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state!, ...filedNow.labels }, owns: filedNow.owns })
+          out.push({ ...root, author: '', self: false, ...(item.updated_at ? { at: String(item.updated_at) } : {}), id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state!, ...filedNow.labels }, owns: filedNow.owns })
         }
-        const comments = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&per_page=100`, { headers })) as any[]
-        for (const comment of Array.isArray(comments) ? comments : []) {
+        const comments = await read(`${repo}/issues/comments?`)
+        for (const comment of comments) {
           const number = String(comment.issue_url ?? '').split('/').pop()
           const isPull = String(comment.html_url ?? '').includes('/pull/')
           const parent = parents.get(number ?? '')
           out.push({ id: `catchup:comment:${comment.id}`, author: String(comment.user?.login ?? 'unknown'), place: `${repo}|${isPull ? 'pulls' : 'issues'}`, self: options.bot !== undefined && comment.user?.login === options.bot, kind: 'reply', thread: `${repo}#${number}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), ...(parent ? { parent } : {}) })
         }
       }
-      return out
+      // Cut short, the next catch-up starts where the list read least far got to; what is read again is known already.
+      return cuts.length ? { events: out, ...soonest(cuts) } : out
     },
     mirrors(place) {
       const { to } = mapping(place)
@@ -219,6 +278,10 @@ export function github(options: GitHubOptions): Provider {
     },
   }
 }
+
+/** Catch-up reads at most this many pages of each list, of this many each: Linear limits requests and their cost. */
+const LINEAR_CATCHUP_PAGES = 10
+const LINEAR_CATCHUP_PAGE = 50
 
 export type LinearOptions = {
   secret: string
@@ -259,6 +322,30 @@ export function linear(options: LinearOptions): Provider {
     if (project) labels.project = project
     else if (!data.project && !data.projectId) unset.push('project')
     return { labels, unset, owns }
+  }
+  /** An issue as the API lists it, in the shape its webhook has: its labels are a list there, not a page of one. */
+  const listed = (issue: Record<string, any>) => (Array.isArray(issue.labels?.nodes) ? { ...issue, labels: issue.labels.nodes } : issue)
+  const postAs = (query: string, variables: unknown, fetcher: typeof fetch) => {
+    // A personal API key goes as it is; an OAuth token is a bearer token.
+    const token = options.token!
+    const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
+    return send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+  }
+  /** An issue as a thread's first message, as its webhook would have brought it, in the state it is in now. */
+  const rootOf = (issue: Record<string, any>, id: string): Inbound => {
+    const thread = `issue:${issue.id}`
+    const author = String(issue.creator?.id ?? 'unknown')
+    return {
+      id,
+      author,
+      place: String(issue.team?.key ?? ''),
+      self: options.bot !== undefined && author === options.bot,
+      kind: 'root',
+      thread,
+      external: thread,
+      text: `${issue.title ?? ''}\n\n${issue.description ?? ''}`.trim(),
+      labels: { kind: 'issue', ref: String(issue.identifier ?? ''), ...(issue.state?.name ? { state: slug(String(issue.state.name)) } : {}), ...filing(listed(issue)).labels },
+    }
   }
   return {
     type: 'linear',
@@ -302,11 +389,82 @@ export function linear(options: LinearOptions): Provider {
       const to = team(place)
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
+    async catchUp(since, fetcher) {
+      if (!options.token) return []
+      const keys = Object.keys(options.teams)
+      if (keys.length === 0) return []
+      const refused = (field: string, answer: any) => new Failure('platform_refused', `Linear did not list ${field}: ${String(answer?.errors?.[0]?.message ?? 'no data').slice(0, 200)}`)
+      /**
+       * Reads a list oldest change first, up to the page cap. A call that fails throws, and the board asks again
+       * from the same point. Issues sort that way; comments can't be sorted, and Linear lists them newest first,
+       * so they are read from the end backwards. Cut short, it says where the next catch-up starts: the newest
+       * change it read, less a millisecond, so one made in that same millisecond is read again, not skipped.
+       */
+      const read = async (field: 'issues' | 'comments', nodes: string, filter: Record<string, unknown>): Promise<{ nodes: Record<string, any>[]; cut?: { resume: string; skipped?: string } }> => {
+        const type = field === 'issues' ? 'IssueFilter' : 'CommentFilter'
+        const list = async (variables: Record<string, unknown>, args: string, page: string) => {
+          const answer = await postAs(`query($filter: ${type}, $cursor: String) { ${field}(filter: $filter, ${args}) { nodes { ${nodes} } pageInfo { ${page} } } }`, variables, fetcher)
+          const got = answer?.data?.[field]
+          // Linear can answer 200 with errors and no data, a rate limit among them: that is a failure, not "nothing changed".
+          if (!got || !Array.isArray(got.nodes)) throw refused(field, answer)
+          return got
+        }
+        const out: Record<string, any>[] = []
+        let cursor: string | null = null
+        let more = false
+        const when = (list: Record<string, any>[]) => list.map((node) => Date.parse(String(node.updatedAt)))
+        const from = Date.parse((filter.updatedAt as { gt: string }).gt)
+        // Past the cap, on only while all of it changed in the same millisecond, so the next start couldn't move on.
+        for (let page = 0; page < LINEAR_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; page++) {
+          if (page >= LINEAR_CATCHUP_PAGES && newestOf(when(out)) - 1 > from) break
+          const got: any =
+            field === 'issues'
+              ? await list({ filter, cursor }, `first: ${LINEAR_CATCHUP_PAGE}, after: $cursor, sort: [{ updatedAt: { order: Ascending } }]`, 'hasNextPage endCursor')
+              : await list({ filter, cursor }, `last: ${LINEAR_CATCHUP_PAGE}, before: $cursor, orderBy: updatedAt`, 'hasPreviousPage startCursor')
+          out.push(...got.nodes)
+          const next = field === 'issues' ? [got.pageInfo?.hasNextPage, got.pageInfo?.endCursor] : [got.pageInfo?.hasPreviousPage, got.pageInfo?.startCursor]
+          more = Boolean(next[0] && next[1])
+          if (!more) break
+          cursor = String(next[1])
+        }
+        if (!more || out.length === 0) return { nodes: out }
+        const times = out.map((node) => Date.parse(String(node.updatedAt))).filter((time) => !Number.isNaN(time))
+        if (times.length !== out.length) throw new Failure('platform_refused', `Linear listed ${field} without when they changed.`)
+        // What was read must be the oldest changes: if anything older is left, the order isn't what this read assumed,
+        // and moving on would skip it. Refused, the next start asks again from the same point.
+        const older = await list({ filter: { ...filter, updatedAt: { gt: (filter.updatedAt as { gt: string }).gt, lt: new Date(Math.min(...times)).toISOString() } }, cursor: null }, 'first: 1', 'hasNextPage')
+        if (older.nodes.length > 0) throw new Failure('platform_refused', `Linear did not list ${field} oldest first.`)
+        return { nodes: out, cut: cutShort(times, (filter.updatedAt as { gt: string }).gt, false, 0) }
+      }
+      const issueFields = 'id identifier title description creator { id } team { key } state { name } priority assignee { id name displayName url } project { name } labels { nodes { name } } updatedAt'
+      const changed = { updatedAt: { gt: since } }
+      const issues = await read('issues', issueFields, { ...changed, team: { key: { in: keys } } })
+      const comments = await read('comments', `id body updatedAt user { id } issue { ${issueFields} }`, { ...changed, issue: { team: { key: { in: keys } } } })
+      const out: Inbound[] = []
+      // Issues first, so a comment on one opened while the board was down lands in its thread.
+      for (const issue of issues.nodes) {
+        const root = rootOf(issue, `catchup:issue:${issue.id}`)
+        out.push(root)
+        // Its state now, and what it is filed under: a move or a label missed while down. Importing it on a thread
+        // that already says so changes nothing. Linear doesn't say here who moved it, so it is put down to the sync, not to whoever opened the issue.
+        if (root.labels?.state) {
+          const filedNow = filing(listed(issue))
+          out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, ...(issue.updatedAt ? { at: String(issue.updatedAt) } : {}), kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, ...filedNow, labels: { state: root.labels.state, ...filedNow.labels } })
+        }
+      }
+      for (const comment of comments.nodes) {
+        if (!comment.issue?.id) continue
+        // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
+        const { author, text, labels, place } = rootOf(comment.issue, '')
+        const by = String(comment.user?.id ?? 'unknown')
+        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} } })
+      }
+      // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
+      const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)
+      return cuts.length ? { events: out, ...soonest(cuts) } : out
+    },
     async deliver(message, target, fetcher) {
-      // A personal API key goes as it is; an OAuth token is a bearer token.
-      const token = options.token!
-      const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
-      const post = (query: string, variables: unknown) => send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+      const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)
       if (target.threadExternal === null) {
         const found = await post('query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }', { key: target.place })
         const teamId = found?.data?.teams?.nodes?.[0]?.id

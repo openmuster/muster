@@ -106,6 +106,18 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
   return { imported, failed }
 }
 
+/**
+ * Whether the board set this label on a message after a time: a catch-up read before a webhook imported a newer
+ * state would otherwise put the older one back. The thread's first message counts, since it carries its labels.
+ */
+function changedSince(ctx: Context, message: number, name: string, at: string | undefined) {
+  if (at === undefined || Number.isNaN(Date.parse(at))) return false
+  const latest = ctx.db.raw
+    .prepare("select max(at) as at from events where seq = ? or (type = 'labels.changed' and json_extract(data, '$.id') = ? and json_extract(data, '$.set.\"' || ? || '\"') is not null)")
+    .get(message, message, name.replaceAll('"', '')) as { at: string | null }
+  return latest.at !== null && Date.parse(latest.at) > Date.parse(at)
+}
+
 function importOne(ctx: Context, provider: Provider, key: string, event: Inbound) {
   // The app's own writes come back as webhooks; so does what the board itself delivered.
   if (event.self) return
@@ -130,7 +142,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
   const at = ctx.now().toISOString()
-  const by: By = { principal: `${key}:user:${event.author}`, profile: null }
+  const by: By = { principal: event.author ? `${key}:user:${event.author}` : key, profile: null }
   let root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined
 
   // About a platform thread the board never saw, and carrying it: start the thread from it, as its opener wrote it.
@@ -164,8 +176,10 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     for (const name of unset) if (name.startsWith('board.') || name in wanted) unset.delete(name)
     const set: Record<string, string> = {}
     let count = Object.keys(message.labels).length - unset.size
+    // On catching up, a label the board has changed since the platform's own change is the newer, and stays.
+    for (const name of unset) if (changedSince(ctx, message.id, name, event.at)) unset.delete(name)
     for (const [name, value] of Object.entries(wanted)) {
-      if (message.labels[name] === value) continue
+      if (message.labels[name] === value || changedSince(ctx, message.id, name, event.at)) continue
       if (!(name in message.labels) && ++count > LIMITS.labels) continue
       set[name] = value
     }
@@ -302,24 +316,73 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
  * Asks each platform that can say what happened while the board wasn't listening, and puts it in the
  * inbox like any webhook. An event already imported changes nothing, so asking twice is safe.
  */
-export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ fetched: number }> {
-  let fetched = 0
+/**
+ * Notes where each platform's catch-up starts, the last event received, unless one is noted already. A process
+ * calls it before it takes a webhook or catches up, so a webhook that comes first doesn't move it past the gap.
+ * It stays until a catch-up from it reads to the end; one that fails leaves it.
+ */
+export function holdCatchUp(ctx: Context, sync: Sync) {
   for (const [key, provider] of Object.entries(sync)) {
     if (!provider.catchUp) continue
     const last = ctx.db.raw.prepare('select max(received) as at from inbox where key = ?').get(key) as { at: string | null }
-    // Nothing ever received means nothing to catch up from: a new sync starts with what comes next.
-    if (!last.at) continue
+    // Nothing ever received means nothing to catch up from: a new sync starts with what comes next. The board's
+    // clock and the platform's may disagree a little: it starts a few minutes back, and what it reads again is known.
+    if (last.at) ctx.db.write(() => ctx.db.raw.prepare("insert or ignore into cursors (name, profile, seq) values (?, '', ?)").get(`catchup:${key}`, Date.parse(last.at!) - CATCHUP_SKEW_MS))
+  }
+}
+
+/** How far before the last event received a catch-up starts, for the board's clock and the platform's to differ. */
+export const CATCHUP_SKEW_MS = 5 * 60_000
+/** How long a platform that refused a catch-up is left before it is asked again; one cut short goes on sooner. */
+const CATCHUP_REFUSED_WAIT_MS = 5 * 60_000
+const CATCHUP_MORE_WAIT_MS = 60_000
+
+export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ fetched: number; skipped: string[] }> {
+  let fetched = 0
+  const skipped: string[] = []
+  for (const [key, provider] of Object.entries(sync)) {
+    if (!provider.catchUp) continue
+    const name = `catchup:${key}`
+    const pending = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(name) as { seq: number } | undefined
+    if (!pending) continue
+    // Deadlines are stored: a wait set by another process, or before a restart, holds too.
+    const wait = `catchup-wait:${key}`
+    const until = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(wait) as { seq: number } | undefined
+    if (until && until.seq > ctx.now().getTime()) continue
+    const waitFor = (ms: number) => ctx.db.raw.prepare("insert into cursors (name, profile, seq) values (?, '', ?) on conflict (name, profile) do update set seq = excluded.seq").get(wait, ctx.now().getTime() + ms)
+    const last = { at: new Date(pending.seq).toISOString() }
     let events: Inbound[]
+    let resume: number | undefined
     try {
-      events = await provider.catchUp(last.at, fetcher)
+      const read = await provider.catchUp(last.at, fetcher)
+      events = Array.isArray(read) ? read : read.events
+      if (!Array.isArray(read)) {
+        resume = Date.parse(read.resume)
+        if (read.skipped) skipped.push(`${key}: changes made at ${read.skipped} may not have been read`)
+        // A start point only moves on: one that wouldn't is the provider's fault, and is kept rather than read again forever.
+        if (Number.isNaN(resume) || resume <= pending.seq) {
+          skipped.push(`${key}: catch-up from ${last.at} could not move on`)
+          resume = pending.seq
+        }
+      }
     } catch {
+      ctx.db.write(() => waitFor(CATCHUP_REFUSED_WAIT_MS))
       continue
     }
     ctx.db.write(() => {
       for (const event of events) ctx.db.raw.prepare('insert or ignore into inbox (key, id, received, payload) values (?, ?, ?, ?)').get(key, event.id, ctx.now().toISOString(), JSON.stringify(event))
+      // Cut short, a later tick goes on from where this one got to; read to the end, it is done. Only from the point
+      // it read from: another process on the board may have moved it meanwhile.
+      if (resume !== undefined) {
+        ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = '' and seq = ?").get(resume, name, pending.seq)
+        waitFor(CATCHUP_MORE_WAIT_MS)
+      } else {
+        ctx.db.raw.prepare("delete from cursors where name = ? and profile = '' and seq = ?").get(name, pending.seq)
+        ctx.db.raw.prepare("delete from cursors where name = ? and profile = ''").get(wait)
+      }
     })
     fetched += events.length
   }
   if (fetched) importPending(ctx, sync)
-  return { fetched }
+  return { fetched, skipped }
 }

@@ -197,3 +197,58 @@ describe('sync: labels a platform sends are held to the rules for your own', () 
     expect(root.labels).toEqual({ fine: 'yes', later: 'yes', source: 'odd' })
   })
 })
+
+describe('sync: what a Linear issue is filed under, after downtime', () => {
+  const node = (id: string, more: Record<string, unknown> = {}) => ({ id, identifier: `ENG-${id}`, title: `Issue ${id}`, description: '', creator: { id: 'u-nico' }, team: { key: 'ENG' }, state: { name: 'Todo' }, priority: 0, assignee: null, project: null, labels: { nodes: [] }, updatedAt: '2026-01-01T00:30:00.000Z', ...more })
+  async function downtime(listed: () => unknown[]) {
+    const time = clock()
+    const asked: string[] = []
+    const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const query = String(JSON.parse(String(init?.body ?? '{}')).query)
+      asked.push(query)
+      if (query.includes('issues(')) return Response.json({ data: { issues: { nodes: listed(), pageInfo: { hasNextPage: false, endCursor: null } } } })
+      return Response.json({ data: { comments: { nodes: [], pageInfo: { hasPreviousPage: false, startCursor: null } } } })
+    }) as typeof fetch
+    const dir = tempDir()
+    const sync = { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'eng' } }) }
+    const open = () => file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    const first = open()
+    const body = JSON.stringify({ type: 'Issue', action: 'create', data: linearIssue({ labels: [{ name: 'Agent' }, { name: 'Bug' }], priority: 1 }) })
+    await first.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })
+    return { time, open, first, asked }
+  }
+
+  it('a label taken off or put on while the board was down is taken off or put on the thread, and an issue made meanwhile arrives filed', async () => {
+    const { time, open, first, asked } = await downtime(() => [
+      node('iss-1', { labels: { nodes: [{ name: 'Bug' }, { name: 'Security' }] }, assignee: { id: 'u-1', name: 'Ada Lovelace', displayName: 'ada', url: 'https://linear.app/acme/profiles/ada' }, project: { name: 'SSO' } }),
+      node('iss-2', { labels: { nodes: [{ name: 'Agent' }] }, priority: 2, updatedAt: '2026-01-01T00:40:00.000Z' }),
+    ])
+    first.close()
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    const threads = (await board({ backend: second }).readChannel({ channel: 'eng' })).threads.map((thread) => thread.message.labels)
+    expect(threads).toContainEqual({ kind: 'issue', ref: 'ENG-42', state: 'todo', source: 'lin', 'tag.bug': 'bug', 'tag.security': 'security', 'assignee.ada': 'ada', project: 'sso' })
+    expect(threads).toContainEqual({ kind: 'issue', ref: 'ENG-iss-2', state: 'todo', source: 'lin', 'tag.agent': 'agent', priority: 'high' })
+    // Linear is asked for what an issue is filed under, and never for an email.
+    expect(asked.find((query) => query.includes('issues('))).toContain('labels { nodes { name } }')
+    expect(asked.join(' ')).not.toContain('email')
+    second.close()
+  })
+
+  it("a label set on the board after Linear's own change is the newer, and catching up leaves it; an older one goes", async () => {
+    const { time, open, first } = await downtime(() => [node('iss-1', { labels: { nodes: [] }, priority: 1 })])
+    const team = board({ backend: first })
+    const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+    // Linear's change is at half past; this one is at forty past.
+    time.advance(2_400_000)
+    await team.label({ id: root.id, set: { 'tag.keep': 'keep' } })
+    first.close()
+    time.advance(1_200_000)
+    const second = open()
+    await second.syncTick()
+    const labels = (await board({ backend: second }).readChannel({ channel: 'eng' })).threads[0]!.message.labels
+    expect(labels).toEqual({ kind: 'issue', ref: 'ENG-42', state: 'todo', source: 'lin', priority: 'urgent', 'tag.keep': 'keep' })
+    second.close()
+  })
+})
