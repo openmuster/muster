@@ -278,9 +278,13 @@ export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = 
   let fetched = 0
   for (const [key, provider] of Object.entries(sync)) {
     if (!provider.catchUp) continue
-    const last = ctx.db.raw.prepare('select max(received) as at from inbox where key = ?').get(key) as { at: string | null }
+    // A catch-up that failed left where it was to start from: a webhook since then doesn't move it past the gap.
+    const name = `catchup:${key}`
+    const pending = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(name) as { seq: number } | undefined
+    const last = pending ? { at: new Date(pending.seq).toISOString() } : (ctx.db.raw.prepare('select max(received) as at from inbox where key = ?').get(key) as { at: string | null })
     // Nothing ever received means nothing to catch up from: a new sync starts with what comes next.
     if (!last.at) continue
+    if (!pending) ctx.db.write(() => ctx.db.raw.prepare("insert or ignore into cursors (name, profile, seq) values (?, '', ?)").get(name, Date.parse(last.at!)))
     let events: Inbound[]
     try {
       events = await provider.catchUp(last.at, fetcher)
@@ -289,6 +293,7 @@ export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = 
     }
     ctx.db.write(() => {
       for (const event of events) ctx.db.raw.prepare('insert or ignore into inbox (key, id, received, payload) values (?, ?, ?, ?)').get(key, event.id, ctx.now().toISOString(), JSON.stringify(event))
+      ctx.db.raw.prepare("delete from cursors where name = ? and profile = ''").get(name)
     })
     fetched += events.length
   }

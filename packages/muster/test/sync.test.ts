@@ -587,6 +587,182 @@ describe('sync: GitHub threads the board never saw opened', () => {
   })
 })
 
+describe('sync: Linear catch-up after downtime', () => {
+  type Node = Record<string, any>
+  /** Linear's GraphQL API, faked: lists filtered by what the test says changed, a comment made on request. */
+  function fakeLinear() {
+    const state = { issues: [] as Node[], comments: [] as Node[], fail: null as null | 'errors' | 'status', page: 50 }
+    const asked: { field: string; filter: any; after: string | null }[] = []
+    const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const { query, variables } = JSON.parse(String(init?.body ?? '{}'))
+      if (String(query).includes('commentCreate')) return Response.json({ data: { commentCreate: { success: true, comment: { id: 'lc-board' } } } })
+      const field = String(query).includes('comments(') ? 'comments' : 'issues'
+      asked.push({ field, filter: variables.filter, after: variables.after })
+      if (state.fail === 'status') return new Response('{"errors":[{"message":"down"}]}', { status: 503 })
+      if (state.fail === 'errors') return Response.json({ errors: [{ message: 'Rate limit exceeded', extensions: { code: 'RATELIMITED' } }] })
+      const all = state[field]
+      const from = variables.after ? Number(variables.after) : 0
+      const nodes = all.slice(from, from + state.page)
+      return Response.json({ data: { [field]: { nodes, pageInfo: { hasNextPage: from + state.page < all.length, endCursor: String(from + state.page) } } } })
+    }) as typeof fetch
+    return { state, asked, fetcher }
+  }
+  const issueNode = (id: string, title: string, extra: Node = {}): Node => ({ id, identifier: `ENG-${id.slice(4)}`, title, description: '', creator: { id: 'u-nico' }, team: { key: 'ENG' }, state: { name: 'Todo' }, updatedAt: '2026-01-01T00:30:00.000Z', ...extra })
+  const commentNode = (id: string, body: string, issue: Node, by = 'u-maya'): Node => ({ id, body, user: { id: by }, issue, updatedAt: '2026-01-01T00:40:00.000Z' })
+  const webhook = (backend: ReturnType<typeof file>, payload: unknown) => {
+    const body = JSON.stringify(payload)
+    return backend.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })
+  }
+  const opened = { type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'Seen before the downtime', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' } } }
+
+  /** A board that heard one webhook at the clock's start, then stopped for an hour. */
+  async function downtime(options: { bot?: string } = {}) {
+    const time = clock()
+    const dir = tempDir()
+    const linearApi = fakeLinear()
+    const sync = { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'eng' }, ...(options.bot ? { bot: options.bot } : {}) }) }
+    const open = () => file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: linearApi.fetcher })
+    const first = open()
+    await webhook(first, opened)
+    return { time, open, first, ...linearApi }
+  }
+  const sinces = (asked: { field: string; filter: any }[]) => asked.map((each) => [each.field, each.filter.updatedAt.gt])
+
+  it('issues and comments made while the board was down arrive once, a state change too, and the app\'s own comment not at all', async () => {
+    const { time, open, first, state, asked } = await downtime({ bot: 'bot-user' })
+    first.close()
+    const seen = issueNode('iss-1', 'Seen before the downtime', { state: { name: 'In Progress' } })
+    const fresh = issueNode('iss-2', 'Opened while the board was down', { description: 'Should arrive whole.', creator: { id: 'u-maya' } })
+    state.issues = [seen, fresh]
+    state.comments = [commentNode('c-1', 'said while you were down', seen), commentNode('c-2', 'first comment on ENG-2', fresh, 'u-nico'), commentNode('c-3', 'the app wrote this', seen, 'bot-user')]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    await second.syncTick()
+    expect(sinces(asked)).toEqual([['issues', '2026-01-01T00:00:00.000Z'], ['comments', '2026-01-01T00:00:00.000Z']])
+    expect(asked[0]!.filter.team).toEqual({ key: { in: ['ENG'] } })
+    expect(asked[1]!.filter.issue).toEqual({ team: { key: { in: ['ENG'] } } })
+    const read = async (backend: ReturnType<typeof open>) => {
+      const team = board({ backend })
+      const threads = (await team.readChannel({ channel: 'eng' })).threads
+      return Promise.all(threads.map(async (thread) => [thread.message.text, thread.message.by.principal, thread.message.labels, (await team.readThread({ id: thread.message.id })).replies.map((reply) => [reply.text, reply.by.principal])]))
+    }
+    const expected = [
+      ['Seen before the downtime', 'lin:user:u-nico', { kind: 'issue', ref: 'ENG-1', state: 'in-progress', source: 'lin' }, [['said while you were down', 'lin:user:u-maya']]],
+      ['Opened while the board was down\n\nShould arrive whole.', 'lin:user:u-maya', { kind: 'issue', ref: 'ENG-2', state: 'todo', source: 'lin' }, [['first comment on ENG-2', 'lin:user:u-nico']]],
+    ]
+    expect(await read(second)).toEqual(expected)
+    second.close()
+    // Down again, with nothing new: Linear's same answer brings in nothing twice.
+    time.advance(3_600_000)
+    const third = open()
+    await third.syncTick()
+    expect(await read(third)).toEqual(expected)
+    third.close()
+  })
+
+  it('what webhooks already brought, and what the board itself sent, is not imported again, with no bot to tell its own writes apart', async () => {
+    const { time, open, first, state } = await downtime()
+    await webhook(first, { type: 'Comment', action: 'create', data: { id: 'c-1', body: 'heard by webhook', issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } } } })
+    const team = board({ backend: first })
+    const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+    await first.syncTick()
+    await team.reply({ to: root.id, text: 'sent from the board' })
+    expect(await first.syncTick()).toMatchObject({ delivered: 1 })
+    first.close()
+    const seen = issueNode('iss-1', 'Seen before the downtime')
+    state.issues = [seen]
+    state.comments = [commentNode('c-1', 'heard by webhook', seen), commentNode('lc-board', 'sent from the board', seen, 'u-ada')]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    const again = board({ backend: second })
+    const threads = (await again.readChannel({ channel: 'eng' })).threads
+    expect(threads).toHaveLength(1)
+    expect((await again.readThread({ id: threads[0]!.message.id })).replies.map((reply) => reply.text)).toEqual(['heard by webhook', 'sent from the board'])
+    second.close()
+  })
+
+  it('an edit made while down is not read: catch-up brings what is new, as GitHub\'s does', async () => {
+    const { time, open, first, state } = await downtime()
+    await webhook(first, { type: 'Comment', action: 'create', data: { id: 'c-1', body: 'before', issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } } } })
+    first.close()
+    const seen = issueNode('iss-1', 'Seen before the downtime, retitled')
+    state.issues = [seen]
+    state.comments = [commentNode('c-1', 'after', seen)]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    const team = board({ backend: second })
+    const [thread] = (await team.readChannel({ channel: 'eng' })).threads
+    expect(thread!.message.text).toBe('Seen before the downtime')
+    expect((await team.readThread({ id: thread!.message.id })).replies.map((reply) => reply.text)).toEqual(['before'])
+    second.close()
+  })
+
+  it('the next catch-up starts from when the last one ran', async () => {
+    const { time, open, first, state, asked } = await downtime()
+    first.close()
+    state.issues = [issueNode('iss-2', 'Opened while down')]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    second.close()
+    time.advance(3_600_000)
+    const third = open()
+    await third.syncTick()
+    third.close()
+    expect(sinces(asked)).toEqual([
+      ['issues', '2026-01-01T00:00:00.000Z'],
+      ['comments', '2026-01-01T00:00:00.000Z'],
+      ['issues', '2026-01-01T01:00:00.000Z'],
+      ['comments', '2026-01-01T01:00:00.000Z'],
+    ])
+  })
+
+  for (const fail of ['errors', 'status'] as const) {
+    it(`a catch-up Linear refuses (${fail === 'errors' ? 'a 200 carrying errors' : 'a 503'}) keeps where it started, even after a webhook comes in meanwhile`, async () => {
+      const { time, open, first, state, asked } = await downtime()
+      first.close()
+      const fresh = issueNode('iss-2', 'Opened while down')
+      state.issues = [fresh]
+      state.fail = fail
+      time.advance(3_600_000)
+      const second = open()
+      await second.syncTick()
+      // The board is listening again: a webhook arrives before the next restart.
+      await webhook(second, { type: 'Issue', action: 'create', data: { id: 'iss-3', identifier: 'ENG-3', title: 'Opened after', team: { key: 'ENG' }, creatorId: 'u-ada', state: { name: 'Todo' } } })
+      expect((await board({ backend: second }).readChannel({ channel: 'eng' })).threads.map((thread) => thread.message.text).sort()).toEqual(['Opened after', 'Seen before the downtime'])
+      second.close()
+      state.fail = null
+      time.advance(3_600_000)
+      const third = open()
+      await third.syncTick()
+      expect(sinces(asked).at(-2)).toEqual(['issues', '2026-01-01T00:00:00.000Z'])
+      expect((await board({ backend: third }).readChannel({ channel: 'eng' })).threads.map((thread) => thread.message.text).sort()).toEqual(['Opened after', 'Opened while down', 'Seen before the downtime'])
+      third.close()
+    })
+  }
+
+  it('reads every page Linear has, up to ten of each list', async () => {
+    const { time, open, first, state, asked } = await downtime()
+    first.close()
+    state.page = 2
+    state.issues = Array.from({ length: 5 }, (_, index) => issueNode(`iss-${index + 10}`, `Issue ${index + 10}`))
+    state.comments = Array.from({ length: 30 }, (_, index) => commentNode(`c-${index}`, `comment ${index}`, state.issues[0]!))
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    expect(asked.filter((each) => each.field === 'issues').map((each) => each.after)).toEqual([null, '2', '4'])
+    expect(asked.filter((each) => each.field === 'comments')).toHaveLength(10)
+    const team = board({ backend: second })
+    const threads = (await team.readChannel({ channel: 'eng' })).threads
+    expect(threads).toHaveLength(6)
+    expect((await team.readThread({ id: threads.find((thread) => thread.message.text === 'Issue 10')!.message.id })).replies).toHaveLength(20)
+    second.close()
+  })
+})
+
 describe('sync: config and the webhook route', () => {
   it('reads platforms from the operator\'s file, with secrets named by environment variable and never written', () => {
     const dir = tempDir()

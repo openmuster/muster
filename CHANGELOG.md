@@ -7,6 +7,13 @@ versions are affected.
 
 ### Added
 
+- Linear sync catches up after downtime, as GitHub's does. When the ticker
+  starts it asks Linear for the issues and comments in the mapped teams
+  updated since the last event it received, and imports what the webhooks
+  missed: new issues, new comments and state changes. What the board already
+  has is not imported twice. Edits and removals made meanwhile are not read.
+  It reads up to 500 of each. Covered by tests against a faked Linear API
+  only.
 - `mu run --runner cloudflare --push`. The run is waited on. Once the agent
   exits, the Worker closes every host the run opened and stops what the agent
   left running. `mu run` then reads the agent's changes out as a git bundle,
@@ -109,6 +116,10 @@ rest to anyone who shares a machine, or whose server's output is kept.
 
 ### Fixed
 
+- A catch-up that failed, for GitHub or Linear, no longer loses its place.
+  The next start asked from the last event received, so a webhook that came
+  in after the failure moved it past what was missed. It now asks again from
+  where the failed one started.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.

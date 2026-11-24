@@ -177,6 +177,10 @@ export function github(options: GitHubOptions): Provider {
   }
 }
 
+/** Catch-up reads at most this many pages of each list, of this many each: Linear limits requests and their cost. */
+const LINEAR_CATCHUP_PAGES = 10
+const LINEAR_CATCHUP_PAGE = 50
+
 export type LinearOptions = {
   secret: string
   token?: string
@@ -190,6 +194,28 @@ export type LinearOptions = {
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
 export function linear(options: LinearOptions): Provider {
   const team = (place: string) => options.teams[place]
+  const postAs = (query: string, variables: unknown, fetcher: typeof fetch) => {
+    // A personal API key goes as it is; an OAuth token is a bearer token.
+    const token = options.token!
+    const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
+    return send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+  }
+  /** An issue as a thread's first message, as its webhook would have brought it, in the state it is in now. */
+  const rootOf = (issue: Record<string, any>, id: string): Inbound => {
+    const thread = `issue:${issue.id}`
+    const author = String(issue.creator?.id ?? 'unknown')
+    return {
+      id,
+      author,
+      place: String(issue.team?.key ?? ''),
+      self: options.bot !== undefined && author === options.bot,
+      kind: 'root',
+      thread,
+      external: thread,
+      text: `${issue.title ?? ''}\n\n${issue.description ?? ''}`.trim(),
+      labels: { kind: 'issue', ref: String(issue.identifier ?? ''), ...(issue.state?.name ? { state: slug(String(issue.state.name)) } : {}) },
+    }
+  }
   return {
     type: 'linear',
     verify({ headers, body }) {
@@ -231,11 +257,48 @@ export function linear(options: LinearOptions): Provider {
       const to = team(place)
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
+    async catchUp(since, fetcher) {
+      if (!options.token) return []
+      const keys = Object.keys(options.teams)
+      if (keys.length === 0) return []
+      // Every page of both lists, or nothing: a call that fails throws, and the board asks again from the same point.
+      const read = async (field: 'issues' | 'comments', nodes: string, filter: unknown) => {
+        const out: Record<string, any>[] = []
+        let after: string | null = null
+        for (let page = 0; page < LINEAR_CATCHUP_PAGES; page++) {
+          const answer = await postAs(`query($filter: ${field === 'issues' ? 'IssueFilter' : 'CommentFilter'}, $after: String) { ${field}(filter: $filter, first: ${LINEAR_CATCHUP_PAGE}, after: $after, orderBy: updatedAt) { nodes { ${nodes} } pageInfo { hasNextPage endCursor } } }`, { filter, after }, fetcher)
+          const list = answer?.data?.[field]
+          // Linear can answer 200 with errors and no data, a rate limit among them: that is a failure, not "nothing changed".
+          if (!list || !Array.isArray(list.nodes)) throw new Failure('platform_refused', `Linear did not list ${field}: ${String(answer?.errors?.[0]?.message ?? 'no data').slice(0, 200)}`)
+          out.push(...list.nodes)
+          if (!list.pageInfo?.hasNextPage || !list.pageInfo.endCursor) break
+          after = String(list.pageInfo.endCursor)
+        }
+        return out
+      }
+      const issueFields = 'id identifier title description creator { id } team { key } state { name } updatedAt'
+      const changed = { updatedAt: { gt: since } }
+      const issues = await read('issues', issueFields, { ...changed, team: { key: { in: keys } } })
+      const comments = await read('comments', `id body updatedAt user { id } issue { ${issueFields} }`, { ...changed, issue: { team: { key: { in: keys } } } })
+      const out: Inbound[] = []
+      // Issues first, so a comment on one opened while the board was down lands in its thread.
+      for (const issue of issues) {
+        const root = rootOf(issue, `catchup:issue:${issue.id}`)
+        out.push(root)
+        // Its state now: a move missed while down. Importing it on a thread that already says so changes nothing.
+        if (root.labels?.state) out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, labels: { state: root.labels.state } })
+      }
+      for (const comment of comments) {
+        if (!comment.issue?.id) continue
+        // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
+        const { author, text, labels, place } = rootOf(comment.issue, '')
+        const by = String(comment.user?.id ?? 'unknown')
+        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} } })
+      }
+      return out
+    },
     async deliver(message, target, fetcher) {
-      // A personal API key goes as it is; an OAuth token is a bearer token.
-      const token = options.token!
-      const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
-      const post = (query: string, variables: unknown) => send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+      const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)
       if (target.threadExternal === null) {
         const found = await post('query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }', { key: target.place })
         const teamId = found?.data?.teams?.nodes?.[0]?.id
