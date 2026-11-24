@@ -6,7 +6,7 @@ import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
 import type { By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
-import { withLines } from './files.ts'
+import { FILTERED, withLines } from './files.ts'
 import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
 
 export type Sync = Record<string, Provider>
@@ -98,10 +98,18 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
 function importOne(ctx: Context, provider: Provider, key: string, event: Inbound) {
   // The app's own writes come back as webhooks; so does what the board itself delivered.
   if (event.self) return
+  // What its files gave: those that came, and a line for each that didn't, so none is lost without a word.
+  let attachments = event.fetched?.attachments ?? []
+  if (event.text !== undefined) event = { ...event, text: withLines(event.text, event.fetched?.notes ?? []) }
   if (event.text !== undefined && provider.filter) {
+    // The filter sees the text and the lines about files, never the files: one that drops or changes the
+    // message can't vouch for them, so none of them is kept, and the message says so in words the filter can't touch.
     const kept = provider.filter(event.text)
     if (kept === null) return
-    event = { ...event, text: kept }
+    if (kept.trimEnd() !== event.text.trimEnd() && (attachments.length > 0 || event.fetched?.withheld)) {
+      attachments = []
+      event = { ...event, text: withLines(kept, [FILTERED]) }
+    } else event = { ...event, text: kept }
   }
   if (event.kind === 'edit' || event.kind === 'delete') {
     const link = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.external) as { message: number } | undefined
@@ -118,9 +126,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     return
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
-  // What its files gave: those that came, and a line for each that didn't, so none is lost without a word.
-  const attachments = event.fetched?.attachments ?? []
-  const text = withLines(event.text ?? '', event.fetched?.notes ?? [])
+  const text = event.text ?? ''
   const at = ctx.now().toISOString()
   const by: By = { principal: `${key}:user:${event.author}`, profile: null }
   let root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined

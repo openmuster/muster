@@ -28,7 +28,7 @@ export type Inbound = {
   /** Files the message carries on the platform, still to be fetched. Never holds a credential. */
   files?: Remote[]
   /** What fetching them gave: files on the board, and a line for each one that was not taken. */
-  fetched?: { attachments: Attachment[]; notes: string[]; tries: number }
+  fetched?: { attachments: Attachment[]; notes: string[]; tries: number; withheld?: number }
 }
 
 /** A file on the platform, as an event names it. `id` is the platform's own, when it has one. */

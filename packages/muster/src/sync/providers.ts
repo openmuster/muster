@@ -379,9 +379,9 @@ export function slack(options: SlackOptions): Provider {
     async download(file, fetcher) {
       if (!options.token) throw refused('no token to fetch it with')
       const got = await fetchFile(fetcher, file.url, { hosts: ['files.slack.com'], headers: { authorization: `Bearer ${options.token}` }, ...(file.size !== undefined ? { size: file.size } : {}) })
-      // Without `files:read` Slack answers with its sign-in page, not the file.
-      const page = (got.type ?? '').startsWith('text/html') && !(file.type ?? '').startsWith('text/html')
-      if (page || (file.size !== undefined && got.bytes.length !== file.size)) throw refused('Slack sent a page, not the file: does the app have files:read?')
+      // A web page in place of a file that isn't one is likely Slack's sign-in page: the token can't read files.
+      if ((got.type ?? '').startsWith('text/html') && !(file.type ?? '').startsWith('text/html')) throw refused('Slack sent a page, not the file: does the app have files:read?')
+      if (file.size !== undefined && got.bytes.length !== file.size) throw refused(`Slack sent ${sizeOf(got.bytes.length)}, not the ${sizeOf(file.size)} it named`)
       return got
     },
     async deliver(message, target, fetcher, read) {

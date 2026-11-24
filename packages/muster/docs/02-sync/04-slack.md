@@ -43,15 +43,19 @@ Messages from the app's own bot, named by `bot`, are not imported back.
 ## Files
 
 - **In:** a file on a Slack message is fetched from `files.slack.com` with
-  the bot token and attached to the message. It needs `files:read`. A file
+  the bot token and attached to the message. It needs `files:read`. A web
+  page in place of the file is taken to be Slack's sign-in page, and the
+  message says to check that scope. A file
   Slack only links to (from Google Drive, say) is named, not fetched.
 - **Out:** each file on a board message is uploaded with
   `files.getUploadURLExternal`, then shared into the Slack thread after the
   text with `files.completeUploadExternal`. It needs `files:write`. When the
   board message is a new thread, its files are the thread's first reply.
 
-Slack posts a shared file as a message of the app's bot user. The board
-knows it by the files' IDs and doesn't import it back. Deleting the board
+When the shared files come back as a message with no text, in the thread
+they were sent to, the board knows them by their IDs and doesn't import
+them back, whether or not Slack marks the message as the bot's. Someone who
+shares one of them again, with words of their own, is imported. Deleting the board
 message removes its text from Slack, not the files. An app made before
 files synced needs the two scopes added under **OAuth & Permissions**, and
 reinstalling. See

@@ -26,6 +26,8 @@ export const sizeOf = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 
 export const noteIn = (name: string, why: string) => `[file not imported: ${safeName(name)}: ${why}]`
 /** The line a message carries on the platform for a board file that did not go out with it. */
 export const noteOut = (name: string, why: string) => `[file not sent: ${safeName(name)}: ${why}]`
+/** Said in place of a message's files when the operator's filter dropped or changed its text. */
+export const FILTERED = '[files not imported: the filter changed this message]'
 export const withLines = (text: string, lines: string[]) => (lines.length ? `${text}\n\n${lines.join('\n')}`.trim() : text)
 
 /**
@@ -83,8 +85,19 @@ export async function fetchFiles(ctx: Context, sync: Sync, fetcher: typeof fetch
     const notes: string[] = []
     let again = false
     const linked = (key: string, external: string) => ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, external) !== undefined
-    // A message whose every file the board put there is the board's own, come back: not imported.
-    const ours = files.every((file) => file.id !== undefined && linked(`${row.key}/files`, `file:${file.id}`))
+    // The board's own share of files it uploaded, come back: no text, in the thread it sent them to, and every file
+    // its own. A person who shares one of them again, with words or elsewhere, is imported like anyone.
+    const sentHere = (id: string) => ctx.db.raw.prepare("select 1 from links f join links m on m.message = f.message and m.key = ? where f.key = ? and f.external = ? and (m.thread_external = ? or m.external = ?)").get(row.key, `${row.key}/files`, `file:${id}`, event.thread, event.thread) !== undefined
+    const ours = !(event.text ?? '').trim() && files.every((file) => file.id !== undefined && sentHere(file.id))
+    // Nothing is fetched for a message the board won't keep: unmapped, or one the operator's filter drops or changes.
+    const kept = provider.filter && event.text !== undefined ? provider.filter(event.text) : event.text
+    const filtered = kept === null || (kept !== undefined && kept.trimEnd() !== (event.text ?? '').trimEnd())
+    const unmapped = provider.channelFor(event.place, event.kind) === null
+    if (filtered || unmapped) {
+      const next: Inbound = { ...rest, fetched: { attachments: [], notes: [], tries, withheld: files.length } }
+      ctx.db.write(() => ctx.db.raw.prepare('update inbox set payload = ? where key = ? and id = ? and done = 0').get(JSON.stringify(next), row.key, row.id))
+      continue
+    }
     if (!event.self && !ours && !linked(row.key, event.external)) {
       for (const [index, file] of files.entries()) {
         if (index >= LIMITS.attachments) {

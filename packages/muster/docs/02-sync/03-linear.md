@@ -57,8 +57,8 @@ user named in `bot`.
   a link to it is added to the comment or the new issue's description. An
   image shows inline.
 
-The key needs no more access than it has for comments: read to fetch files,
-write to upload them. See [Files](./01-overview.md#files) for the limits.
+A personal API key with read and write access fetches and uploads files.
+What an OAuth app's scopes need for files has not been checked. See [Files](./01-overview.md#files) for the limits.
 
 ## Set it up
 

@@ -128,7 +128,8 @@ The rules are the same for each platform:
   once it is imported.
 - **Once each way.** A file is fetched once, when its message is new: a
   message the board already has, or one it sent, fetches nothing, and the
-  board knows the files it uploaded when they come back.
+  board knows the files it uploaded when they come back. Nothing is fetched
+  for a place that isn't mapped.
 
 A webhook is answered first and its files are fetched on the next tick of
 `mu serve` or the daemon, so a message with files arrives a moment after the
@@ -163,6 +164,12 @@ printf %s "$text"
 ```
 
 It runs with `PATH` and `HOME` only.
+
+The filter sees the text, with the lines that name files not imported. It
+never sees a file or a file's name. So it decides first: a message it drops
+fetches nothing, and a message whose text it changes keeps none of its
+files, and says so: `[files not imported: the filter changed this message]`.
+Text it passes as it is, give or take a final newline, keeps its files.
 
 ## After downtime
 

@@ -15,7 +15,7 @@ const MB = 1024 * 1024
 type Call = { url: string; method: string; auth: string | null; headers: Headers; body: unknown }
 
 /** A board on disk, synced with Slack, Linear and GitHub, whose platforms are a fetcher that answers like them. */
-function setup(answers: Record<string, (call: Call) => Response | undefined> = {}) {
+function setup(answers: Record<string, (call: Call) => Response | undefined> = {}, filter?: (text: string) => string | null) {
   const time = clock()
   const dir = tempDir()
   const calls: Call[] = []
@@ -49,7 +49,7 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     return new Response('a host the board should never reach', { status: 200 })
   }) as typeof fetch
   const sync = {
-    chat: slack({ secret: SECRET, token: SLACK_TOKEN, bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }),
+    chat: { ...slack({ secret: SECRET, token: SLACK_TOKEN, bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }), ...(filter ? { filter } : {}) },
     lin: linear({ secret: SECRET, token: LINEAR_TOKEN, teams: { ENG: 'eng' } }),
     gh: github({ secret: SECRET, token: 'ghs_github-credential', bot: 'muster[bot]', repos: { 'acme/web': { issues: 'web/issues', mirror: true } } }),
   }
@@ -162,6 +162,35 @@ describe('sync: files from Slack', () => {
     expect((await down.team.readChannel({ channel: 'general' })).threads[0]!.message).toMatchObject({ text: 'lost\n\n[file not imported: trace.json: the platform did not hand it over]', attachments: [] })
   })
 
+  it('a file in a channel that is not mapped is never fetched', async () => {
+    const { backend, calls, chat } = setup()
+    await chat({ channel: 'C999', subtype: 'file_share', user: 'U1', text: 'elsewhere', ts: '1.1', files: [slackFile()] }, 'Ev1')
+    await backend.syncTick()
+    expect(calls).toHaveLength(0)
+  })
+
+  it("the operator's filter: a message it drops fetches nothing; one it changes keeps no file and says so; the lines about files go through it", async () => {
+    const filter = (text: string) => (text.includes('DROP') ? null : text.replace('secret', '[gone]').replace('core.dump', 'a-dump'))
+    const { team, backend, calls, chat } = setup({}, filter)
+    await chat({ subtype: 'file_share', user: 'U1', text: 'DROP this', ts: '1.1', files: [slackFile()] }, 'Ev1')
+    await chat({ subtype: 'file_share', user: 'U1', text: 'a secret trace', ts: '1.2', files: [slackFile()] }, 'Ev2')
+    await chat({ subtype: 'file_share', user: 'U1', text: 'big', ts: '1.3', files: [slackFile({ name: 'core.dump', size: 26 * MB })] }, 'Ev3')
+    await backend.syncTick()
+    expect(calls).toHaveLength(0)
+    const messages = (await team.readChannel({ channel: 'general' })).threads.map((thread) => thread.message)
+    expect(messages.map((message) => [message.text, message.attachments.length]).sort()).toEqual([
+      ['a [gone] trace\n\n[files not imported: the filter changed this message]', 0],
+      ['big\n\n[file not imported: a-dump: 26.0 MB, over 25 MB]', 0],
+    ])
+  })
+
+  it('a filter that passes the text as it is, even with a newline added, keeps the files', async () => {
+    const { team, backend, chat } = setup({}, (text) => `${text}\n`)
+    await chat({ subtype: 'file_share', user: 'U1', text: 'the trace', ts: '1.1', files: [slackFile()] }, 'Ev1')
+    await backend.syncTick()
+    expect((await team.readChannel({ channel: 'general' })).threads[0]!.message.attachments).toHaveLength(1)
+  })
+
   it('the same message sent again, under a new event ID, fetches nothing', async () => {
     const { team, backend, calls, chat } = setup()
     const message = { subtype: 'file_share', user: 'U1', text: 'once', ts: '1.1', files: [slackFile()] }
@@ -191,11 +220,30 @@ describe('sync: files to Slack', () => {
     expect(new URLSearchParams(String(sent[0]!.body)).get('length')).toBe(String(TRACE.length))
     const fileId = String(sent[1]!.url).replace(/.*\/u/, 'FUP')
     expect(sent[3]!.body).toEqual({ files: [{ id: fileId, title: 'trace.json' }], channel_id: 'C123', thread_ts: '1.1' })
-    // Slack posts the shared file as a message of the bot's user, with no bot ID to know it by.
+    // Slack's share of the file, as if it came with no bot ID to know it by: the board knows it by the file's ID.
     await chat({ subtype: 'file_share', user: 'UBOTUSER', text: '', ts: '1.9', thread_ts: '1.1', files: [slackFile({ id: fileId })] }, 'Ev2')
     await backend.syncTick()
     expect((await team.readThread({ id: thread!.message.id })).replies.map((reply) => reply.text)).toEqual(['here'])
     expect(calls.filter((call) => call.url.startsWith('https://files.slack.com/files-pri/'))).toHaveLength(0)
+    // Someone sharing that file again with words of their own is imported like anyone.
+    await chat({ subtype: 'file_share', user: 'U2', text: 'is this the one?', ts: '1.10', thread_ts: '1.1', files: [slackFile({ id: fileId })] }, 'Ev3')
+    await backend.syncTick()
+    const replies = (await team.readThread({ id: thread!.message.id })).replies
+    expect(replies.map((reply) => [reply.text, reply.attachments.length])).toEqual([['here', 1], ['is this the one?', 1]])
+  })
+
+  it('when Slack takes the bytes but will not share them, the posted text is changed to say so, and nothing is posted twice', async () => {
+    const { team, backend, calls, chat } = setup({ 'https://slack.com/api/files.completeUploadExternal': () => Response.json({ ok: false, error: 'not_in_channel' }) })
+    await chat({ user: 'U1', text: 'go', ts: '1.1' }, 'Ev1')
+    await backend.syncTick()
+    const [thread] = (await team.readChannel({ channel: 'general' })).threads
+    const stored = await team.filePut({ name: 'trace.json', data: TRACE.toString('base64') })
+    await team.reply({ to: thread!.message.id, text: 'here', attachments: [stored] })
+    await backend.syncTick()
+    await backend.syncTick()
+    expect(calls.filter((call) => call.url.endsWith('chat.postMessage'))).toHaveLength(1)
+    const update = calls.find((call) => call.url.endsWith('chat.update'))!
+    expect(update.body).toMatchObject({ channel: 'C123', text: 'here\n\n[file not sent: trace.json: Slack did not take it]' })
   })
 
   it('a file Slack will not take is named in the text, and the text still goes once', async () => {
