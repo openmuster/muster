@@ -2,6 +2,7 @@ packages:
   - packages/*
   - templates/swarm
   - templates/factory
+  - templates/cloudflare-runner
   - apps/docs
 allowBuilds:
   esbuild: false

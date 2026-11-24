@@ -140,7 +140,8 @@ taking a stranger's is always explicit.
 `--by <actor id>` narrows that to the tasks one actor created, by its whole
 ID, profile and all: `--by local:user:ada+workflows` takes nothing
 `local:user:ada+lead` made. A [workflow](./16-workflows.md)'s workers use it
-to take only what the daemon made for them.
+to take only what the daemon made for them. It is for `--ready` only: a
+task named by its ID is that task, so `--by` there is refused.
 
 `--for <profile>` at creation, or `tasks assign`, gives a task to one profile.
 Only that profile may claim it, and its `--ready` takes assigned tasks first.

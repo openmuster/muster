@@ -7,6 +7,27 @@ versions are affected.
 
 ### Added
 
+- `mu run --runner cloudflare --repo` installs the repository's dependencies
+  from its lockfile, with the same script as on Vercel: pnpm, npm or yarn,
+  with no install scripts, for at most three minutes. The Worker opens the
+  npm registry hosts to read, and nothing else, for the install alone: the
+  board and the model are closed while it runs, since it runs the
+  repository's own code. After it the registries close, whatever it left
+  running is killed, and the agent starts. A start that would take longer
+  than 4 minutes gives the install less time, or skips it with
+  `failed (timeout)`, so the CLI always gets the run's ID. A failed install gets the `deps` label
+  and a reply, and the agent starts. `--no-install` skips it. Redeploy
+  `templates/cloudflare-runner` and rebuild its image to use it. Covered by
+  tests, not run live.
+
+- Linear sync catches up after downtime, as GitHub's does. When the ticker
+  starts it asks Linear for the issues and comments in the mapped teams
+  updated since the last event it received, and imports what the webhooks
+  missed: new issues, new comments and state changes. What the board already
+  has is not imported twice. Edits and removals made meanwhile are not read.
+  A state change is put down to the sync (`lin`), since Linear's list doesn't
+  say who made it. One start reads up to 500 of each, oldest first; the next
+  goes on from there. Covered by tests against a faked Linear API only.
 - Linear sync catches up after downtime, as GitHub's does. When the ticker
   starts it asks Linear for the issues and comments in the mapped teams
   updated since the last event it received, and imports what the webhooks
@@ -33,6 +54,17 @@ versions are affected.
   run a command in it and read a file from it. The last two work only once the
   agent has exited and the run is closed. Redeploy
   `templates/cloudflare-runner` to use it.
+
+- `mu run --ready <channel> --loop --runner cloudflare` is a worker on this
+  machine, as on Vercel: it claims each ready task under a claim token made
+  for it and starts a container of its own for that task. It waits for each
+  run and stops it once the agent exits, so the Worker keeps none for its 15
+  minutes. With `--push` each task gets its own pull request. `--ready`
+  without `--loop` is still one container for every task, and can't `--push`.
+  A registered workflow's `workers.runner` can be `cloudflare`, with `push`
+  too; the workers read `MUSTER_CF_WORKER` and `MUSTER_CF_SECRET` from the
+  daemon's environment. Both are covered by tests against a stand-in Worker
+  only, not run live.
 
 - `mu inbox` lists what is for you since you last asked: a message that
   mentions you, a task assigned to you, and a reply in a thread you wrote in,
@@ -120,12 +152,50 @@ rest to anyone who shares a machine, or whose server's output is kept.
 
 ### Changed
 
+- `mu token create` no longer makes a token that reaches every channel when
+  `--can` is left out. Name the channels with `--can`, or pass `--all` for a
+  token with your full access, as before; the two together are refused.
+  **A script that runs `mu token create` with no `--can` needs `--all`.**
+  `mu token list` shows such a token as `everything`. The token `mu serve`
+  prints is unchanged.
+- `mu tasks claim <id>`, `mu tasks run <id>` and `mu run <id>` refuse `--by`
+  (`invalid_by`). It only narrows `--ready`, and was ignored with an ID.
+
 - The board's file is at store version 7 (it notes deliveries waiting on a
   platform). A board made by an older muster is upgraded when opened, and
   can't then be opened by an older one. Back it up first with `mu backup`.
 
 ### Fixed
 
+- `mu run --ready` on Cloudflare, or on Vercel without `--loop`, left
+  `--label`, `--from` and `--by` out of the `mu run` it started in the
+  sandbox, so the worker there took tasks they would have kept it from, and
+  none of the owners `--from` named. They are now passed on.
+- A workflow whose workers had started, and whose start then failed or was
+  given up on, was answered `couldn't start` on its thread. It now says the
+  workers started and that the run couldn't be confirmed.
+- A `for` filter of `+<profile>`, an actor ID with nobody before the `+`,
+  was taken and matched nothing. It is refused as `invalid_profile`.
+- `mu run --ready <channel> --loop --runner cloudflare` started a new
+  container each time the last one returned, which was at once, so it kept
+  starting them until the board refused to make more tokens. It is now a
+  worker with one container per task.
+- A `mu run --ready --loop --push` worker with no `--repo`, a repository
+  not on github.com, or no GitHub App set claimed each ready task and then
+  failed it. It is now refused before it claims anything, on Vercel and on
+  Cloudflare.
+- A cloud worker (`--ready --loop`) whose run didn't start, or ended without
+  saying how, left the task claimed and the agent's token live, and went on
+  to claim the next. It now gives the claim back and revokes the token. It
+  stops at once when the runner refuses the start (a wrong
+  `MUSTER_CF_SECRET`, say) or the start's outcome is unknown, and after three
+  failures in a row otherwise. Ctrl-C gives the claim back too, and a Ctrl-C
+  right after a claim starts nothing. A run whose status never comes back is
+  given up at its deadline. A Vercel SDK too old to be waited on stops the
+  worker (`runner_too_old`) instead of starting a sandbox per ready task.
+- A registered workflow with cloud workers checks the daemon's environment
+  first, and says on the thread what is missing, such as `MUSTER_CF_SECRET`,
+  instead of starting workers that exit at once.
 - A catch-up that failed, for GitHub or Linear, no longer loses its place.
   The next start asked from the last event received, so a webhook that came
   in after the failure moved it past what was missed. It now asks again from
@@ -154,10 +224,6 @@ rest to anyone who shares a machine, or whose server's output is kept.
 - `mu run` on this machine refused nothing of what is only for a sandbox:
   `--push`, `--repo`, `--detach` and `--no-install` were silently ignored.
   They are now refused before any agent starts.
-- On Cloudflare, `mu run --ready --loop --push` was refused with a message
-  that asked for the `--loop` it had. It now says why: a Cloudflare worker's
-  tasks share one container and one checkout.
-
 - The Cloudflare runner template now runs. It was written from documentation
   and had never been deployed. On its first deploy:
   - its container stopped as soon as the Worker went idle;

@@ -1,5 +1,5 @@
 import { Failure, misuse } from '../failure.ts'
-import { actorId, channelScope, inScope, labelFilter, LIMITS, matchesLabels, profileName, type BoardEvent, type Caller, type LabelFilter, type Message } from '../model.ts'
+import { actorId, channelScope, forName, inScope, labelFilter, LIMITS, matchesLabels, profileName, type BoardEvent, type Caller, type LabelFilter, type Message } from '../model.ts'
 import { toEvent } from '../store/log.ts'
 import { allowed, findMessage, limitOf, messageFor, toMessage, type Context } from './context.ts'
 import { findTask, type Task } from './tasks.ts'
@@ -116,13 +116,6 @@ type Compiled = {
   text: string | null
   types: string[] | null
   for: { id: string; principal: string; profile: string | null } | null
-}
-
-/** Checks what a `for` filter names: a profile name, or a whole actor ID whose profile part, if any, is one. */
-export function forName(value: string): string {
-  if (!/[:+]/.test(value)) return profileName(value)
-  if (value.includes('+')) profileName(value.slice(value.indexOf('+') + 1))
-  return value
 }
 
 /** Who a `for` filter is for. A bare name is one of the caller's profiles; anything else is a whole actor ID, with or without a profile. */
