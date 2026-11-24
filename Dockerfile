@@ -9,7 +9,7 @@
 
 # Build the package from this checkout and pack it, the way a release is packed.
 # The base is named by its digest, so the image is built on what was looked at: Dependabot proposes the next one.
-FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530 AS build
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS build
 RUN corepack enable
 WORKDIR /src
 COPY . .
@@ -19,7 +19,7 @@ RUN pnpm install --frozen-lockfile --filter muster... \
  && mv /out/muster-*.tgz /out/muster.tgz
 
 # Run it: Node and the packed CLI, nothing else.
-FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370
 COPY --from=build /out/muster.tgz /tmp/muster.tgz
 RUN npm install --global /tmp/muster.tgz && rm /tmp/muster.tgz \
  && mkdir -p /data && chown node:node /data
