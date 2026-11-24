@@ -118,6 +118,9 @@ rest to anyone who shares a machine, or whose server's output is kept.
 
 ### Fixed
 
+- `mu run --ready` on Cloudflare, or on Vercel without `--loop`, left
+  `--label` and `--by` out of the `mu run` it started in the sandbox, so the
+  worker there took any ready task. They are now passed on.
 - A workflow whose workers had started, and whose start then failed or was
   given up on, was answered `couldn't start` on its thread. It now says the
   workers started and that the run couldn't be confirmed.

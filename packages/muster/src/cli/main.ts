@@ -1623,7 +1623,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const chosen = str(parsed.flags, 'agent')
   const inner = [
     'run',
-    ...(ready === undefined ? [String(task)] : ['--ready', ready, '--loop', '--wait', '2m']),
+    // A worker there takes only what --label and --by let one here take.
+    ...(ready === undefined ? [String(task)] : ['--ready', ready, '--loop', '--wait', '2m', ...list(parsed.flags, 'label').flatMap((label) => ['--label', label]), ...(str(parsed.flags, 'by') !== undefined ? ['--by', str(parsed.flags, 'by')!] : [])]),
     ...(profile ? ['--as', profile] : []),
     ...(safe ? [] : ['--bypass-permissions']),
     ...(timeout ? ['--timeout', timeout] : []),

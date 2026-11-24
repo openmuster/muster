@@ -183,6 +183,28 @@ export const Sandbox = { async create(options) {
     expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeout).toBe(20 * 60_000)
   })
 
+  it('a --ready worker in one sandbox takes there only what --label and --by let it take here', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const narrow = ['--label', 'workflow=review', '--label', 'request=7', '--by', 'local:user:ada+workflows']
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', ...narrow, '--json'], { env: { ...board, ...sdk.env } })
+    expect((await sdk.read()).filter((e) => e.run?.detached).at(-1).run.args[1]).toContain("'--ready' 'work/' '--loop' '--wait' '2m' '--label' 'workflow=review' '--label' 'request=7' '--by' 'local:user:ada+workflows'")
+    const got: any[] = []
+    const worker = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        got.push(JSON.parse(body))
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ id: 'cf-run-1' }))
+      })
+    })
+    await new Promise<void>((resolve) => worker.listen(0, '127.0.0.1', resolve))
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'fixer', ...narrow, '--json'], { env: { ...board, MUSTER_CF_WORKER: `http://127.0.0.1:${(worker.address() as { port: number }).port}`, MUSTER_CF_SECRET: 's' } })
+    worker.close()
+    expect(got[0].command).toEqual(['mu', 'run', '--ready', 'work/', '--loop', '--wait', '2m', ...narrow, '--as', 'fixer', '--bypass-permissions', '--agent', 'claude'])
+  })
+
   it('vercel: a run that exits badly is a failure here too, and the sandbox is still removed', async () => {
     const dir = tempDir()
     const sdk = fakeSdk(dir, { exit: 2 })

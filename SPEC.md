@@ -349,6 +349,8 @@ the agent working in the checkout; a kept base forked for later runs; two
 with a GitHub App, where an agent fixed a bug in a private repository cloned
 with the App's read token, ran its tests offline, and the change was pushed
 to `mu/task-<id>` with a pull request opened, the App its author.
+Holding the model's host to its inference calls has not been probed live
+since the probe in the 20 Nov run.
 
 Different from the plan:
 
