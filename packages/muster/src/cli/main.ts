@@ -15,7 +15,6 @@ import { boardPath } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
-import { takeLock } from '../daemon/lock.ts'
 import * as guard from '../daemon/guard.ts'
 import { answer as answerMcp } from './mcp.ts'
 import * as launchd from '../daemon/launchd.ts'
@@ -73,7 +72,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
  * Writes something a watcher's filter matches and waits for a reply: proof that the daemon is running,
  * the filter matches, the gate lets it through, and the command it runs wakes something that answers.
  */
-async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string, guardAt: string): Promise<number> {
+async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: string): Promise<number> {
   const wanted = parsed.positionals[1]
   if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher or outgoing webhook: mu daemon check <name>.')
   const config = loadDaemonConfig(run.io.env)
@@ -97,11 +96,10 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, lock: string
   if (!watcher) throw new Failure('unknown_watcher', `No watcher or outgoing webhook is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${watchersPath()}, outgoing webhooks in ${hooksPath()}.` })
   const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}), principal: (await run.team.backend.self(null)).principal })
   const timeout = duration(str(parsed.flags, 'timeout') ?? '5m', 'timeout') * 1000
-  // Nothing runs watchers unless a ticker holds the board's lock: say so now, not after the timeout.
+  // Nothing runs watchers unless a ticker holds the board's `tick` lease: say so now, not after the timeout.
+  // Read, never taken: taking it to look would hand the ticker's role to this command for a moment.
   if (mode === 'file') {
-    const free = takeLock(lock)
-    if (free) {
-      free.release()
+    if (!(await run.team.backend.leases?.holder('tick'))) {
       const { parked } = guard.readGuard(guardAt)
       if (parked) throw new Failure('daemon_stopped', parked.why, { hint: `Stopped since ${parked.at}; it tries again at ${guard.retryAt(parked)}. Its log says what failed: ${join(configDir(), 'logs')}.`, next: ['mu daemon reset'] })
       throw new Failure('no_ticker', 'Nothing is running the watchers for this board.', { next: ['mu daemon run', 'mu daemon install'] })
@@ -975,8 +973,8 @@ const commands: Record<string, Command> = {
         if (/^(failed|dropped) {2,}(hook|workflow) /.test(line)) run.io.err(line)
       }
       try {
-        // The same lock the daemon takes: whichever started first ticks, and the other only serves.
-        const ended = await runDaemon({ team: run.team, lock: `${me.where}.tick.lock`, watchers, hooks, ...(workflows ? { workflows } : {}), stop: run.io.stop, log })
+        // The same lease the daemon takes: whichever started first ticks, and the other only serves.
+        const ended = await runDaemon({ team: run.team, watchers, hooks, ...(workflows ? { workflows } : {}), stop: run.io.stop, log })
         if (ended === 'held') await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve())))
       } finally {
         // Whatever went wrong, the port is given back: a server left listening would keep the process alive for ever.
@@ -993,12 +991,19 @@ const commands: Record<string, Command> = {
       const verb = parsed.positionals[0] ?? 'status'
       if (verb === 'check') {
         const me = await run.team.whoami()
-        return checkWatcher(run, parsed, me.mode, `${me.where}.tick.lock`, guardAt)
+        return checkWatcher(run, parsed, me.mode, guardAt)
       }
       if (verb === 'run') {
         const me = await reach(run)
         if (!me) return 0
-        const lock = `${me.where}.tick.lock`
+        // A board at a URL is ticked by its server: every tick from here would be refused. Exit 0, so a
+        // service manager leaves it stopped rather than restarting it into the same answer.
+        if (!run.team.backend.leases) {
+          run.io.err(`error: The board at ${me.where} is ticked by the server it is on.`)
+          run.io.err('')
+          run.io.err('  Run mu daemon run on that machine, or mu serve there.')
+          return 0
+        }
         let watchers
         let hooks
         let workflows
@@ -1020,7 +1025,7 @@ const commands: Record<string, Command> = {
         if (workflows.length) run.io.out(`workflows ${workflows.length}`)
         // A run that stays up, and ticks, clears the restart guard's count: the starts before it were not a storm.
         const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guardAt) }
-        const ended = await runDaemon({ team: run.team, lock, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
+        const ended = await runDaemon({ team: run.team, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
         if (ended === 'held') run.io.out('another process already ticks for this board')
         return 0
       }

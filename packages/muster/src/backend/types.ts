@@ -2,6 +2,7 @@ import type * as blocks from '../core/blocks.ts'
 import type { MintRequest, Registry, TokenRecord } from '../serve/tokens.ts'
 import type { JoinRecord, Joins } from '../serve/joins.ts'
 import type * as files from '../core/files.ts'
+import type * as leases from '../core/leases.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
 import type * as schedules from '../core/schedules.ts'
@@ -31,6 +32,16 @@ export type Backend = {
     revoke(request: { id: string }): Promise<{ revoked: string }>
     /** A workload's own token, signed by its platform, for a board token: on a served board whose owner trusts that workload. */
     exchange(request: { token: string }): Promise<{ token: string; record: TokenRecord; trust: string }>
+  }
+  /**
+   * Roles one process at a time holds for this board (the ticker is `tick`), where the board keeps them:
+   * only a backend that has the board's file. A board at a URL is ticked by the server it is on.
+   */
+  leases?: {
+    take(request: { name: string; holder: string; ttl: number }): Promise<leases.Taken>
+    renew(request: { name: string; holder: string; epoch: number; ttl: number }): Promise<{ held: boolean; expires: number }>
+    release(request: { name: string; holder: string; epoch: number }): Promise<void>
+    holder(name: string): Promise<ReturnType<typeof leases.holder>>
   }
   /** The board's own requests to join, where it keeps them: what `mu serve` answers them from. */
   joinStore?: () => Joins
@@ -90,7 +101,7 @@ export type Backend = {
   scheduleCreate: Op<typeof schedules.create>
   scheduleCancel: Op<typeof schedules.cancel>
   scheduleList(caller: Caller): Promise<ReturnType<typeof schedules.list>>
-  /** Sends what is due now. Whoever holds the board's ticker lock calls it. */
+  /** Sends what is due now. Whoever holds the board's `tick` lease calls it. */
   scheduleTick(caller: Caller): Promise<ReturnType<typeof schedules.tick>>
 
   /** Takes a platform's webhook for the sync named `key`. Only the server that owns the board answers this. */

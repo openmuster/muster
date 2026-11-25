@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 7
+export const STORE_VERSION = 8
 
 const DDL = `
 create table if not exists events (
@@ -187,6 +187,15 @@ create table if not exists cursors (
   profile text not null default '',
   seq integer not null,
   primary key (name, profile)
+) without rowid;
+
+-- Roles one process at a time holds for this board, such as the ticker: who, since which hand-over
+-- (epoch), and until when (ms). Bookkeeping, like cursors: not in the log, and a fold doesn't rebuild it.
+create table if not exists leases (
+  name text primary key,
+  holder text,
+  epoch integer not null,
+  expires integer not null
 ) without rowid;
 
 -- The tokens this board has made: enough to list one and to stop it, never the token itself.

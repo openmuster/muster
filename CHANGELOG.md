@@ -5,6 +5,23 @@ versions are affected.
 
 ## Unreleased
 
+### Changed
+
+- One process ticks a board by holding its `tick` lease, a row in the
+  board's own file, instead of a lock file beside it. The holder renews it
+  every 5 seconds; one that stops (killed, crashed) is replaced once its
+  lease lapses, within 30 seconds. So a daemon restarted right after a crash
+  waits out its old self's lease and takes over, rather than finding it held.
+  Telling a live holder from a dead one no longer needs `ps`, which slim
+  container images don't have, and a board kept in memory no longer writes a
+  `:memory:.tick.lock` file into the folder it was started from.
+- A board made by this version can't be opened by 0.2.1 or earlier: it has a
+  table they don't know (store version 8). Boards from earlier versions are
+  upgraded when opened.
+- `mu daemon run` on a board at a URL (`--url`, `MUSTER_URL`) says the
+  server ticks that board and exits 0. Before, it stayed up and every tick
+  was refused.
+
 ### Fixed
 
 - `mu run` no longer fails a task over a session the agent doesn't have. A

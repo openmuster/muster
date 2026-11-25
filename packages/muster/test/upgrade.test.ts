@@ -45,6 +45,12 @@ describe('a board made by an older release', () => {
     expect((await again.readThread({ id: expected.hello })).message.text).toBe('kickoff: fix the login redirect')
   })
 
+  it('gets the tables it lacks: its ticker holds a lease in it', async () => {
+    const { team } = opened()
+    expect(await team.backend.leases!.take({ name: 'tick', holder: 'a', ttl: 30_000 })).toMatchObject({ held: true, epoch: 1 })
+    expect(await team.backend.leases!.holder('tick')).toMatchObject({ holder: 'a', epoch: 1 })
+  })
+
   it('a token that release minted still verifies', () => {
     const claims = verify(Buffer.from(expected.key, 'base64url'), expected.token, Date.now())
     expect([claims.sub, claims.profile, claims.can]).toEqual(['local:user:ada', 'worker-1', { 'work/': ['read', 'post', 'label'] }])

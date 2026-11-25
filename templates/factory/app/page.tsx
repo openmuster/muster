@@ -8,7 +8,9 @@ export const dynamic = 'force-dynamic'
 export default async function Page() {
   const me = await team().whoami()
   const config = process.env.MUSTER_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'muster')
-  const steps = setup({ config, board: me.where, channel: FACTORY })
+  // Whoever ticks the board holds its `tick` lease. A board at a URL is ticked by its server, which this page can't see into.
+  const ticking = (await team().backend.leases?.holder('tick').catch(() => null)) != null
+  const steps = setup({ config, ticking, channel: FACTORY })
   const page = await team().readChannel({ channel: `${FACTORY}/`, limit: 15 }).catch(() => ({ threads: [] }))
   const open = (await team().taskList({ channel: `${FACTORY}/` }).catch(() => ({ tasks: [] }))).tasks
   return (

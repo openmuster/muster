@@ -13,7 +13,9 @@ mu daemon status
 `mu daemon run` sends scheduled messages, runs your watchers, sends your
 [outgoing webhooks](./15-outgoing-webhooks.md), and imports and delivers what
 sync owes. One process does this per board: a second says so
-and exits. `mu serve` does the same work while it runs.
+and exits. `mu serve` does the same work while it runs. Whichever ticks holds
+the board's `tick` lease, kept in the board's file and renewed every few
+seconds, so one that was killed is replaced within 30 seconds.
 
 To keep it running across logins, see
 [Keep the daemon running](../03-guides/09-daemon.md).
