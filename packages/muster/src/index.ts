@@ -1,4 +1,4 @@
-export { board, type Board, type BoardOptions } from './handle.ts'
+export { board, type Board, type BoardOptions, type DeclaredWatcher } from './handle.ts'
 export type { Duration, Watch, WatchContext, WatchEvent } from './watch/watch.ts'
 export { command, type Argv, type CommandOptions } from './watch/command.ts'
 export type { Host, StartOptions, Delivered } from './watch/host.ts'

@@ -348,6 +348,21 @@ The caveats, which are why this is for development only:
   `lib/board.ts`. `start()` keeps what it runs on `globalThis`, so a second
   copy finds the host already running. `team.fetch` keeps nothing between
   requests: its token list is in the board's file, so both copies agree.
+`team.watchers` lists what a handle declares: `{ name, tail, as }` for each,
+declared and not necessarily running.
+
+### Running a module with mu
+
+`mu serve` and `mu daemon run` run a board module: a `.ts` file whose default
+export, or `team`, is a `board()`. They start its watchers beside the ones in
+`watchers.json`. The module is `--module <file>`, else `MUSTER_MODULE`, else
+`~/.config/muster/board.ts` whenever it is there. It needs no `package.json`:
+`mu` answers its `import 'muster'`. A project with its own muster runs on
+that install. The module says which board it is, so `--dir`, `--board` and
+`--url` don't go with one. `mu daemon status` lists each watcher, the host
+that holds it, and how far behind it is. `mu daemon check <name>` checks one.
+A module that fails to load stops `mu daemon run` with exit 0, and `mu serve`
+serves the board without it. Both say why, loudly.
 
 ## The rest
 

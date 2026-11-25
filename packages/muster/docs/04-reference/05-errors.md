@@ -113,6 +113,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
 | `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
 | `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
+| `watcher_not_running` | `mu daemon check` on a watcher a board module declares, and nothing holds its lease: it is declared but not started |
 | `daemon_stopped` | The daemon crashed on start too often and stopped restarting. It tries again after an hour; fix what its log says, then `mu daemon reset` to try now |
 | `allow_host_required` | `mu serve --host` beyond this machine needs `--allow-host`, or `MUSTER_ALLOW_HOSTS` |
 | `wake_failed` | The watcher ran its command five times and it failed each time. Its log says why |
@@ -195,3 +196,9 @@ claimed answers `task_ready`, with the claim to run first.
 | `unknown_command` | No such command, with `--help` too. The hint names the one that was likely meant |
 | `unknown_flag` | No such flag for that command |
 | `missing_value` | A flag needs a value |
+| `module_not_found` | No board module at the path given with `--module` or `MUSTER_MODULE` |
+| `module_failed` | The board module didn't load: Node's message, and what to change in the module. `mu daemon run` says so and exits 0, so a service manager leaves it stopped; `mu serve` serves the board without it |
+| `module_not_a_board` | The board module exports no board: `export default board({ ... })`, or `export const team` |
+| `module_two_copies` | The board module's board was made by a second copy of muster: give the project one |
+| `module_version_skew` | The board module's project has a muster that can't run a module: update it there, or remove it |
+| `module_and_board` | `--dir`, `--board` or `--url` beside a board module, which names its own board. The default `~/.config/muster/board.ts` counts: it is the module whenever it is there |

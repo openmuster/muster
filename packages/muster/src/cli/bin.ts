@@ -9,6 +9,10 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
   if (text.includes('SQLite is an experimental feature')) return
   return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest)
 }) as typeof process.emitWarning
+
+// A command that runs a board module runs it with the module's own muster. When that is another install,
+// this process becomes that install's `mu` before loading anything else.
+await (await import('./module.ts')).prepare(process.argv.slice(2), process.env)
 const { main } = await import('./main.ts')
 
 // `mu mcp` isn't a command that runs and ends: it serves the board to an agent over this process's own pipes.

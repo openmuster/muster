@@ -29,6 +29,27 @@ versions are affected.
   `MUSTER_ALLOW_HOSTS`). MCP, `tokenExchange` and requests to join stay with
   `mu serve`. The factory template serves its board at `/api/board` this way.
   See [Mounting it in a web app](./packages/muster/docs/04-reference/02-handle.md#mounting-it-in-a-web-app).
+- `mu serve` and `mu daemon run` run a board module: a `.ts` file whose
+  default export (or `team`) is a `board({ watch })`. They start its watchers
+  beside the ones in `watchers.json`, hooks and workflows. The module is
+  `--module <file>`, else `MUSTER_MODULE`, else `~/.config/muster/board.ts`
+  whenever that file is there, with no flag. It needs no `package.json`: a
+  global `mu` answers its `import 'muster'`. A project with its own muster
+  runs on that install instead, in the same process. A module names its own
+  board, so `--dir`, `--board` or `--url` beside one is misuse.
+  - A module that doesn't load (Node's message, and what to change) makes
+    `mu daemon run` say so and exit 0, so launchd leaves it stopped. `mu serve`
+    says so loudly and serves the board without it.
+  - A module watcher named like a watcher, hook or workflow in the config
+    files is refused when the module loads.
+  - `mu daemon status` shows the module, and each of its watchers' filter,
+    the host that holds it, and how far behind it is. It warns about any that
+    are declared but not started.
+  - `mu daemon check <name>` checks a module watcher.
+  - `mu daemon install` records the module's absolute path and the folder it
+    was installed from.
+  - `team.watchers` lists what a handle declares.
+  - With a module, `sync.json` isn't read: `mu` says so.
 - A card queue template, `templates/queue`. A Linear issue labelled `agent`,
   or a card posted with `--label tag.agent=agent --no-sync`, starts the
   `card` workflow once: a spec, the change as a pull request, and a review,
