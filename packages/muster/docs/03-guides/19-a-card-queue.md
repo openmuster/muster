@@ -25,7 +25,7 @@ scripts:
 | --- | --- |
 | `sync.json` | Linear team `ENG` to the channel `cards`, both ways |
 | `watchers.json` | `card-start` runs `start.sh` for a card labelled `tag.agent=agent`; `needs-me` runs `notify.sh` when a task under `cards/` blocks |
-| `workflows.json` | The `card` workflow: spec, work and review tasks, one Vercel worker, `--push` |
+| `workflows.json` | The `card` workflow: spec, work and review tasks, one Vercel worker, `--push` for the work step only |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow on it, once |
 | `notify.sh` | Tells you a task is blocked, with its ID only |
 | `answer.sh` | Unblocks a blocked task, posts your answer, and starts a worker on the rest of its run |
@@ -89,8 +89,10 @@ mu workflow list
    comment or the daemon's own reply, finds `started` set and does nothing.
 3. The daemon makes three tasks in `cards/card-<n>`: `spec`, `work`, which
    needs the spec, and `review`, which needs the work. The spec task quotes
-   the card's text as content, not instructions. One worker takes them in
-   turn, each in its own Vercel sandbox; the work task's change is pushed to
+   the card's text as content, not instructions; the work and review tasks
+   quote the spec's result the same way, and the review the work's summary,
+   filled in when the worker takes each. One worker takes them in turn, each
+   in its own Vercel sandbox; only the work task's change is pushed to
    `mu/task-<id>` and opened as a pull request.
 4. The card gets two replies, which go to Linear as comments: `started card:
    3 tasks in cards/card-<n>`, and once the tasks have ended, a summary with
@@ -165,10 +167,11 @@ push. Know what a run reaches before you map a team:
   post or label a thread in `cards`, starts a run. The run is asked for by
   `intake`, the watcher's profile, so the workflow's `who` doesn't check the
   card's author.
-- **The repository.** Every step's sandbox may push: a step's change goes to
-  `mu/task-<id>` in the workflow's repository, with a pull request. The
-  workflow format sets `push` for all of a workflow's workers, not per step,
-  so the spec and review steps can push too, though they are told to change
+- **The repository.** The work step's sandbox pushes: its change goes to
+  `mu/task-<id>` in the workflow's repository, with a pull request. The spec
+  and review steps set `push: false`, so whatever their agents change is
+  never pushed. The worker reads that from what the daemon made each task
+  with, never from its labels now, so an agent that relabels a task changes
   nothing.
 - **CI.** That pull request runs your CI on the agent's code, with whatever
   secrets CI gives a branch of the same repository. Keep secrets away from
@@ -178,10 +181,14 @@ push. Know what a run reaches before you map a team:
 - **What it can't reach.** The sandbox holds no board credential of yours, no
   GitHub token and no model key; its token reaches the run's channel only.
 
-The spec task quotes the card as content, defused. Later steps read the spec
-task's result, which an agent wrote from the card; their text tells them it
-is a description of a change, not instructions, but nothing fences it the
-way the card's text is fenced.
+The spec task quotes the card as content, defused. The spec's result was
+written by an agent that read the card, so the work and review tasks quote it
+the same way, with `{steps.spec.result}`: under a line that says whose it is,
+in a fence nothing in it can close, with `@`, `<`, `>` and Markdown links
+defused. The review quotes the work's summary too. A fence marks what is
+content; it can't stop an agent that is steered anyway. Two things still
+reach a later step unfenced: the work's diff, which the review downloads and
+reads, and anything an agent chooses to read itself with `mu read`.
 
 ## What goes wrong
 
@@ -205,6 +212,11 @@ way the card's text is fenced.
   comment, which carries only the title: the card then runs on the title
   alone. See [Linear](../02-sync/03-linear.md#an-issue-from-before-sync).
 - **A long card.** The spec task quotes the first 2,000 characters.
+- **A step with no result.** The next task says so where the result would
+  be: `(No result from step "spec", #12: it completed without one.)`.
+- **A task the worker couldn't fill.** If the quoted results make its text
+  longer than the board takes, the worker fails the task with `couldn't
+  quote the earlier steps' results into it`, and runs no agent on it.
 - **Files on a card** don't reach the sandbox: the worker's token reaches
   the run's channel only.
 - **The review sees no checkout of the change.** Its sandbox clones the

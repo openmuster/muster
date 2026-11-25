@@ -41,7 +41,7 @@ const k = w.workers
 const cloud = k.runner === "vercel" || k.runner === "cloudflare"
 const out = [...(cloud ? ["--runner", k.runner] : ["--cwd", k.cwd]), "--agent", k.agent, "--as", k.as + "-answer"]
 if (k.repo) out.push("--repo", k.repo)
-if (k.push) out.push("--push")
+if (k.push || w.steps.some((step) => step.push === true)) out.push("--push")
 if (k.timeout) out.push("--timeout", k.timeout)
 if (out.some((each) => /\s/.test(each))) { console.error("answer.sh: a worker setting in workflows.json has a space in it"); process.exit(1) }
 process.stdout.write(out.join(" "))')

@@ -5,13 +5,45 @@ import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
 import { githubRepo } from '../runner/github.ts'
 
-export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string> }
+export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string>; push?: boolean }
 export type Workers = { count: number; agent: 'claude' | 'codex'; as: string; runner?: 'local' | 'vercel' | 'cloudflare'; repo?: string; push?: boolean; cwd?: string; timeout?: string }
 export type Workflow = { name: string; description: string; who: string[]; channels: string[]; steps: WorkflowStep[]; workers: Workers; timeout?: string }
 
 export const workflowsPath = () => join(configDir(), 'workflows.json')
 
 const MAX_STEPS = 20
+
+/**
+ * `{steps.<key>.result}` in a step's text: that earlier step's result, quoted into the task once it is
+ * ready. Anything that starts `{steps.` is read as one, so a misspelt one is refused, not left as written.
+ */
+export const STEP_RESULT = /\{steps\.([^{}]*?)\.result\}/g
+const STEP_ANY = /\{steps\.[^{}]*\}/g
+
+/** Whether a workflow pushes from any task: its workers' `push`, or a step's own. */
+export const pushes = (workflow: Pick<Workflow, 'workers' | 'steps'>): boolean => workflow.steps.some((step) => step.push ?? workflow.workers.push === true)
+
+/**
+ * The first step whose text names a result it can't have: a step it doesn't wait for, directly or through
+ * the steps it waits for. Only those have ended by the time it is ready. Null when every one is in reach.
+ */
+function unreachableResult(steps: WorkflowStep[]): string | null {
+  const before = new Map<string, Set<string>>()
+  for (const step of steps) {
+    const reach = new Set<string>()
+    for (const need of step.needs ?? []) {
+      reach.add(need)
+      for (const further of before.get(need) ?? []) reach.add(further)
+    }
+    before.set(step.key, reach)
+    for (const [whole] of step.text.matchAll(STEP_ANY)) {
+      const key = /^\{steps\.(.*)\.result\}$/.exec(whole)?.[1]
+      if (key === undefined) return `has a step "${step.key}" with ${whole}, which isn't {steps.<key>.result}.`
+      if (!reach.has(key)) return `has a step "${step.key}" that quotes the result of "${key}", which isn't a step it needs, directly or through another.`
+    }
+  }
+  return null
+}
 const MAX_WORKERS = 16
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string' && item !== '')
@@ -63,9 +95,12 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
       for (const need of (raw.needs ?? []) as string[]) if (!seen.has(need)) fail(`has a step "${key}" that needs "${need}", which isn't an earlier step.`)
       if (raw.for !== undefined && typeof raw.for !== 'string') fail(`has a step "${key}" whose "for" isn't a string.`)
       if (raw.labels !== undefined && (!isObject(raw.labels) || !Object.values(raw.labels).every((label) => typeof label === 'string'))) fail(`has a step "${key}" whose "labels" aren't k:v strings.`)
+      if (raw.push !== undefined && typeof raw.push !== 'boolean') fail(`has a step "${key}" whose "push" isn't true or false.`)
       seen.add(key)
-      return { key, text: raw.text as string, ...(raw.needs !== undefined ? { needs: raw.needs as string[] } : {}), ...(raw.for !== undefined ? { for: raw.for as string } : {}), ...(raw.labels !== undefined ? { labels: raw.labels as Record<string, string> } : {}) }
+      return { key, text: raw.text as string, ...(raw.needs !== undefined ? { needs: raw.needs as string[] } : {}), ...(raw.for !== undefined ? { for: raw.for as string } : {}), ...(raw.labels !== undefined ? { labels: raw.labels as Record<string, string> } : {}), ...(raw.push !== undefined ? { push: raw.push as boolean } : {}) }
     })
+    const refused = unreachableResult(steps)
+    if (refused) fail(refused)
     const w = entryObject.workers
     if (!isObject(w)) return fail('needs "workers".')
     if (!Number.isInteger(w.count) || (w.count as number) < 1 || (w.count as number) > MAX_WORKERS) fail(`needs "workers.count" from 1 to ${MAX_WORKERS}.`)
@@ -78,7 +113,7 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
     const cloud = w.runner === 'vercel' || w.runner === 'cloudflare'
     if (!cloud && (typeof w.cwd !== 'string' || w.cwd === '')) fail('needs "workers.cwd": the folder its workers run in on this machine.')
     if (w.push !== undefined && typeof w.push !== 'boolean') fail('has a "workers.push" that isn\'t true or false.')
-    if (w.push === true && !(cloud && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel" or "cloudflare" and a github.com https "repo".')
+    if ((w.push === true || steps.some((step) => step.push === true)) && !(cloud && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel" or "cloudflare" and a github.com https "repo".')
     if (w.timeout !== undefined) checkDuration(w.timeout, 'workers.timeout')
     if (entryObject.timeout !== undefined) checkDuration(entryObject.timeout, 'timeout')
     const workers: Workers = { count: w.count as number, agent: w.agent as Workers['agent'], as: w.as as string, ...(w.runner !== undefined ? { runner: w.runner as Workers['runner'] } : {}), ...(w.repo !== undefined ? { repo: w.repo as string } : {}), ...(w.push !== undefined ? { push: w.push as boolean } : {}), ...(w.cwd !== undefined ? { cwd: w.cwd as string } : {}), ...(w.timeout !== undefined ? { timeout: w.timeout as string } : {}) }
