@@ -3,7 +3,7 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.2.1
 
 ### Added
 
@@ -52,14 +52,6 @@ versions are affected.
   `templates/cloudflare-runner` and rebuild its image to use it. Covered by
   tests, not run live.
 
-- Linear sync catches up after downtime, as GitHub's does. When the ticker
-  starts it asks Linear for the issues and comments in the mapped teams
-  updated since the last event it received, and imports what the webhooks
-  missed: new issues, new comments and state changes. What the board already
-  has is not imported twice. Edits and removals made meanwhile are not read.
-  A state change is put down to the sync (`lin`), since Linear's list doesn't
-  say who made it. One start reads up to 500 of each, oldest first; the next
-  goes on from there. Covered by tests against a faked Linear API only.
 - Linear sync catches up after downtime, as GitHub's does. When the ticker
   starts it asks Linear for the issues and comments in the mapped teams
   updated since the last event it received, and imports what the webhooks
