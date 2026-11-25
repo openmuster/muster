@@ -58,9 +58,9 @@ which npm installs from its URL (`src/version.ts` builds that URL).
 
 Versions: there is one line, `main`, and each release from it is the one the
 install line gives. Only the latest release gets fixes: a security fix is a
-new release, never a patch to an old one. A version with a `-` in it
-(`0.3.0-alpha.1`) is marked a pre-release and never becomes "latest"; use one
-only for something to be tried before it is what everyone installs.
+new release, never a patch to an old one. muster is still alpha, so releases
+are patch-level alphas and betas (`0.3.1-alpha.1`, then `0.3.1-alpha.2`, then
+a beta), never a jump of the minor version, and each one is "latest".
 
 `.github/workflows/check.yml` runs `pnpm check` on every pull request and on
 `main`, on the oldest Node muster supports, on the current one, and on macOS.
