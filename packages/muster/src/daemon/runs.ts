@@ -36,13 +36,20 @@ export type OpenRuns = {
   reopened: Map<number, Reopened> | null
   /** How far this daemon has read the board's reopens. */
   reopensRead: number
+  /**
+   * Reopens in runs not summed up yet, by request seq: kept until the run's first summary says how far into
+   * the log it took things in, and then news to it only if they came after.
+   */
+  deferred: Map<number, Reopened>
+  /** How many ticks a reopen has been held by something that wasn't the board's answer, by its seq. */
+  reopenTries: Map<number, number>
 }
 
 /** A summed-up run going again: its request, and the first and latest reopen of one of its tasks since its last summary. */
 type Reopened = { asked: BoardEvent; first: number; latest: number; at: string }
 
 /** A new daemon's: nothing known yet, so its first tick rebuilds it from the board. */
-export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map(), made: new Set(), reopened: null, reopensRead: 0 })
+export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map(), made: new Set(), reopened: null, reopensRead: 0, deferred: new Map(), reopenTries: new Map() })
 
 /** How many ticks a request may be held before the daemon gives up on it, says so, and reads on. */
 export const MAX_TRIES = 5
@@ -436,22 +443,30 @@ async function readRun(team: Board, workflows: Workflow[], owner: string, asked:
 async function reportOne(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, asked: BoardEvent): Promise<'reported' | 'done' | 'open'> {
   const seq = asked.seq
   if ((await team.cursorGet(reportedCursor(seq))) !== null) return 'done'
-  // What the summary takes in: any reopen after this is news to it, and sums the run up again.
+  // What the summary takes in: any reopen after this is news to it, and sums the run up again. Read before
+  // the run, so a reopen in between is taken in and still counted as news: at worst said twice, never lost.
   const upTo = await team.head()
   const run = await readRun(team, workflows, owner, asked)
   if (run === null) return 'done'
   const { name, first, tasks, open } = run
   const timedOut = Date.parse(first.at) + run.timeout <= deps.now()
   if (!timedOut && (open.length > 0 || tasks.length === 0)) return 'open'
+  let mark = upTo
   try {
-    await writer.reply({ to: run.thread, text: summary(name, tasks), idempotencyKey: `workflow-${seq}-report` })
+    const posted = await writer.reply({ to: run.thread, text: summary(name, tasks), idempotencyKey: `workflow-${seq}-report` })
+    // Written on an earlier try (a daemon that stopped before marking it, or an answer lost on the way): it
+    // took in the run as it was then, so only what came before it is known to be in it.
+    if (posted.id <= upTo) mark = posted.id
   } catch (error) {
     // Said before the daemon stopped, perhaps with tasks as they were then; or a thread that has gone, which
     // takes no answer. Either way there is nothing more to say. Anything else, such as a board out of
     // reach, is tried again next tick.
     if (!(error instanceof Failure) || (error.reason !== 'idempotency_mismatch' && error.reason !== 'not_found')) throw error
+    // Said before with other words, at a place in the log not known here: every reopen since the request is
+    // news, so one that came after that summary is never hidden by it (one before it may be said again).
+    if (error.reason === 'idempotency_mismatch') mark = seq
   }
-  await team.cursorSet(reportedCursor(seq), upTo)
+  await team.cursorSet(reportedCursor(seq), mark)
   // A hint for people reading the run; nothing reads it back.
   await writer.label({ id: first.id, set: { [REPORTED]: String(seq) }, idempotencyKey: `workflow-${seq}-reported` }).catch((error) => {
     if (!(error instanceof Failure) || error.reason === 'network_error') throw error
@@ -490,22 +505,53 @@ async function reportReopened(team: Board, writer: Board, workflows: Workflow[],
   const going = runs.reopened
   let why: string | undefined
   reading: for (;;) {
-    const page = await team.events({ after: runs.reopensRead, filter: { types: ['task.reopened'] }, limit: REOPENS_PAGE })
+    let page: Awaited<ReturnType<Board['events']>>
+    try {
+      page = await team.events({ after: runs.reopensRead, filter: { types: ['task.reopened'] }, limit: REOPENS_PAGE })
+    } catch (error) {
+      // Read on next tick; the runs already going are still looked at.
+      why = `reopens: ${(error as Error).message}`
+      break
+    }
     for (const event of page.events) {
       try {
-        await noteReopen(team, owner, going, event)
+        await noteReopen(team, owner, runs, event)
+        runs.reopenTries.delete(event.seq)
       } catch (error) {
-        why = `reopen ${event.seq}: ${(error as Error).message}`
-        // The board couldn't answer just now: read again next tick, from this reopen on. Anything else would
-        // be the same next time, so it is passed over rather than holding up every later reopen.
-        if (isTransient(error)) {
+        const message = (error as Error).message
+        // The board's own answer is the same next time: passed over rather than holding up every later reopen.
+        if (error instanceof Failure && !isTransient(error)) {
+          why = `reopen ${event.seq}: ${message}`
+          continue
+        }
+        // Not the board's answer (busy, out of reach, a bug): read again next tick, from this reopen on, up
+        // to MAX_TRIES ticks, so one reopen that never goes through can't hold up every later one for good.
+        const tries = (runs.reopenTries.get(event.seq) ?? 0) + 1
+        if (tries < MAX_TRIES) {
+          runs.reopenTries.set(event.seq, tries)
+          why = `reopen ${event.seq}: ${message}`
           runs.reopensRead = event.seq - 1
           break reading
         }
+        runs.reopenTries.delete(event.seq)
+        why = `reopen ${event.seq}: gave up after ${MAX_TRIES} tries: ${message}`
       }
     }
     runs.reopensRead = Math.max(runs.reopensRead, page.cursor)
     if (page.events.length < REOPENS_PAGE) break
+  }
+  // Reopens kept for a first summary that has now been said: news only if they came after what it took in.
+  for (const [seq, reopen] of runs.deferred) {
+    if (deps.runs.open?.has(seq)) continue
+    try {
+      const covered = await team.cursorGet(reportedCursor(seq))
+      runs.deferred.delete(seq)
+      if (covered === null || covered >= reopen.latest) continue
+      const known = going.get(seq)
+      going.set(seq, known ? { ...known, first: Math.min(known.first, reopen.first) } : reopen)
+    } catch (error) {
+      why ??= `reopen in ${seq}: ${(error as Error).message}`
+    }
   }
   const updated: number[] = []
   for (const [seq, reopen] of [...going].sort(([x], [y]) => x - y)) {
@@ -518,7 +564,8 @@ async function reportReopened(team: Board, writer: Board, workflows: Workflow[],
       why ??= `${(reopen.asked.data as { name?: string }).name} ${seq}: ${(error as Error).message}`
     }
   }
-  const next = going.size === 0 ? runs.reopensRead : Math.min(...[...going.values()].map((reopen) => reopen.first)) - 1
+  const held = [...going.values(), ...runs.deferred.values()].map((reopen) => reopen.first)
+  const next = held.length === 0 ? runs.reopensRead : Math.min(...held) - 1
   if (next > cursor) await team.cursorSet(REOPENS_CURSOR, next)
   return { updated, ...(why !== undefined ? { why } : {}) }
 }
@@ -528,14 +575,18 @@ async function reportReopened(team: Board, writer: Board, workflows: Workflow[],
  * request names, reopened after the run's summary. The run comes from its channel's name and its request,
  * never from labels, as a summary's does.
  */
-async function noteReopen(team: Board, owner: string, going: Map<number, Reopened>, event: BoardEvent): Promise<void> {
+async function noteReopen(team: Board, owner: string, runs: OpenRuns, event: BoardEvent): Promise<void> {
   const seq = event.channel === null ? NaN : Number(/-(\d+)$/.exec(event.channel)?.[1])
   if (!Number.isSafeInteger(seq) || seq >= event.seq) return
   const covered = await team.cursorGet(reportedCursor(seq))
-  // Not summed up yet (its first summary takes the reopen in), or summed up since.
-  if (covered === null || covered >= event.seq) return
-  const known = going.get(seq)
-  let asked = known?.asked
+  // Summed up since.
+  if (covered !== null && covered >= event.seq) return
+  // Not summed up yet: kept until its first summary is said, if it is a run this daemon is waiting on.
+  const unsummed = covered === null
+  if (unsummed && !runs.open?.has(seq)) return
+  const into = unsummed ? runs.deferred : runs.reopened!
+  const known = into.get(seq)
+  let asked = known?.asked ?? (unsummed ? runs.open!.get(seq) : undefined)
   if (asked === undefined) {
     asked = (await team.events({ after: seq - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
     if (asked?.seq !== seq) return
@@ -549,12 +600,14 @@ async function noteReopen(team: Board, owner: string, going: Map<number, Reopene
     throw error
   })
   if (task === null || task.message.by.principal !== owner || task.message.by.profile !== WORKFLOWS_PROFILE) return
-  going.set(seq, { asked, first: known?.first ?? event.seq, latest: event.seq, at: event.at })
+  into.set(seq, { asked, first: known?.first ?? event.seq, latest: event.seq, at: event.at })
 }
 
 /** Sums up a reopened run again if it is due. Says whether it was, whether it needs nothing more, or whether it is still going. */
 async function updateOne(team: Board, writer: Board, workflows: Workflow[], owner: string, deps: RunDeps, reopen: Reopened): Promise<'updated' | 'done' | 'open'> {
   const seq = reopen.asked.seq
+  // Read before the run, as for the first summary: a reopen that lands and settles in between is taken in
+  // and still counted as news, so it may be said twice; read after, it could be lost.
   const upTo = await team.head()
   const run = await readRun(team, workflows, owner, reopen.asked)
   if (run === null) return 'done'
