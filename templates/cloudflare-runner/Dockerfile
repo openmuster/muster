@@ -12,8 +12,8 @@ RUN apt-get update \
 # One release, by its version and its checksum: an image built twice is the same image, and "latest" is
 # whatever was published last. The build stops if the tarball isn't the one that release's SHA256SUMS
 # names: change both together.
-ARG MUSTER_VERSION=0.2.0
-ARG MUSTER_SHA256=2f2f696c85a5adafcc6aed65f5a5f87dc71a6492c1af7abb6de5693ea9b66afd
+ARG MUSTER_VERSION=0.2.1
+ARG MUSTER_SHA256=a90e86f3afa01c12b7c81e15ff19117f04264b085dc74533523ce64fb16411af
 ADD --checksum=sha256:${MUSTER_SHA256} https://github.com/openmuster/muster/releases/download/v${MUSTER_VERSION}/muster-${MUSTER_VERSION}.tgz /tmp/muster.tgz
 RUN npm install --global /tmp/muster.tgz && rm /tmp/muster.tgz
 
