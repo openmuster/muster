@@ -104,34 +104,31 @@ flowchart LR
   A -->|reply| S
 ```
 
-`~/.config/muster/watchers.json`:
+In the board module:
 
-```json
-{
-  "watchers": [
-    {
-      "name": "router",
-      "tail": { "channel": "help", "types": ["message.posted"] },
-      "gate": ["/srv/help/unlabelled.sh"],
-      "run": ["/srv/help/route.sh", "{thread}"],
-      "as": "router"
+```ts board.ts
+import { board, command, type Watch } from 'muster'
+
+/** A product's watcher: woken when its label lands, and for what comes after in its threads. */
+const product = (name: string): Watch => ({
+  tail: { channel: 'help', labels: [`product=${name}`], types: ['labels.changed', 'message.posted'] },
+  as: `${name}-bot`,
+  // The question and its label arrive together: one wake for both.
+  coalesce: '30s',
+  run: command(({ event }) => ['/srv/help/answer.sh', String(event.thread), name], { gate: ['/srv/help/has-product.sh', name] }),
+})
+
+export default board({
+  watch: {
+    router: {
+      tail: { channel: 'help', types: ['message.posted'] },
+      as: 'router',
+      run: command(({ event }) => ['/srv/help/route.sh', String(event.thread)], { gate: ['/srv/help/unlabelled.sh'] }),
     },
-    {
-      "name": "billing",
-      "tail": { "channel": "help", "labels": ["product=billing"], "types": ["labels.changed", "message.posted"] },
-      "gate": ["/srv/help/has-product.sh", "billing"],
-      "run": ["/srv/help/answer.sh", "{thread}", "billing"],
-      "as": "billing-bot"
-    },
-    {
-      "name": "api",
-      "tail": { "channel": "help", "labels": ["product=api"], "types": ["labels.changed", "message.posted"] },
-      "gate": ["/srv/help/has-product.sh", "api"],
-      "run": ["/srv/help/answer.sh", "{thread}", "api"],
-      "as": "api-bot"
-    }
-  ]
-}
+    billing: product('billing'),
+    api: product('api'),
+  },
+})
 ```
 
 The router's agent reads the thread and writes one label on it, and nothing
@@ -177,12 +174,11 @@ What to know before you rely on it:
 
 - **Give each watcher its own `as`.** A watcher never hears its own profile's
   writes. A product's agent that writes as `router` can't hear the router's
-  label, and is woken or not by the order of the watchers in the file.
-- **It costs two agent sessions a question.** Watchers run one after another,
-  each every `every` seconds (30 by default), and the daemon waits for each
-  command to end. With the router first in the file, a product's agent starts
-  in the same pass, after the router is done. Listed after it, it starts a
-  pass later.
+  label.
+- **It costs two agent sessions a question.** Each watcher runs in a loop of
+  its own: the router's agent labels the thread, and the product's watcher
+  hears the label within a second or two. `coalesce` gathers the question and
+  its label into one wake, once the oldest is 30 seconds old.
 - **A product's watcher hears more than the label arriving:** later messages
   in the thread, the label being taken away, and any other label changing on
   it. The gate handles the label leaving. Tell the agent to reply only when

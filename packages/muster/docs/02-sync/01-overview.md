@@ -50,41 +50,15 @@ sequenceDiagram
 Importing an event twice does nothing: a redelivery, or the same event under a
 new delivery ID, changes nothing.
 
-## Configure it
-
-Sync is yours: `~/.config/muster/sync.json`, one entry per platform account,
-under a name you choose. The name is in the webhook URL and in the authors'
-IDs.
-
-```json
-{
-  "gh": {
-    "type": "github",
-    "secret": "env:GITHUB_WEBHOOK_SECRET",
-    "token": "env:GITHUB_TOKEN",
-    "bot": "your-app[bot]",
-    "repos": { "acme/web": { "issues": "web/issues", "pulls": "web/prs", "mirror": true } },
-    "filter": ["/Users/ada/bin/scrub.sh"]
-  }
-}
-```
-
-- **Secrets are named, never written.** `"env:NAME"` reads the environment of
-  the process that serves the board. A secret written into the file is refused.
-- **`token`** is needed only to send things back or to catch up.
-- **`bot`** is the app's own identity on the platform, so its writes aren't
-  imported as someone else's.
-
-`mu serve` and `mu daemon run` read the file when they start. A read or a post
-never needs it, so a broken sync file stops neither.
-
 ## In a board module
 
-A board module declares the same thing in code, in its `board()`. `env('NAME')`
-names a secret the way `"env:NAME"` does: nothing is read when the module is
-imported, so `mu daemon status`, a test or a build can load it without the
-secrets. The board reads them when it starts (`team.start()`, `mu serve`,
-`mu daemon run`) or takes its first request (`team.fetch`).
+Sync is yours: it is declared in a [board module](../01-concepts/17-board-module.md),
+one entry per platform account, under a name you choose. The name is in the
+webhook URL and in the authors' IDs. `env('NAME')` names a secret: nothing is
+read when the module is imported, so `mu daemon status`, a test or a build can
+load it without the secrets. The board reads them when it starts
+(`team.start()`, `mu serve`, `mu daemon run`) or takes its first request
+(`team.fetch`).
 
 ```ts
 import { board, env, github, linear, slack } from 'muster'
@@ -110,9 +84,11 @@ export default board({
   says so and exits 0, so the service stays stopped. `team.fetch` goes on
   serving the board, says it in its log, and answers a webhook with a plain
   503 and `health` with 503 `unhealthy`. Neither answer names the variable.
+- **`token`** is needed only to send things back or to catch up. **`bot`** is
+  the app's own identity on the platform, so its writes aren't imported as
+  someone else's.
 - **The module's sync runs where the module is started**, under the board's
-  `sync` lease. `mu daemon run` and `mu serve` take the same lease for
-  `sync.json`'s sync, so one process at a time catches up and sends to the
+  `sync` lease, so one process at a time catches up and sends to the
   platforms, whichever runs the watchers. Each message is also claimed on the
   board before it goes, so it is sent once. `mu daemon status` lists each
   sync, the variables it reads, and who holds the lease.
@@ -122,23 +98,11 @@ export default board({
 - **`env()` is never text.** Turned into a string it throws, and a secret
   written as `"env:NAME"` or `"env('NAME')"` is refused: either would be a key
   anyone reading the module could sign with.
-- **One place.** A module that declares `sync` beside a `sync.json` is
-  refused: `mu serve` exits 2, `mu daemon run` says so and exits 0. Move the
-  entries into the module and delete the file. A module with no `sync` runs
-  without it, and `mu` warns that `sync.json` isn't read.
+- **A `sync.json` from before is not read.** `mu serve` and `mu daemon run`
+  refuse to start while it is there. Move its entries into the module and
+  delete it: [Porting](../04-reference/07-porting.md#syncjson) has each field.
 - **A secret written as a string** works, and puts the secret in the module's
   file. Name it with `env()`.
-
-Porting `sync.json` is mechanical:
-
-| `sync.json` | Module |
-| --- | --- |
-| `"gh": { "type": "github", ... }` | `gh: github({ ... })`, and `linear()` or `slack()` for the others |
-| `"secret": "env:NAME"` | `secret: env('NAME')` |
-| `"token": "env:NAME"` | `token: env('NAME')`. Unset, it is refused; in `sync.json` it was left out |
-| `"bot"`, `"repos"`, `"teams"`, `"channels"` | The same, as they are |
-| `"filter": ["/path/cmd"]` | `filter: ['/path/cmd']`, or a function `(text) => string \| null` |
-| `"filesPerDayMB": 100` | `filesPerDayMB: 100` |
 
 ## What goes back
 
@@ -185,7 +149,7 @@ The rules are the same for each platform:
   send files, so each sync brings in at most 500 MB of them a day (UTC).
   Past that a file is named, not stored, and one with no size given is not
   even fetched. Bytes count when they are stored, so deleting the message
-  gives none back. Set `"filesPerDayMB"` on the sync's entry in `sync.json`
+  gives none back. Set `filesPerDayMB` on the sync, `github({ ..., filesPerDayMB: 100 })`,
   to change it.
 - **Any content type.** The board keeps the type as data and only ever hands
   a file out as bytes: it never shows one in a page.
@@ -223,8 +187,9 @@ mu tail web/ --type sync.failed
 
 ## A filter for what comes in
 
-`"filter"` names a command of yours. Text on its way in is given to it on
-stdin; what it prints is kept, and a non-zero exit drops the event. Use it to
+`filter` names a command of yours, `filter: ['/Users/ada/bin/scrub.sh']`, or is
+a function `(text) => string | null`. Text on its way in is given to the
+command on stdin; what it prints is kept, and a non-zero exit drops the event. Use it to
 strip secrets, or text written to steer an agent.
 
 ```bash

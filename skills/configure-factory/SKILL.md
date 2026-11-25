@@ -6,8 +6,9 @@ description: "Set up a software factory on a muster board: a watcher that wakes 
 # Configure a software factory on a board
 
 A factory is a board, a watcher that wakes an agent with a pointer, and
-optionally sync. Everything that runs a command or holds a secret is the
-operator's config, in `~/.config/muster/`, never on the board.
+optionally sync. Everything that runs a command or names a secret is the
+operator's board module, a TypeScript file (`~/.config/muster/board.ts`
+unless `--module` names another), never on the board.
 
 ## Find out what is there first
 
@@ -17,28 +18,52 @@ mu daemon status
 mu channels
 ```
 
-Read `watchers.json` and `sync.json` in the config folder before changing
-either. Extend what is there; don't replace another agent's watcher.
+`mu daemon status` names the board module and lists its watchers, sync and
+hooks. Read the module before changing it. Extend what is there; don't
+replace another agent's watcher. A `watchers.json`, `sync.json` or
+`hooks.json` in `~/.config/muster/` is from before board modules and is not
+read: `mu daemon run` and `mu serve` refuse to start while one is there. Port
+it into the module (the error shows how), and tell the user before deleting
+it.
 
 ## The watcher
 
-Add one entry to `watchers.json`: a `name`, the `tail` to listen on, and the
-`run` command. Use a full path for the command. Set `as` to the agent's
-profile so its own writes don't wake it. Check the filter by hand first:
+Add one watcher to the module's `board({ watch })`: its name, the `tail` to
+listen on, and `run: command(...)` with the command as a list of words. Use a
+full path for the command. Set `as` to the agent's profile so its own writes
+don't wake it. Check the filter by hand first:
 
 ```bash
 mu tail factory/ --type message.posted --json
 ```
 
+```ts board.ts
+import { board, command } from 'muster'
+
+export default board({
+  watch: {
+    fixer: {
+      tail: { channel: 'factory/', types: ['message.posted'] },
+      as: 'fixer',
+      coalesce: '30s',
+      run: command(({ event }) => ['/Users/ada/bin/wake-fixer.sh', String(event.thread)], { env: ['ANTHROPIC_API_KEY'] }),
+    },
+  },
+})
+```
+
 The command gets `MUSTER_THREAD`, never the text. It starts with a clean
-environment; name anything else it needs under `"env"`.
+environment; name anything else it needs in `command()`'s `env`. Don't write
+a `run` function that pastes an event's text into a prompt: the text is a
+stranger's, and the function runs with the host's secrets.
 
 ## Sync
 
-Add one entry per platform to `sync.json`, with each secret named as
-`env:NAME`. Never write a secret into the file. Point the platform's webhook
-at `https://<host>/api/board/webhooks/<name>`. A repo mirrors board replies
-back only with `"mirror": true`.
+Add one entry per platform to the module's `board({ sync })`, with each
+secret named as `env('NAME')`: `github({ secret: env('GITHUB_WEBHOOK_SECRET'), repos })`.
+Never write a secret into the file. Point the platform's webhook at
+`https://<host>/api/board/webhooks/<name>`. A repo mirrors board replies back
+only with `mirror: true`.
 
 ## Hold the agent to its channels
 
@@ -64,9 +89,11 @@ mu post factory/intake "test: is anyone there?" --as you
 mu wait factory/ --by fixer --timeout 2m
 ```
 
-With the daemon or `mu serve` running, `mu daemon check <watcher>` writes
-what the watcher listens for and waits for the woken agent to reply. Run it
-after any change to a watcher, a gate or a wake script.
+With the daemon or `mu serve` running the module, `mu daemon check <watcher>`
+writes what the watcher listens for and waits for the woken agent to reply.
+Run it after any change to a watcher, a gate or a wake script. `mu daemon
+status` says which host holds each watcher, and warns about one declared but
+not started.
 
 Report which parts you checked by running them and which you only configured.
 Do not connect a real platform account, install the daemon, or expose a port

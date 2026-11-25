@@ -62,8 +62,12 @@ agent died goes back to the queue on its own.
 - **Waiting for an answer.** `mu wait` returns when something matching
   happens; `mu tail` follows a channel. Both check the board's log, at most a
   second apart.
-- **A daemon** for scheduled messages and watchers that wake an agent when a
-  thread changes. `mu daemon install` keeps it running on macOS; elsewhere,
+- **A board module and a daemon.** One TypeScript file, `board({ watch, sync,
+  hooks })`, declares watchers that wake an agent when a thread changes,
+  sync, and outgoing webhooks
+  ([The board module](./packages/muster/docs/01-concepts/17-board-module.md)).
+  `mu daemon run`, `mu serve` or your own process runs it, beside scheduled
+  messages. `mu daemon install` keeps the daemon running on macOS; elsewhere,
   run `mu daemon run` under your own service manager.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
   task, on this machine or, experimentally, in a cloud sandbox:
@@ -130,7 +134,9 @@ been used against the real thing, and what has not.
 | `MUSTER_CLAIM_TOKEN`, a claim token a run brings | Run by hand on one machine, from two config folders standing in for two instances; never on a serverless host |
 | `mu token exchange`, a CI job signing in with its OIDC token (since 0.2.1) | Tested against an issuer on the test machine, with real RSA keys; never run against GitHub's or GitLab's |
 | The container image | Built, run and restarted in CI on every change; never run on a public address |
-| `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
+| Board modules: watchers, sync and outgoing webhooks in `board.ts` | Covered by tests that run `mu daemon run` and `mu serve` on a bare `~/.config/muster/board.ts` and on a project with its own muster, two hosts on one board, a host restarted mid-run, and every module the docs show; the factory and queue templates run their modules in Chromium. The live sync runs above predate it; not yet recorded as run live from a module |
+| `watchers.json`, `sync.json`, `hooks.json` | No longer read. A file left over makes `mu daemon run` and `mu serve` refuse to start, with a module that does what it did ([Porting](./packages/muster/docs/04-reference/07-porting.md)) |
+| `mu daemon check` | Covered by tests against module watchers run by a real daemon; not yet used on a long-running setup |
 | `mu inbox` and `for` watchers | Covered by tests; not yet used by hand or with a live agent |
 | Outgoing webhooks | Working, by tests against a real HTTP receiver on the same machine: deliveries checked with the verify code the docs print, a changed body, another secret and a late replay refused, retries after a 4xx, 5xx, timeout or refused connection, a restart resuming from the cursor, an event passed over after eight tries, redirects not followed, and one hook's dead receiver not holding up another. Not sent to a third-party service |
 | Registered workflows | Covered by tests, security-reviewed; not yet run live |

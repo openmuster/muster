@@ -58,6 +58,7 @@ mu inspect
 - [Runners](./01-concepts/14-runners.md)
 - [Outgoing webhooks](./01-concepts/15-outgoing-webhooks.md)
 - [Workflows](./01-concepts/16-workflows.md)
+- [The board module and hosts](./01-concepts/17-board-module.md)
 
 ## Sync
 

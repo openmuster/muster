@@ -8,7 +8,7 @@ description: Send a signed HTTP request to a service of yours when something hap
 ```mermaid
 sequenceDiagram
     participant B as Board
-    participant D as Daemon
+    participant D as Host
     participant R as Your receiver
     B-->>D: an event matches the hook's filter
     D->>R: POST, signed with your secret
@@ -20,39 +20,9 @@ A watcher runs a command on this machine. An outgoing webhook, a hook for
 short, sends the event to a URL instead: a service that notifies your phone
 when a task is blocked, a dashboard, an automation tool.
 
-Hooks are yours, like watchers. They live in `~/.config/muster/hooks.json`,
-or in a [board module](#in-a-board-module), never on a board, so nothing
-anyone posts can make the daemon call a URL.
-
-```json
-{
-  "hooks": [
-    {
-      "name": "phone",
-      "url": "https://hooks.example.com/muster",
-      "secret": "env:MUSTER_HOOK_PHONE",
-      "tail": { "channel": "work/", "types": ["task.blocked", "task.failed"], "kinds": ["!backlog"] }
-    }
-  ]
-}
-```
-
-| Field | Meaning |
-| --- | --- |
-| `name` | Lowercase letters, numbers, `.`, `_` and `-`. No watcher may share it |
-| `url` | Where to send. `https` only; plain `http` is accepted for this machine alone |
-| `secret` | The name of an environment variable, as `env:NAME`. Its value signs each delivery and needs 16 characters or more. It is never written in the file |
-| `tail` | The filter, the same one `mu tail` and watchers take. Left out, every event matches |
-| `body` | `pointer` (the default) or `event` |
-
-The daemon or `mu serve` sends them, so one of the two has to be running, with
-the secret in its environment. On macOS, `mu daemon install --env
-MUSTER_HOOK_PHONE` carries it into the service.
-
-## In a board module
-
-A [board module](../04-reference/02-handle.md#watchers) declares the same
-hooks in code, beside its watchers. `env()` names the variable that holds the
+Hooks are yours, like watchers: they are declared in a
+[board module](./17-board-module.md), never on a board, so nothing anyone
+posts can make a host call a URL. `env()` names the variable that holds the
 secret; nothing reads it when the module is imported.
 
 ```ts lib/board.ts
@@ -70,28 +40,26 @@ export const team = board({
 })
 ```
 
-| `hooks.json` | `board({ hooks })` |
+| Key | Meaning |
 | --- | --- |
-| `"name": "phone"` | `name: 'phone'` |
-| `"url": "https://..."` | `url: 'https://...'` |
-| `"secret": "env:MUSTER_HOOK_PHONE"` | `secret: env('MUSTER_HOOK_PHONE')` |
-| `"tail": { ... }` | `tail: { ... }`, checked like a watcher's |
-| `"body": "event"` | `body: 'event'` |
+| `name` | Lowercase letters, numbers, `.`, `_` and `-`. No watcher, other hook or workflow may share it |
+| `url` | Where to send. `https` only; plain `http` is accepted for this machine alone. No password in it |
+| `secret` | `env('NAME')`: the variable whose value signs each delivery, 16 characters or more. It is never written in the module |
+| `tail` | The filter, the same one `mu tail` and watchers take. Left out, every event matches |
+| `body` | `'pointer'` (the default) or `'event'` |
 
-What a delivery carries, how it is signed, and what you can count on are the
-same. The rest differs in where it runs:
+Where they run:
 
 - **`start()` sends them**, so `mu daemon run` and `mu serve` with the module
   do, and so does `team.start()` in a process of your own. `start()` reads
   each secret, and throws naming the variable that is unset or too short.
-  `mu daemon run` then says so and exits 0.
+  `mu daemon run` then says so and exits 0. On macOS,
+  `mu daemon install --env MUSTER_HOOK_PHONE` carries the secret into the
+  service.
 - **One host sends them all,** under the lease `hooks` in the board's file.
   Another host started on the same board stands by, and takes over within 30
   seconds once the first stops. `mu daemon status` shows the holder and how
   far each hook is behind.
-- **One place for them.** A module with `hooks` beside a `hooks.json` is
-  refused, and so is a hook named like a watcher or a workflow, in the module
-  or in the config files. Move each entry over and delete `hooks.json`.
 
 ## What a delivery carries
 
@@ -108,8 +76,8 @@ One `POST` for each event, with a JSON body.
 - **A pointer, by default.** Which event, of what type, where and by whom.
   None of the words: not the message, not a task's reason. A receiver that
   needs them reads the thread with its own token.
-- **The whole event, when you ask.** `"body": "event"` sends the event as
-  `mu tail --json` prints it, with the message or the task. The daemon reads
+- **The whole event, when you ask.** `body: 'event'` sends the event as
+  `mu tail --json` prints it, with the message or the task. The host reads
   as the board's owner, so this includes private channels the filter covers:
   what the board says leaves the machine and goes to that URL.
 
@@ -155,16 +123,17 @@ function fromMuster(headers, raw, secret) {
   failure: a timeout after 10 seconds, a refused connection, a 4xx or 5xx.
 - **A redirect is a failure too.** It is never followed, so a body goes only
   where your config says.
-- **After eight tries the event is passed over.** The daemon says so in a
+- **After eight tries the event is passed over.** The host says so in a
   reply on the event's thread and carries on with the next. It never sends
   that reply of its own to a hook. A watcher on the thread does wake for it.
 - **A new hook starts from now.** It never replays a board's history.
-- **A slow receiver can't stall the board.** The daemon makes a pass about
+- **A slow receiver can't stall the board.** The host makes a pass about
   once a second. A hook sends at most 20 events in one, and stops early once
-  it has spent 10 seconds there. Schedules and watchers run first.
+  it has spent 10 seconds there. Hooks run in a loop of their own, so
+  schedules and watchers never wait on them.
 - **It will not send unsigned.** A secret that is unset or too short stops
   `mu daemon run` from starting, and it says which variable. `mu serve` says
-  the same on its error output and serves the board with no hooks.
+  the same on its error output and serves the board without the module.
 
 ## Check that it arrives
 
@@ -179,8 +148,8 @@ board. The secret has to be set where you run it.
 
 - **`hook_failed`** when nothing answered, or the receiver refused it. A
   `401` or `403` usually means the two sides hold different secrets.
-- **It proves the URL and the secret, not the daemon.** Whether the daemon is
-  running is `mu daemon status`, and its log says what each hook sent.
+- **It proves the URL and the secret, not the host.** Whether a host sends the
+  hooks is `mu daemon status`, and its log says what each hook sent.
 
 ## When not to use one
 
@@ -197,8 +166,12 @@ board. The secret has to be set where you run it.
   `mu daemon check <name>` tries the URL. Then read the daemon's log in
   `~/.config/muster/logs/`: `failed hook phone at 41 HTTP 500` names the event
   and the answer. `mu serve` prints the same line on its error output.
-- **The daemon won't start.** `hooks.json` isn't valid, a secret isn't set, or
-  a hook and a watcher share a name. The first line of its log says which.
-  `mu serve` starts anyway, says which, and sends no hooks until it is fixed.
+- **The daemon won't start.** A secret isn't set, or a hook shares its name
+  with a workflow. The first line of its log says which. `mu serve` with a
+  module whose hook secret isn't set serves the board, says which, and runs
+  none of the module until it is fixed and restarted.
+- **A `hooks.json` from before** is not read: `mu daemon run` and `mu serve`
+  refuse to start while it is there. Move each entry into the module
+  ([Porting](../04-reference/07-porting.md)) and delete it.
 - **Signatures never match.** The receiver is signing a parsed body, or the
   framework in front of it changed the bytes. Sign what arrived.

@@ -1,7 +1,9 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { cli, tempDir } from './helpers.ts'
 import { GLOBAL } from '../src/cli/args.ts'
 import { HELP } from '../src/cli/help.ts'
 import { SPECS } from '../src/cli/main.ts'
@@ -137,4 +139,91 @@ describe('docs and skills', () => {
     // Each row is one limit: a number the table states and no check covers would go stale unseen.
     expect(table.split('\n').filter((line) => /^\| A /.test(line))).toHaveLength(said.length + 1)
   })
+})
+
+/** Every TypeScript block a page shows, with the file name its fence gives it. */
+type Block = { page: string; at: number; name: string; source: string }
+const blocks: Block[] = pages.flatMap((page) =>
+  [...readFileSync(page, 'utf8').matchAll(/```ts([^\n]*)\n([\s\S]*?)```/g)].map((match, at) => ({ page, at, name: match[1]!.trim() || `block-${at}.ts`, source: match[2]! })),
+)
+const PACKAGE = join(root, 'packages/muster')
+/** A block that is a board module: what `mu` loads with --module. */
+const isModule = (block: Block) => /export (default board\(|const team = board\()/.test(block.source)
+const where = (block: Block) => `${block.page.slice(root.length + 1)}, block ${block.at + 1} (${block.name})`
+
+/**
+ * Writes a block where it would be, with the blocks it imports from earlier on its page beside it: a
+ * page shows `lib/board.ts`, then a `host.ts` that imports it. `@/` is the project's root, as in Next.js.
+ */
+function project(block: Block): string {
+  const dir = tempDir()
+  const write = (each: Block) => {
+    mkdirSync(dirname(join(dir, each.name)), { recursive: true })
+    writeFileSync(join(dir, each.name), each.source)
+  }
+  write(block)
+  const earlier = blocks.filter((each) => each.page === block.page && each.at < block.at).reverse()
+  for (const [, spec] of block.source.matchAll(/(?:from |import\()'((?:\.{1,2}|@)\/[^']+)'/g)) {
+    const wanted = (spec!.startsWith('@/') ? spec!.slice(2) : join(dirname(block.name), spec!)).replace(/\.tsx?$/, '')
+    const found = earlier.find((each) => each.name.replace(/\.tsx?$/, '') === wanted)
+    // A template's README shows code beside the template's own files: those are what it imports.
+    const own = join(dirname(block.page), `${wanted}.ts`)
+    if (found) write(found)
+    else if (block.page.includes('/templates/') && existsSync(own)) write({ ...block, name: `${wanted}.ts`, source: readFileSync(own, 'utf8') })
+  }
+  return dir
+}
+
+describe('the TypeScript the docs show', () => {
+  it('there are blocks, and board modules among them', () => {
+    expect(blocks.length).toBeGreaterThanOrEqual(20)
+    expect(blocks.filter(isModule).length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('every block type-checks against muster as it is, with what it imports from the page', () => {
+    const options = (dir: string): ts.CompilerOptions => ({
+      target: ts.ScriptTarget.ES2023,
+      lib: ['lib.es2024.d.ts', 'lib.dom.d.ts'],
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      allowImportingTsExtensions: true,
+      erasableSyntaxOnly: true,
+      types: ['node'],
+      typeRoots: [join(PACKAGE, 'node_modules', '@types')],
+      paths: { muster: [join(PACKAGE, 'src', 'index.ts')], '@/*': [join(dir, '*')] },
+    })
+    // Parsed once for every block: muster's own files and Node's types are the same each time.
+    const parsed = new Map<string, ts.SourceFile | undefined>()
+    const failed: string[] = []
+    for (const block of blocks) {
+      const dir = project(block)
+      const host = ts.createCompilerHost(options(dir))
+      const read = host.getSourceFile.bind(host)
+      host.getSourceFile = (file, language, onError, fresh) => {
+        if (file.startsWith(dir)) return read(file, language, onError, fresh)
+        if (!parsed.has(file)) parsed.set(file, read(file, language, onError, fresh))
+        return parsed.get(file)
+      }
+      const program = ts.createProgram([join(dir, block.name)], options(dir), host)
+      for (const diagnostic of ts.getPreEmitDiagnostics(program)) {
+        failed.push(`${where(block)}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`)
+      }
+    }
+    expect(failed).toEqual([])
+  }, 120_000)
+
+  it('every board module a page shows loads in mu, with nothing set', async () => {
+    const loaded = await Promise.all(
+      blocks.filter(isModule).map(async (block) => {
+        const dir = project(block)
+        const ran = await cli(dir, ['daemon', 'status', '--json', '--module', join(dir, block.name)])
+        const module = (JSON.parse(ran.stdout || '{}') as { module?: { error?: { message: string } } }).module
+        return module && !module.error ? null : `${where(block)}: ${module?.error?.message ?? ran.stderr}`
+      }),
+    )
+    expect(loaded.filter(Boolean)).toEqual([])
+  }, 120_000)
 })

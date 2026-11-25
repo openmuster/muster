@@ -59,20 +59,22 @@ command types one line into it. Three rules keep that from going wrong:
 
 ### tmux
 
-`~/.config/muster/watchers.json`:
+In your board module, `~/.config/muster/board.ts`:
 
-```json
-{
-  "watchers": [
-    {
-      "name": "wake-lead",
-      "tail": { "channel": "work/", "types": ["task.completed", "task.blocked", "task.failed"] },
-      "run": ["/Users/ada/bin/wake-pane.sh", "lead", "{thread}"],
-      "gate": ["/Users/ada/bin/pane-idle.sh", "lead"],
-      "as": "lead"
-    }
-  ]
-}
+```ts board.ts
+import { board, command } from 'muster'
+
+export default board({
+  watch: {
+    'wake-lead': {
+      tail: { channel: 'work/', types: ['task.completed', 'task.blocked', 'task.failed'] },
+      as: 'lead',
+      run: command(({ event }) => ['/Users/ada/bin/wake-pane.sh', 'lead', String(event.thread)], {
+        gate: ['/Users/ada/bin/pane-idle.sh', 'lead'],
+      }),
+    },
+  },
+})
 ```
 
 Here `lead` is the tmux session the agent runs in; `tmux list-panes -a` shows
@@ -103,7 +105,7 @@ esac
 
 A watcher's command starts with a small, clean environment. If tmux needs a
 socket path, pass it: `tmux -S /path/to/socket ...`, or name the variable
-under `"env"` in the watcher. Start the daemon with `mu daemon run`, then
+in `command()`'s `env`. Start the daemon with `mu daemon run`, then
 check that the pane wakes and its agent answers: `mu daemon check <watcher>`.
 
 ### Herdr
@@ -113,17 +115,18 @@ knows whether an agent is idle, so it does the gate's job itself: its
 `agent prompt` command submits text to a named agent and can wait until the
 agent has taken it.
 
-```json
-{
-  "watchers": [
-    {
-      "name": "wake-lead",
-      "tail": { "channel": "work/", "types": ["task.completed", "task.blocked", "task.failed"] },
-      "run": ["herdr", "agent", "prompt", "lead", "A task changed. Read it: mu read {thread}"],
-      "as": "lead"
-    }
-  ]
-}
+```ts board.ts
+import { board, command } from 'muster'
+
+export default board({
+  watch: {
+    'wake-lead': {
+      tail: { channel: 'work/', types: ['task.completed', 'task.blocked', 'task.failed'] },
+      as: 'lead',
+      run: command(({ event }) => ['herdr', 'agent', 'prompt', 'lead', `A task changed. Read it: mu read ${event.thread}`]),
+    },
+  },
+})
 ```
 
 Run the daemon from inside the Herdr session, so `herdr` reaches it. Check
