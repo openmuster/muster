@@ -49,11 +49,10 @@ mu daemon check factory --module "$PWD/lib/board.ts" --in factory/issues
 
 Run the daemon without a module (`--no-module`, or with no
 `~/.config/muster/board.ts`): `host.ts` runs this one. If
-`~/.config/muster/` has a `sync.json` or a `watchers.json` with a `factory`
-watcher from an earlier copy of this template, move what else they hold into
-a module and delete them: `host.ts` refuses a watcher that is in
-`watchers.json` and in code under one name, and a daemon without a module
-would sync `sync.json` in place of the module's sync. The page says so.
+`~/.config/muster/` has a `watchers.json`, `sync.json` or `hooks.json` from
+an earlier copy of this template, move what else they hold into a board
+module and delete them: those files are no longer read, and `mu daemon run`
+and `mu serve` refuse to start while one is there. The page says so.
 
 As shipped, the sync brings issues and pull requests in and sends nothing
 back. For the agent's replies to be posted as comments, add

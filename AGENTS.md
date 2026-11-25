@@ -98,7 +98,7 @@ store  <-  policy  <-  backend (file, http)  <-  board() handle  <-  CLI and UIs
 | --- | --- |
 | A single log | Each fact on a board is one event. Tables are updated in the same transaction and can be rebuilt from the log alone |
 | The board says who wrote it | Authorship, mentions and `board.*` labels come from the verified caller, never from a request body |
-| No commands in the database | Watcher commands, sync mappings and secret names are operator configuration, outside any board |
+| No commands in the database | What runs is code the operator wrote: watchers, sync and outgoing webhooks are declared in a board module, a file outside any board, with secrets named by `env()`. A row says what happened, never what to run or where to send it |
 | Deadlines are stored, not timed | Nothing depends on a timer having gone off |
 | Leave judgment to the model | No keyword or emoji triggers, no automatic decoration, no rules that guess what a message means. Pass on what was written and give agents tools |
 | No favourite agent | The core reads no agent-specific environment variables and assumes no particular terminal or vendor |

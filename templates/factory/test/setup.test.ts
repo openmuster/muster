@@ -35,20 +35,21 @@ describe('setup', () => {
     expect([platform!.done, platform!.detail, platform!.fix]).toEqual([false, 'gh (github) is declared, and nothing syncs it: no catch-up, nothing sent', "pnpm host   (node host.ts, in this folder, with the sync's secrets set)"])
   })
 
-  it('a sync.json left in the config folder is not done: a daemon without a module would sync that instead', () => {
+  it('a watchers.json, sync.json or hooks.json left in the config folder means nothing ticks: mu daemon run and mu serve refuse to start', () => {
     const config = dir()
     writeFileSync(join(config, 'sync.json'), JSON.stringify({ gh: { type: 'github', secret: 'env:S' } }))
-    const [, platform] = setup({ config, channel: 'factory', watchers: factory, sync: gh, holders: { sync: HOLDER } })
-    expect(platform!.done).toBe(false)
-    expect(platform!.fix).toBe(`move what ${tilde(join(config, 'sync.json'))} lists into lib/board.ts, and delete it`)
-  })
-
-  it('a watcher of the same name left in watchers.json is not done, since the host refuses to run both', () => {
-    const config = dir()
-    writeFileSync(join(config, 'watchers.json'), JSON.stringify({ watchers: [{ name: 'factory', tail: { channel: 'factory/' }, run: ['./wake.sh', '{thread}'] }] }))
-    const [watcher] = setup({ config, channel: 'factory', watchers: factory, sync: gh, holders: { 'watch:factory': HOLDER } })
-    expect(watcher!.done).toBe(false)
-    expect(watcher!.fix).toBe(`remove "factory" from ${tilde(join(config, 'watchers.json'))}`)
+    const holders = { tick: HOLDER, sync: HOLDER, 'watch:factory': HOLDER }
+    const [watcher, platform, served] = setup({ config, channel: 'factory', watchers: factory, sync: gh, holders })
+    // The module's own host runs whatever is left there.
+    expect([watcher!.done, platform!.done]).toEqual([true, true])
+    expect([served!.done, served!.detail, served!.fix]).toEqual([
+      false,
+      `${tilde(join(config, 'sync.json'))} is left from before board modules: mu daemon run and mu serve refuse to start until it is moved and deleted`,
+      'move what it lists into lib/board.ts (or your own board module), and delete it',
+    ])
+    writeFileSync(join(config, 'watchers.json'), '{}')
+    const [, , both] = setup({ config, channel: 'factory', watchers: factory, sync: gh, holders })
+    expect(both!.detail).toBe(`${tilde(join(config, 'watchers.json'))}, ${tilde(join(config, 'sync.json'))} are left from before board modules: mu daemon run and mu serve refuse to start until they are moved and deleted`)
   })
 
   it('with no sync declared, hearing from a platform is optional, and paths and holders read as people write them', () => {

@@ -8,7 +8,7 @@ let host: ReturnType<typeof team.start>
 try {
   host = team.start({ log: (line) => process.stderr.write(`factory: ${line}\n`) })
 } catch (error) {
-  // A secret the sync names isn't set, or a watcher by the same name is in watchers.json: said once, by name.
+  // A secret the sync names isn't set: said once, by name.
   process.stderr.write(`factory: ${(error as Error).message}\n`)
   process.exit(1)
 }

@@ -1,12 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { tickOnce } from '../src/daemon/daemon.ts'
-import { HOOK_ATTEMPTS, HOOK_BATCH, armHooks, loadHooks, runHook, type ArmedHook, type HookState } from '../src/daemon/hooks.ts'
-import { cli, cliStart, memoryBoard, reason, tempDir } from './helpers.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { HOOK_ATTEMPTS, HOOK_BATCH, runHook, type ArmedHook, type HookState } from '../src/daemon/hooks.ts'
+import { board, env } from '../src/index.ts'
+import { memoryBoard } from './helpers.ts'
 
 const KEY = 'a-secret-of-thirty-two-characters'
 type Got = { delivery: string; signed: boolean; age: number; raw: string; headers: Record<string, string>; body: { hook: string; delivery: string; event: Record<string, any> } }
@@ -277,34 +277,36 @@ describe('outgoing webhooks', () => {
     await team.scheduleCreate({ channel: 'work', text: 'retro', at: '2026-01-03T00:00:00.000Z' })
     expect((await run()).sent).toHaveLength(1)
   })
+})
 
-  it('a hook whose receiver is down never holds up another hook in the same tick', async () => {
+describe('hooks in a host', () => {
+  it('a hook whose receiver is down never holds up another hook', async () => {
     const up = await receiver()
     const down = await receiver()
     down.state.answer = 503
-    const { team, time, hook } = setUp(up.url)
-    const broken: ArmedHook = { ...hook, name: 'pager', url: down.url }
-    const hooks = { list: [broken, hook], states: new Map<string, HookState>(), deps: { now: () => time.now().getTime(), fetch } }
-    const deps = { now: () => time.now().getTime(), spawn: async () => ({ code: 0, stdout: '' }) }
-    await tickOnce(team, [], new Map(), deps, hooks)
-    const root = await team.post({ channel: 'work/api', text: 'one' })
-    const did = await tickOnce(team, [], new Map(), deps, hooks)
-    expect(did.hooked.pager).toMatchObject({ failed: [root.id], why: 'HTTP 503' })
-    expect(did.hooked.phone!.sent).toEqual([root.id])
-    expect(up.got).toHaveLength(1)
-  })
-
-  it('a tick sends hooks after schedules and watchers', async () => {
-    const there = await receiver()
-    const { team, time, hook } = setUp(there.url, { tail: { channel: 'work', types: ['message.posted'] } })
-    const hooks = { list: [hook], states: new Map<string, HookState>(), deps: { now: () => time.now().getTime(), fetch } }
-    const deps = { now: () => time.now().getTime(), spawn: async () => ({ code: 0, stdout: '' }) }
-    await tickOnce(team, [], new Map(), deps, hooks)
-    await team.scheduleCreate({ channel: 'work', text: 'standup', at: '2026-01-01T00:10:00.000Z' })
-    time.advance(10 * 60_000)
-    const did = await tickOnce(team, [], new Map(), deps, hooks)
-    expect(did.hooked.phone!.sent).toHaveLength(1)
-    expect(there.got.map((each) => each.body.event.type)).toEqual(['message.posted'])
+    process.env.HOOK_SECRET = KEY
+    const team = board({
+      memory: true,
+      principal: 'local:user:ada',
+      hooks: [
+        { name: 'pager', url: down.url, secret: env('HOOK_SECRET'), tail: { channel: 'work/' } },
+        { name: 'phone', url: up.url, secret: env('HOOK_SECRET'), tail: { channel: 'work/' } },
+      ],
+    })
+    const log: string[] = []
+    const host = team.start({ log: (line) => log.push(line) })
+    try {
+      // Each hook starts from now: wait until both have taken their place before writing.
+      await vi.waitFor(async () => expect([await team.cursorGet('hook:pager'), await team.cursorGet('hook:phone')]).not.toContain(null), { timeout: 5000 })
+      const root = await team.post({ channel: 'work/api', text: 'one' })
+      await vi.waitFor(() => expect(up.got.map((each) => each.delivery)).toEqual([`phone.${root.id}`]), { timeout: 5000 })
+      expect(log).toContain(`failed    hook pager  at ${root.id}  HTTP 503`)
+    } finally {
+      host.stop()
+      await host.done
+      team.close()
+      delete process.env.HOOK_SECRET
+    }
   })
 })
 
@@ -337,160 +339,5 @@ describe('the receiver in the docs', () => {
     const sentAt = Number(got!.headers['muster-timestamp']) * 1000
     expect(documented(() => sentAt + 299_000)(got!.headers, got!.raw, KEY)).toBe(true)
     expect(documented(() => sentAt + 301_000)(got!.headers, got!.raw, KEY)).toBe(false)
-  })
-})
-
-describe('the hooks file', () => {
-  const write = (hooks: unknown) => {
-    const dir = tempDir()
-    writeFileSync(join(dir, 'hooks.json'), typeof hooks === 'string' ? hooks : JSON.stringify(hooks))
-    return join(dir, 'hooks.json')
-  }
-  const good = { name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }
-  const refuses = (path: string) => {
-    try {
-      loadHooks(path)
-    } catch (error) {
-      return (error as Error).message
-    }
-    return 'loaded'
-  }
-
-  it('a missing file means no hooks, and a hook starts as a pointer with no filter', () => {
-    expect(loadHooks(join(tempDir(), 'hooks.json'))).toEqual([])
-    expect(loadHooks(write({ hooks: [good] }))).toEqual([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'HOOK_SECRET', tail: {}, body: 'pointer' }])
-  })
-
-  it('takes a kind filter, and refuses one that is not a list of kinds', () => {
-    expect(loadHooks(write({ hooks: [{ ...good, tail: { types: ['task.blocked'], kinds: ['!backlog'] } }] }))[0]!.tail).toEqual({ types: ['task.blocked'], kinds: ['!backlog'] })
-    expect(refuses(write({ hooks: [{ ...good, tail: { kinds: '!backlog' } }] }))).toMatch(/"kinds" of hook "phone"/)
-    expect(refuses(write({ hooks: [{ ...good, tail: { kinds: ['Not A Kind'] } }] }))).toMatch(/"kinds" of hook "phone"/)
-  })
-
-  it('refuses a secret written into the file: it names an environment variable', () => {
-    expect(refuses(write({ hooks: [{ ...good, secret: 'hunter2hunter2hunter2' }] }))).toMatch(/"secret" of hook "phone" .* names an environment variable/)
-    expect(refuses(write({ hooks: [{ name: 'phone', url: good.url }] }))).toMatch(/names an environment variable/)
-  })
-
-  it('refuses plain http anywhere but this machine, and a password in the URL', () => {
-    expect(refuses(write({ hooks: [{ ...good, url: 'http://hooks.example.com/in' }] }))).toMatch(/needs an https URL/)
-    expect(refuses(write({ hooks: [{ ...good, url: 'ftp://hooks.example.com/in' }] }))).toMatch(/needs an https URL/)
-    expect(refuses(write({ hooks: [{ ...good, url: 'https://ada:pw@hooks.example.com/in' }] }))).toMatch(/password in its URL/)
-    expect(refuses(write({ hooks: [{ ...good, url: 'http://127.0.0.1:8787/in' }] }))).toBe('loaded')
-    expect(refuses(write({ hooks: [{ ...good, url: 'http://localhost:8787/in' }] }))).toBe('loaded')
-  })
-
-  it('refuses what it cannot read: bad JSON, no name, no URL, two of one name, an unknown body', () => {
-    expect(refuses(write('{ not json'))).toMatch(/hooks\.json isn't JSON/)
-    expect(refuses(write({ nothing: true }))).toMatch(/needs a "hooks" array/)
-    expect(refuses(write({ hooks: [{ ...good, name: 'Phone!' }] }))).toMatch(/needs a "name"/)
-    expect(refuses(write({ hooks: [{ name: 'phone', secret: good.secret }] }))).toMatch(/needs a "url"/)
-    expect(refuses(write({ hooks: [good, good] }))).toMatch(/Two hooks .* are named "phone"/)
-    expect(refuses(write({ hooks: [{ ...good, body: 'everything' }] }))).toMatch(/"pointer" or "event"/)
-  })
-
-  it('will not send unsigned: a secret that is unset or short stops the daemon from taking the hook', async () => {
-    const [hook] = loadHooks(write({ hooks: [good] }))
-    expect(await reason(Promise.resolve().then(() => armHooks([hook!], {})))).toBe('invalid_config')
-    expect(await reason(Promise.resolve().then(() => armHooks([hook!], { HOOK_SECRET: 'short' })))).toBe('invalid_config')
-    expect(armHooks([hook!], { HOOK_SECRET: KEY })[0]!.key).toBe(KEY)
-  })
-})
-
-describe('hooks from the command line', () => {
-  const setUpDir = (hooks: unknown[], watchers?: unknown[]) => {
-    const dir = tempDir()
-    mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'hooks.json'), JSON.stringify({ hooks }))
-    if (watchers) writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers }))
-    return dir
-  }
-
-  it('mu daemon run delivers a board event to a receiver that verifies it', async () => {
-    const there = await receiver()
-    const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET', tail: { channel: 'work/' }, body: 'event' }])
-    await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'], { HOOK_SECRET: KEY })
-    // Waited for, not timed: on a busy machine the daemon takes longer to start and to deliver.
-    const until = async (done: () => boolean, ms = 15_000) => {
-      for (const end = Date.now() + ms; !done() && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    await until(() => /^hooks {5}1$/m.test(daemon.output()))
-    await cli(dir, ['post', 'work/api', 'needs a look'])
-    await until(() => there.got.length > 0)
-    daemon.child.kill('SIGTERM')
-    const ended = await daemon.done
-    expect(ended.code).toBe(0)
-    expect(ended.stdout).toMatch(/^hooks {5}1$/m)
-    expect(ended.stdout).toMatch(/^sent {6}hook phone {2}1$/m)
-    expect(there.got.map((each) => [each.signed, each.body.event.message.text])).toEqual([[true, 'needs a look']])
-  }, 40_000)
-
-  it('mu serve sends hooks too, and says on its error output what a receiver refused', async () => {
-    const there = await receiver()
-    const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET', tail: { channel: 'work/' } }])
-    await cli(dir, ['post', 'general', 'board exists'])
-    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'], { HOOK_SECRET: KEY })
-    let stderr = ''
-    serving.child.stderr.on('data', (chunk) => (stderr += chunk))
-    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-    await cli(dir, ['post', 'work/api', 'needs a look'])
-    for (let i = 0; i < 100 && there.got.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(there.got.map((each) => [each.signed, each.body.event.channel])).toEqual([[true, 'work/api']])
-    there.state.answer = 500
-    await cli(dir, ['post', 'work/api', 'and another'])
-    for (let i = 0; i < 100 && !stderr.includes('failed'); i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    serving.child.kill('SIGTERM')
-    expect((await serving.done).code).toBe(0)
-    expect(stderr).toMatch(/^failed {4}hook phone {2}at \d+ {2}HTTP 500$/m)
-  }, 20_000)
-
-  it('mu serve with a hook it cannot sign for serves the board, says why, and keeps its watchers', async () => {
-    const dir = setUpDir([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }], [{ name: 'lead', tail: { channel: 'work/' }, run: ['sh', '-c', 'echo woke >> "$HOME/woke"'], every: 1 }])
-    await cli(dir, ['post', 'general', 'board exists'])
-    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
-    let stderr = ''
-    serving.child.stderr.on('data', (chunk) => (stderr += chunk))
-    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    const env = { MUSTER_URL: /MUSTER_URL=(\S+)/.exec(serving.output())![1]!, MUSTER_TOKEN: /MUSTER_TOKEN=(\S+)/.exec(serving.output())![1]! }
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-    expect((await cli(dir, ['post', 'work/api', 'over http'], { env })).code).toBe(0)
-    for (let i = 0; i < 100 && !existsSync(join(dir, 'woke')); i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    serving.child.kill('SIGTERM')
-    await serving.done
-    expect(stderr).toMatch(/^error: HOOK_SECRET isn't set, and hook "phone"/)
-    expect(stderr).toMatch(/No outgoing webhooks are sent/)
-    expect(existsSync(join(dir, 'woke'))).toBe(true)
-  }, 20_000)
-
-  it('a hook whose secret is not set parks the daemon, and it says which variable', async () => {
-    const dir = setUpDir([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }])
-    const run = await cli(dir, ['daemon', 'run'])
-    expect(run.code).toBe(0)
-    expect(run.stderr).toMatch(/^error: HOOK_SECRET isn't set, and hook "phone"/)
-  })
-
-  it('mu daemon check <hook> sends a signed ping and says what the receiver answered', async () => {
-    const there = await receiver()
-    const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET' }])
-    const run = await cli(dir, ['daemon', 'check', 'phone'], { env: { HOOK_SECRET: KEY } })
-    expect([run.code, run.stderr]).toEqual([0, ''])
-    expect(run.stdout).toMatch(/^delivered {2}phone {2}HTTP 200 {2}in \d+ms\n$/)
-    expect(there.got.map((each) => [each.signed, each.body.event.type, each.delivery.startsWith('phone.ping.')])).toEqual([[true, 'ping', true]])
-
-    there.state.answer = 401
-    const refused = await cli(dir, ['daemon', 'check', 'phone', '--json'], { env: { HOOK_SECRET: KEY } })
-    expect(refused.code).toBe(1)
-    expect(JSON.parse(refused.stderr).error).toMatchObject({ reason: 'hook_failed', data: { hook: 'phone', status: 401 } })
-  })
-
-  it('mu daemon status lists hooks, and one name cannot be both a watcher and a hook', async () => {
-    const dir = setUpDir([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }])
-    const status = JSON.parse((await cli(dir, ['daemon', 'status', '--json'])).stdout)
-    expect(status).toMatchObject({ watchers: [], hooks: ['phone'] })
-    const clash = setUpDir([{ name: 'lead', url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' }], [{ name: 'lead', run: ['true'] }])
-    const run = await cli(clash, ['daemon', 'check', 'lead', '--json'])
-    expect(JSON.parse(run.stderr).error.reason).toBe('invalid_config')
   })
 })

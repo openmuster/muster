@@ -43,6 +43,34 @@ versions are affected.
   `hooks` beside a `hooks.json`, or a hook named like a watcher or a
   workflow, is refused.
 
+### Removed
+
+- `watchers.json`, `sync.json` and `hooks.json` are no longer read.
+  Watchers, sync and outgoing webhooks are declared in a board module
+  (`~/.config/muster/board.ts`, or `--module`): `board({ watch, sync, hooks })`.
+  [Porting](./packages/muster/docs/04-reference/07-porting.md) shows a module
+  for each file. `workflows.json` and `oidc.json` are read as before.
+  - A `watchers.json`, `sync.json` or `hooks.json` left in
+    `~/.config/muster/` makes `mu daemon run` and `mu serve` refuse to start
+    with `config_retired`, showing a module that does what the file did.
+    `mu daemon run` exits 0, so launchd leaves it stopped rather than
+    restarting it. `mu daemon status` names the file.
+  - `loadSync` is no longer exported. A sync is `github()`, `linear()` or
+    `slack()` in `board({ sync })`, or given to `file({ sync })`.
+  - `mu daemon check` takes a watcher or an outgoing webhook the board module
+    declares. `no_ticker` and `sync_twice` are gone: a watcher nothing runs
+    is `watcher_not_running`.
+  - `mu daemon status` no longer has `watchers` and `hooks` lists in its
+    `--json`: what a module declares is under `module`.
+
+### Changed
+
+- A watcher in a board module whose runs keep failing, across threads, slows
+  down: past five failures in a row its loop waits 2 seconds, then 4, and so
+  on up to ten minutes, and says `slowed` in its log. One run that works puts
+  it back to its usual pace. The JSON watchers did this; module watchers only
+  backed off one thread at a time.
+
 ## 0.3.0
 
 ### Added

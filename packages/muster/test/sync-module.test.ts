@@ -171,14 +171,14 @@ describe('sync in a board module', () => {
     const first = file({ dir, sync: { gh: github({ secret: 'gh-secret', token: 't', repos }) }, fetch: slow })
     await first.syncTick()
     first.close()
-    // The app's module, started in its own process; and mu daemon run with sync.json, as the CLI makes it.
+    // The app's module, started in its own process; and a daemon whose board was given the sync by its backend.
     const app = board({ dir, sync: { gh: github({ secret: env(GH), token: env(GH), repos }) }, fetch: slow })
     const daemon = board({ backend: file({ dir, sync: { gh: github({ secret: 'gh-secret', token: 't', repos }) }, fetch: slow }) })
     closers.push(() => app.close(), () => daemon.close())
     await app.post({ channel: 'web', text: 'from the board' })
     const stop = new AbortController()
     const host = app.start({ log: () => {} })
-    const ticking = runDaemon({ team: daemon, watchers: [], stop: stop.signal, log: () => {} })
+    const ticking = runDaemon({ team: daemon, stop: stop.signal, log: () => {} })
     closers.unshift(async () => {
       host.stop()
       stop.abort()
@@ -190,7 +190,7 @@ describe('sync in a board module', () => {
     expect(posts).toEqual(['https://api.github.com/repos/acme/web/issues'])
   }, 20_000)
 
-  it('a daemon ticking sync.json leaves the sync to whoever holds the sync lease', async () => {
+  it('a daemon ticking a sync given to the backend, file({ sync }), leaves the sync to whoever holds the sync lease', async () => {
     const dir = tempDir()
     const sent: string[] = []
     const fetcher = (async (input: string | URL | Request) => {
@@ -204,7 +204,7 @@ describe('sync in a board module', () => {
     expect((await daemon.backend.leases!.take({ name: 'sync', holder: 'app:1:abc', ttl: 60_000 })).held).toBe(true)
     await daemon.post({ channel: 'web', text: 'from the board' })
     const stop = new AbortController()
-    const ticking = runDaemon({ team: daemon, watchers: [], stop: stop.signal, log: () => {} })
+    const ticking = runDaemon({ team: daemon, stop: stop.signal, log: () => {} })
     await sleep(2500)
     stop.abort()
     expect(await ticking).toBe('stopped')
@@ -250,7 +250,7 @@ describe('sync in a board module', () => {
     await b
   }, 20_000)
 
-  it('the shapes port from sync.json: a filter command, filesPerDayMB, and literal secrets', () => {
+  it('a sync takes a filter command, filesPerDayMB, and literal secrets', () => {
     const made = slack({ secret: 'literal', channels: { C1: 'general' }, filter: ['tr', 'a-z', 'A-Z'], filesPerDayMB: 1 })
     expect(made.filter!('shout')).toBe('SHOUT')
     expect(made.filesPerDay).toBe(1024 * 1024)
@@ -311,17 +311,15 @@ describe('mu with a module that declares sync', () => {
     expect(await read('eng')).toEqual(['Linear through mu serve'])
   })
 
-  it('a module sync beside a sync.json is refused: mu serve exits 2, mu daemon run says so and exits 0', async () => {
+  it('a module sync beside a sync.json left from before is refused: mu serve exits 1, mu daemon run says so and exits 0', async () => {
     const { dir, path } = moduleFolder()
     writeFileSync(join(dir, 'config', 'sync.json'), '{}')
     const vars = { [GH]: 'gh-secret', [LIN]: 'lin-secret' }
+    const said = `${join(dir, 'config', 'sync.json')} is no longer read`
     const served = await cli(dir, ['serve', '--module', path, '--port', '0'], { env: vars })
-    expect(served.code).toBe(2)
-    expect(served.stderr).toContain(`${path} declares sync (gh, lin), and ${join(dir, 'config', 'sync.json')} is there too.`)
+    expect([served.code, served.stdout, served.stderr]).toEqual([1, '', expect.stringContaining(said)])
     const ran = await cli(dir, ['daemon', 'run', '--module', path], { env: vars })
-    expect(ran.code).toBe(0)
-    expect(ran.stderr).toContain('declares sync (gh, lin)')
-    expect(ran.stdout).not.toContain('board ')
+    expect([ran.code, ran.stdout, ran.stderr]).toEqual([0, '', expect.stringContaining(said)])
   })
 
   it('mu serve with a variable unset says which and exits 1, before it serves anything', async () => {

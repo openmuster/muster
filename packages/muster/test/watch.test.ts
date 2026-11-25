@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { GAVE_UP } from '../src/daemon/check.ts'
-import { DELIVERY_ATTEMPTS } from '../src/daemon/watchers.ts'
-import { LOOK_AHEAD, MAX_COALESCED } from '../src/watch/host.ts'
+import { DELIVERY_ATTEMPTS, RETRY_MOST } from '../src/core/deliveries.ts'
+import { LOOK_AHEAD, MAX_COALESCED, slowedFor } from '../src/watch/host.ts'
 import { board, file, http, listen, mint, type Board, type Watch } from '../src/index.ts'
 import { cliStart, clock, reason, tempDir } from './helpers.ts'
 
@@ -399,6 +399,42 @@ describe('delivering, and failing', () => {
     expect(await replies(team, poison)).toHaveLength(1)
   })
 
+  it('a watcher whose runs keep failing across threads slows down, and one run that works puts it back', async () => {
+    let broken = true
+    const tried: number[] = []
+    const log: string[] = []
+    const { team } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: ({ event }) => {
+          tried.push(event.seq)
+          if (broken) throw new Error('the agent is not installed')
+        },
+      },
+    })
+    await team.deliver()
+    // More threads failing in a row than one event is tried: the run is broken, not the threads.
+    for (let i = 0; i <= DELIVERY_ATTEMPTS; i++) await team.post({ channel: `work/t${i}`, text: 'needs a look' })
+    const host = team.start({ log: (line) => log.push(line) })
+    try {
+      await vi.waitFor(() => expect(log).toContain('slowed    lead  its run keeps failing: next pass in 2s'), { timeout: 5000 })
+      const late = await team.post({ channel: 'work/late', text: 'a new thread' })
+      // A watcher at its usual pace looks again within a second; a slowed one waits its turn.
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      expect(tried).not.toContain(late.id)
+      broken = false
+      await vi.waitFor(() => expect(tried).toContain(late.id), { timeout: 5000 })
+      const next = await team.post({ channel: 'work/next', text: 'and another' })
+      await vi.waitFor(() => expect(tried).toContain(next.id), { timeout: 1500 })
+    } finally {
+      host.stop()
+      await host.done
+      team.close()
+    }
+    // From 2 seconds, doubling with each failure past five in a row, up to ten minutes.
+    expect([slowedFor(DELIVERY_ATTEMPTS), slowedFor(DELIVERY_ATTEMPTS + 1), slowedFor(DELIVERY_ATTEMPTS + 2), slowedFor(50)]).toEqual([0, 2000, 4000, RETRY_MOST])
+  })
+
   it('a watcher another host holds is left alone: nothing delivered, and it says which', async () => {
     const { seen, watch } = noting()
     const { team } = watched({ lead: watch })
@@ -688,22 +724,110 @@ describe('one thread never holds up another, and a stopped host stops', () => {
     await host.done
     for (const team of [one, two, copy]) team.close()
   })
+})
 
-  it('a watcher with the name of one in watchers.json is refused at start(): they would share a place', async () => {
-    const config = tempDir()
-    writeFileSync(join(config, 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', run: ['true'] }] }))
-    const was = process.env.MUSTER_CONFIG
-    process.env.MUSTER_CONFIG = config
-    try {
-      const { team } = watched({ lead: noting().watch })
-      expect(await reason((async () => team.start({ log: () => {} }))())).toBe('invalid_watch')
-      const other = watched({ other: noting().watch }).team.start({ log: () => {} })
-      other.stop()
-      await other.done
-    } finally {
-      if (was === undefined) delete process.env.MUSTER_CONFIG
-      else process.env.MUSTER_CONFIG = was
+describe('routing by label: a router and one watcher per product', () => {
+  /**
+   * The factory guide's router and product watchers, in a module. The router labels a thread nobody has
+   * sorted; each product answers while the thread is its own. What their agents do is played by the test.
+   */
+  function routed(pick: (text: string) => string, options: { routerLast?: boolean; productsAs?: string } = {}) {
+    const woke: string[] = []
+    let team: Board
+    const product = async (thread: number) => (await team.readThread({ id: thread })).message.labels.product
+    const answer = (name: string): Watch => ({
+      tail: { channel: 'help', labels: [`product=${name}`], types: ['labels.changed', 'message.posted'] },
+      as: options.productsAs ?? `${name}-bot`,
+      // The question and its label arrive together: one run for both.
+      coalesce: '1s',
+      run: async ({ event, board }) => {
+        if ((await product(event.thread!)) !== name) return
+        woke.push(`${options.productsAs ?? `${name}-bot`}:${event.thread}`)
+        await board.reply({ to: event.thread!, text: `answer from ${name}` })
+      },
+    })
+    const router: Watch = {
+      tail: { channel: 'help', types: ['message.posted'] },
+      as: 'router',
+      run: async ({ event, board }) => {
+        if ((await product(event.thread!)) !== undefined) return
+        woke.push(`router:${event.thread}`)
+        const root = (await team.readThread({ id: event.thread! })).message
+        await board.label({ id: root.id, set: { product: pick(root.text) } })
+      },
     }
+    const products = { billing: answer('billing'), api: answer('api') }
+    const made = watched(options.routerLast ? { ...products, router } : { router, ...products })
+    team = made.team
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) {
+        await made.team.deliver()
+        made.time.advance(SECOND)
+      }
+    }
+    const replies = async (id: number) => (await made.team.readThread({ id })).replies.map((reply) => reply.text)
+    return { team: made.team, woke, settle, replies }
+  }
+
+  it('the router labels a question, and only that product answers, once', async () => {
+    const { team, woke, settle, replies } = routed((text) => (text.includes('card') ? 'billing' : 'api'))
+    await team.deliver()
+    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
+    await settle()
+    expect(await replies(card.id)).toEqual(['answer from billing'])
+    expect(await replies(key.id)).toEqual(['answer from api'])
+    expect(woke).toEqual([`router:${card.id}`, `router:${key.id}`, `billing-bot:${card.id}`, `api-bot:${key.id}`])
+  })
+
+  it('a follow-up wakes the product again and not the router', async () => {
+    const { team, woke, settle, replies } = routed(() => 'billing')
+    await team.deliver()
+    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await settle()
+    woke.length = 0
+    await team.as('ada').reply({ to: card.id, text: 'and the invoice address?' })
+    await settle()
+    expect(woke).toEqual([`billing-bot:${card.id}`])
+    expect(await replies(card.id)).toEqual(['answer from billing', 'and the invoice address?', 'answer from billing'])
+  })
+
+  it('product=none wakes nobody and the router is not asked again', async () => {
+    const { team, woke, settle, replies } = routed(() => 'none')
+    await team.deliver()
+    const lunch = await team.as('ada').post({ channel: 'help', text: 'lunch?' })
+    await settle()
+    await team.as('ada').reply({ to: lunch.id, text: 'anyone?' })
+    await settle()
+    expect(woke).toEqual([`router:${lunch.id}`])
+    expect(await replies(lunch.id)).toEqual(['anyone?'])
+  })
+
+  it('a label corrected by hand wakes the new product and leaves the old one asleep', async () => {
+    const { team, woke, settle } = routed(() => 'billing')
+    await team.deliver()
+    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
+    await settle()
+    woke.length = 0
+    await team.as('ada').label({ id: key.id, set: { product: 'api' } })
+    await settle()
+    expect(woke).toEqual([`api-bot:${key.id}`])
+  })
+
+  it("a product's watcher that writes as the router can miss the router's label, where its own profile never does", async () => {
+    // Router last: the label lands after the product's watcher has read past the question, so the label is all it can hear.
+    const shared = routed(() => 'billing', { routerLast: true, productsAs: 'router' })
+    await shared.team.deliver()
+    const missed = await shared.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await shared.settle()
+    expect(shared.woke).toEqual([`router:${missed.id}`])
+    expect(await shared.replies(missed.id)).toEqual([])
+
+    const own = routed(() => 'billing', { routerLast: true })
+    await own.team.deliver()
+    const heard = await own.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
+    await own.settle()
+    expect(await own.replies(heard.id)).toEqual(['answer from billing'])
   })
 })
 

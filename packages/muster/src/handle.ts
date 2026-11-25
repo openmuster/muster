@@ -39,8 +39,7 @@ export type BoardOptions = FileOptions & {
    */
   watch?: Record<string, Watch>
   /**
-   * Outgoing webhooks: signed POSTs of what matches each `tail`, as `hooks.json` declares them, with the
-   * secret named by `env()`. Declaring them reads nothing: `start()` reads each secret, and sends.
+   * Outgoing webhooks: signed POSTs of what matches each `tail`, with the secret named by `env()`. Declaring them reads nothing: `start()` reads each secret, and sends.
    */
   hooks?: HookOptions[]
   /** How `fetch` serves the board: the path it is mounted at, and the host names it answers for. */

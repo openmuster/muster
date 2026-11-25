@@ -8,7 +8,7 @@ import { SEND_MS, type Inbound, type Limit, type Remote } from './types.ts'
 /** How many ticks a file that failed for a reason that may pass is tried before its message goes without it. */
 export const FETCH_TRIES = 5
 
-/** What files one sync may bring onto the board in a day (UTC), unless its entry in sync.json says otherwise. */
+/** What files one sync may bring onto the board in a day (UTC), unless its `filesPerDay` says otherwise. */
 export const SYNC_FILES_PER_DAY = 500 * 1024 * 1024
 
 /** What one tick fetches at most, in bytes and time: the rest waits for the next, so schedules and watchers keep theirs. */

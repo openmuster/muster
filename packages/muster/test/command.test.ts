@@ -1,10 +1,11 @@
-// The watcher tests of daemon.test.ts, for watchers declared in code that wake a command with command().
+// Watchers declared in code that wake a command with command().
 // The commands are real processes: small shell scripts that note how they were called.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { DELIVERY_ATTEMPTS } from '../src/daemon/watchers.ts'
+import { DELIVERY_ATTEMPTS } from '../src/core/deliveries.ts'
 import { board, command, type Watch } from '../src/index.ts'
+import { watcherEnv } from '../src/watch/command.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const SECOND = 1000
@@ -193,6 +194,12 @@ describe('a watcher that wakes a command', () => {
 })
 
 describe("a command's environment", () => {
+  it('starts from nothing: PATH, HOME and the board, and only the names it is given beside them', () => {
+    const from = { PATH: '/bin', HOME: '/home/ada', GITHUB_WEBHOOK_SECRET: 'whsec', GITHUB_TOKEN: 'ghs', MUSTER_TOKEN: 'mu1.x', MUSTER_DIR: '/boards', ALLOWED: 'yes' }
+    expect(watcherEnv({ MUSTER_THREAD: '7' }, [], from)).toEqual({ PATH: '/bin', HOME: '/home/ada', MUSTER_DIR: '/boards', MUSTER_THREAD: '7' })
+    expect(watcherEnv({}, ['ALLOWED'], from)).toEqual({ PATH: '/bin', HOME: '/home/ada', MUSTER_DIR: '/boards', ALLOWED: 'yes' })
+  })
+
   it("is built from nothing: this process's secrets are not passed on unless the watcher names them, and it is told which board", async () => {
     process.env.GITHUB_TOKEN = 'ghs_secret_value'
     process.env.PASSED_ON = 'fine'
