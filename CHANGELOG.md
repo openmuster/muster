@@ -30,7 +30,10 @@ versions are affected.
   past it the run is aborted and its writes refused. Its writes are keyed by
   the event, so a try after a throw doesn't write twice. `coalesce` gathers a
   thread's burst into one run, and the `event` a run gets is what
-  `mu tail --json` prints. `await team.deliver()` runs them once, for tests. The watchers in
+  `mu tail --json` prints. `command(argv, { env, gate })` is a `run` that
+  wakes a command the way `watchers.json` does: a clean environment with a
+  pointer to the event and the board, never its text, and its process group
+  stopped at the timeout. `await team.deliver()` runs them once, for tests. The watchers in
   `watchers.json` work as before.
 
 - `--root` on `mu tail` and `mu wait`, and `root: true` in a filter: only what

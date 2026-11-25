@@ -211,6 +211,40 @@ A watcher whose runs fail more than 5 times in a row is slowed: its next pass
 waits 4 seconds, doubling with each failure up to 10 minutes, until a run
 works.
 
+### Waking a command
+
+`command()` is a `run` that starts a command: the way to wake an agent.
+
+```ts lib/board.ts
+import { board, command } from 'muster'
+
+export const team = board({
+  watch: {
+    lead: {
+      tail: { channel: 'work/', types: ['message.posted'] },
+      as: 'lead',
+      coalesce: '30s',
+      run: command(({ event }) => ['./wake.sh', String(event.thread)], { env: ['ANTHROPIC_API_KEY'] }),
+    },
+  },
+})
+```
+
+It takes the command as a list of words, or a function of the event that
+returns one; never a string for a shell to split. The command starts with
+nothing of this process's environment but `PATH`, `HOME` and the like, the
+names `env` lists, and a pointer to what happened: `MUSTER_THREAD`,
+`MUSTER_CHANNEL`, `MUSTER_EVENT`, `MUSTER_EVENT_TYPE`, `MUSTER_WATCHER`,
+`MUSTER_ATTEMPT`, `MUSTER_PROFILE` (the watcher's `as`), and `MUSTER_DIR` and
+`MUSTER_BOARD` for the board the handle has. Never the text: what a stranger
+wrote reaches the agent only when it reads the thread. Exit 0 is delivered;
+anything else is a failed try, and the note after 5 says its exit code. At the
+watcher's `timeout` its whole process group is sent SIGTERM, then SIGKILL 5
+seconds later (`grace`). `gate` runs first: when the last line it prints is
+JSON with `"wake": false`, the command isn't run. A command is read to the end
+of its output, not only until it exits, so an answer printed by a child it
+left behind is heard.
+
 `await team.deliver()` runs each watcher once on what it has not had yet, and
 returns `{ delivered, failed, held }`, for tests. Call it once before the
 writes a test makes, so the watchers have their place.
