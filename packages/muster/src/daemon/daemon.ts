@@ -160,7 +160,8 @@ export type Workflows = { list: Workflow[]; deps: RunDeps }
 /** One pass: send what is due, run each watcher, each outgoing webhook, then requested workflows. Returns what it did, for logs and tests. */
 export async function tickOnce(team: Board, watchers: Watcher[], states: Map<string, WatchState>, deps: Deps, hooks?: Hooks, workflows?: Workflows) {
   const schedules = await team.scheduleTick()
-  const synced = await team.backend.syncTick()
+  // A sync declared in a board module runs under its own `sync` lease, in whichever host start()ed it: not here too.
+  const synced = team.sync?.length ? { imported: 0, delivered: 0, failed: 0 } : await team.backend.syncTick()
   const watched: Record<string, Awaited<ReturnType<typeof runWatcher>>> = {}
   for (const watcher of watchers) {
     let state = states.get(watcher.name)

@@ -78,6 +78,58 @@ IDs.
 `mu serve` and `mu daemon run` read the file when they start. A read or a post
 never needs it, so a broken sync file stops neither.
 
+## In a board module
+
+A board module declares the same thing in code, in its `board()`. `env('NAME')`
+names a secret the way `"env:NAME"` does: nothing is read when the module is
+imported, so `mu daemon status`, a test or a build can load it without the
+secrets. The board reads them when it starts (`team.start()`, `mu serve`,
+`mu daemon run`) or takes its first request (`team.fetch`).
+
+```ts
+import { board, env, github, linear, slack } from 'muster'
+
+export default board({
+  sync: {
+    gh: github({
+      secret: env('GITHUB_WEBHOOK_SECRET'),
+      token: env('GITHUB_TOKEN'),
+      bot: 'your-app[bot]',
+      repos: { 'acme/web': { issues: 'web/issues', pulls: 'web/prs', mirror: true } },
+      filter: ['/Users/ada/bin/scrub.sh'],
+    }),
+    lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), token: env('LINEAR_API_KEY'), teams: { ENG: 'eng' } }),
+    chat: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123456789: 'general' } }),
+  },
+})
+```
+
+- **A variable that isn't set stops the sync, by name.** `start()` throws
+  `GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.`; `mu daemon run`
+  says so and exits 0, so the service stays stopped; `team.fetch` answers 500
+  and says it in its log.
+- **The module's sync runs where the module is started**, under the board's
+  `sync` lease: one host at a time catches up and sends to the platforms,
+  whichever runs the watchers. `mu daemon status` lists each sync, the
+  variables it reads, and who holds the lease.
+- **One place.** A module that declares `sync` beside a `sync.json` is
+  refused: `mu serve` exits 2, `mu daemon run` says so and exits 0. Move the
+  entries into the module and delete the file. A module with no `sync` runs
+  without it, and `mu` warns that `sync.json` isn't read.
+- **A secret written as a string** works, and puts the secret in the module's
+  file. Name it with `env()`.
+
+Porting `sync.json` is mechanical:
+
+| `sync.json` | Module |
+| --- | --- |
+| `"gh": { "type": "github", ... }` | `gh: github({ ... })`, and `linear()` or `slack()` for the others |
+| `"secret": "env:NAME"` | `secret: env('NAME')` |
+| `"token": "env:NAME"` | `token: env('NAME')`. Unset, it is refused; in `sync.json` it was left out |
+| `"bot"`, `"repos"`, `"teams"`, `"channels"` | The same, as they are |
+| `"filter": ["/path/cmd"]` | `filter: ['/path/cmd']`, or a function `(text) => string \| null` |
+| `"filesPerDayMB": 100` | `filesPerDayMB: 100` |
+
 ## What goes back
 
 | | Comes in | Goes back |

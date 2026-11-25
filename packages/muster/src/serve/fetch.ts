@@ -138,11 +138,13 @@ export function toFetch(handler: Handler, base: string, log: (line: string) => v
  * `team.fetch`: what `mu serve` serves for this board, as a web `Request → Response` handler. Inert until its
  * first request: the board's file and its key are opened then, as `mu serve` opens them.
  */
-export function mount(backend: Backend, options: MountOptions & { now?: () => Date } = {}): (request: Request) => Promise<Response> {
+export function mount(backend: Backend, options: MountOptions & { now?: () => Date; ready?: () => void } = {}): (request: Request) => Promise<Response> {
   const base = checkBase(options.base)
   const log = options.log ?? ((line: string) => console.error(line))
   let served: ((request: Request) => Promise<Response>) | null = null
   const make = () => {
+    // What the board needs before it can answer as declared, such as its sync's secrets: a 500 until it is there.
+    options.ready?.()
     const key = backend.signingKey?.()
     if (!key) {
       // A handle on a board at a URL has no key to check a token with: serving it would be serving someone else's board.

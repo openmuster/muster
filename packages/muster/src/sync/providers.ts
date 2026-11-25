@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { Failure } from '../failure.ts'
 import { channelPath } from '../model.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
+import { declared, type Resolved, type SyncOptions } from './declare.ts'
 import { SEND_MS, type Inbound, type Provider, type Received, type Remote } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -70,10 +71,7 @@ function cutShort(times: number[], since: string, inclusive: boolean, step: numb
   return { resume: new Date(newest + (inclusive ? step : 0)).toISOString(), skipped: new Date(newest).toISOString() }
 }
 
-export type GitHubOptions = {
-  secret: string
-  /** A token that may comment. Needed only where a repo mirrors. */
-  token?: string
+export type GitHubOptions = SyncOptions & {
   /** The app's own login, so its comments aren't imported back. */
   bot?: string
   /** A repo to a channel, or to a channel for issues and one for pulls. `mirror` sends board replies back. */
@@ -81,8 +79,13 @@ export type GitHubOptions = {
   api?: string
 }
 
-/** GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors. */
-export function github(options: GitHubOptions): Provider {
+/**
+ * GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors.
+ * `token` is one that may comment, needed only where a repo mirrors.
+ */
+export const github = (options: GitHubOptions): Provider => declared('github', options, githubWith)
+
+function githubWith(options: Resolved<GitHubOptions>): Provider {
   // GitHub has no API that attaches a file to an issue or a comment: each file is named, and stays on the board.
   const named = (message: { text: string; attachments: { name: string; size: number }[] }, text: string) => withLines(text, message.attachments.map((file) => noteOut(`${file.name} (${sizeOf(file.size)})`, 'GitHub takes no uploads, it is on the board')))
   /**
@@ -286,9 +289,7 @@ export function github(options: GitHubOptions): Provider {
 const LINEAR_CATCHUP_PAGES = 10
 const LINEAR_CATCHUP_PAGE = 50
 
-export type LinearOptions = {
-  secret: string
-  token?: string
+export type LinearOptions = SyncOptions & {
   /** The app's own user ID, so its comments aren't imported back. */
   bot?: string
   /** A team key to a channel. Two-way unless `mirror: false`. */
@@ -297,7 +298,9 @@ export type LinearOptions = {
 }
 
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
-export function linear(options: LinearOptions): Provider {
+export const linear = (options: LinearOptions): Provider => declared('linear', options, linearWith)
+
+function linearWith(options: Resolved<LinearOptions>): Provider {
   const team = (place: string) => options.teams[place]
   /**
    * What an issue is filed under, as the webhook says it: its labels, its assignee, its priority and its
@@ -550,9 +553,7 @@ export function linear(options: LinearOptions): Provider {
   }
 }
 
-export type SlackOptions = {
-  secret: string
-  token?: string
+export type SlackOptions = SyncOptions & {
   /** The app's own bot ID, so its messages aren't imported back. */
   bot?: string
   /** A Slack channel ID to a board channel. Two-way unless `mirror: false`. */
@@ -588,7 +589,9 @@ const toTs = (us: number) => `${Math.floor(us / 1_000_000)}.${String(us % 1_000_
 type SlackPage = { messages?: Record<string, any>[]; has_more?: boolean; response_metadata?: { next_cursor?: string } }
 
 /** Slack: messages in mapped channels come in as threads, and board replies go back into the Slack thread. */
-export function slack(options: SlackOptions): Provider {
+export const slack = (options: SlackOptions): Provider => declared('slack', options, slackWith)
+
+function slackWith(options: Resolved<SlackOptions>): Provider {
   const now = options.now ?? (() => Date.now())
   const base = options.api ?? 'https://slack.com/api'
   /** The files on a message. One Slack only links to, or no longer offers, is named and not fetched. */

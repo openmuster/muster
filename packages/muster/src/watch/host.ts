@@ -6,6 +6,7 @@ import { loadWatchers, watchersPath } from '../daemon/daemon.ts'
 import { holderId, holdLease, LEASE_TTL, type Held, type Leases } from '../daemon/lease.ts'
 import { DELIVERY_ATTEMPTS } from '../daemon/watchers.ts'
 import type { Watcher, WatchEvent } from './watch.ts'
+import { syncLoop } from '../sync/host.ts'
 
 /** A host running a board's watchers: stop it, and `done` settles once each run in flight has been recorded. */
 export type Host = { stop(): void; done: Promise<void> }
@@ -471,7 +472,8 @@ function refuseClash(watchers: Watcher[]) {
  * handle, or on another copy of the same module (the same watchers), returns the host already running;
  * one with other watchers for a board this process already runs is refused.
  */
-export function start(team: Board, watchers: Watcher[], states: Map<string, WatchState>, options: StartOptions = {}): Host {
+export function start(team: Board, watchers: Watcher[], states: Map<string, WatchState>, options: StartOptions = {}, sync = false): Host {
+  if (watchers.length > 0 || sync) leasesOf(team)
   if (watchers.length > 0) {
     leasesOf(team)
     deliveriesOf(team)
@@ -501,6 +503,8 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
     // A loop doesn't throw; if one ever did, the host says so rather than leave a rejection nobody awaits.
     loop(team, watcher, controller.signal, options, stateOf(states, watcher.name), log).catch((error) => log(`stopped   ${watcher.name}  ${(error as Error).message}`)),
   )
+  // The board's sync, under its own `sync` lease: one host sends to the platforms, whichever runs the watchers.
+  if (sync) loops.push(syncLoop(team, leasesOf(team), controller.signal, sleeper(controller.signal), options, log).catch((error) => log(`stopped   sync  ${(error as Error).message}`)))
   const done = Promise.all(loops).then(() => {
     options.signal?.removeEventListener('abort', stopNow)
     if (hosts().get(key)?.host === host) hosts().delete(key)
