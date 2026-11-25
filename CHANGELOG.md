@@ -21,7 +21,12 @@ versions are affected.
   Never await `done` where a server starts up. Each watcher is held by one
   host at a time through a lease `watch:<name>` in the board's file, so two
   hosts on one board never both run it, and one takes over when the other
-  stops. `await team.deliver()` runs them once, for tests. The watchers in
+  stops. Each thread's events are delivered in order and each thread on its
+  own: a failed run is tried again later without holding up other threads,
+  tries are counted in the board's file so a restart or a crash never
+  delivers a recorded event twice, and after 5 tries the watcher says so once
+  on the thread. A watcher whose runs keep failing is slowed, up to 10
+  minutes. `await team.deliver()` runs them once, for tests. The watchers in
   `watchers.json` work as before.
 
 ### Changed
@@ -34,8 +39,8 @@ versions are affected.
   Telling a live holder from a dead one no longer needs `ps`, which slim
   container images don't have, and a board kept in memory no longer writes a
   `:memory:.tick.lock` file into the folder it was started from.
-- A board made by this version can't be opened by 0.2.1 or earlier: it has a
-  table they don't know (store version 8). Boards from earlier versions are
+- A board made by this version can't be opened by 0.2.1 or earlier: it has
+  tables they don't know (store version 9). Boards from earlier versions are
   upgraded when opened.
 - `mu daemon run` on a board at a URL (`--url`, `MUSTER_URL`) says the
   server ticks that board and exits 0. Before, it stayed up and every tick

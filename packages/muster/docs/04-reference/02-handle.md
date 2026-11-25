@@ -174,6 +174,18 @@ same board stands by, and takes over within the lease (30 seconds) if the
 first one stops. Watchers run where the board's file is; on a board at a URL
 `start()` fails with `watch_remote`.
 
+Events in one thread are delivered in order, and each thread on its own. A
+run that throws is a failed delivery: that event is tried again 10 seconds
+later, then 20, 40 and 80, and the events after it in its thread wait, while
+other threads go on. Tries are counted in the board's file before each run,
+so a host that restarts, or dies during a run, carries on where it was and
+never delivers a thread's event twice once it was recorded. After 5 tries the
+watcher gives up on that event and says so in its thread, once, with a reply
+that starts `watcher "<name>" couldn't deliver a wake-up` and never wakes it.
+A watcher whose runs fail more than 5 times in a row is slowed: its next pass
+waits 4 seconds, doubling with each failure up to 10 minutes, until a run
+works.
+
 `await team.deliver()` runs each watcher once on what it has not had yet, and
 returns `{ delivered, failed, held }`, for tests. Call it once before the
 writes a test makes, so the watchers have their place.

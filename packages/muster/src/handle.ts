@@ -1,7 +1,7 @@
 import { file, type FileOptions } from './backend/file.ts'
 import type { Backend } from './backend/types.ts'
 import type { Caller } from './model.ts'
-import { deliver, start, type Delivered, type Host, type StartOptions } from './watch/host.ts'
+import { deliver, start, type Delivered, type Host, type StartOptions, type WatchState } from './watch/host.ts'
 import { checkWatchers, type Watch } from './watch/watch.ts'
 
 export type BoardOptions = FileOptions & {
@@ -45,6 +45,7 @@ export function board(options: BoardOptions = {}): Board {
   const { backend: given, as: profile, watch, ...fileOptions } = options
   // Checked now, so a bad watcher is the module's mistake, said once. Nothing is opened or started.
   const watchers = checkWatchers(watch)
+  const states = new Map<string, WatchState>()
   const backend = given ?? file(fileOptions)
   let root: Board
   const make = (as: string | null): Board => {
@@ -57,8 +58,8 @@ export function board(options: BoardOptions = {}): Board {
         const me = await who()
         return { principal: me.principal, profile: me.profile, mode: backend.kind === 'file' ? ('file' as const) : ('serve' as const), where: backend.where }
       },
-      start: (startOptions?: StartOptions) => start(root, watchers, startOptions),
-      deliver: () => deliver(root, watchers),
+      start: (startOptions?: StartOptions) => start(root, watchers, states, startOptions),
+      deliver: () => deliver(root, watchers, states),
       close: () => backend.close(),
     } as Record<string, unknown>
     for (const name of METHODS) {

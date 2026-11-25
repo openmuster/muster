@@ -325,7 +325,7 @@ export function cursorSet(ctx: Context, caller: Caller, name: string, seq: numbe
 /** The names the daemon keeps its own places under: `watch:<watcher>`, `hook:<webhook>`, `sync:<platform>`, `workflow:requests`. */
 const RESERVED_CURSOR = /^(watch|hook|sync|workflow):/
 
-const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
+export const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
 
 export function search(ctx: Context, caller: Caller, request: { text: string; channel?: string; limit?: number }): { messages: Message[] } {
   if (request.text.trim().length === 0) throw misuse('empty_text', 'Say what to search for.')

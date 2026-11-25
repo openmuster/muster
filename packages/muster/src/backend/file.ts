@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import type { Context } from '../core/context.ts'
 import { messageFor } from '../core/context.ts'
 import * as blocks from '../core/blocks.ts'
+import * as deliveries from '../core/deliveries.ts'
 import * as files from '../core/files.ts'
 import * as leases from '../core/leases.ts'
 import * as messages from '../core/messages.ts'
@@ -112,6 +113,12 @@ export function file(options: FileOptions = {}): Backend {
       renew: async (request) => leases.renew(ctx(), request),
       release: async (request) => leases.release(ctx(), request),
       holder: async (name) => leases.holder(ctx(), name),
+    },
+    deliveries: {
+      read: async (request) => deliveries.read(ctx(), request),
+      begin: async (request) => deliveries.begin(ctx(), request),
+      finish: async (request) => deliveries.finish(ctx(), request),
+      advance: async (caller, request) => deliveries.advance(ctx(), caller, request),
     },
     joinStore: () => dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()),
     // On the board's own machine the caller is its owner: they answer requests to join.
