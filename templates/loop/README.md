@@ -86,4 +86,7 @@ only as real images (PNG, JPEG, GIF or WebP, by their bytes), up to 5 MB and
 ten a round, from the card workflow's own workers.
 
 Covered by tests (`packages/muster/test/loop.test.ts`), with the sandboxes as
-stand-ins. It has not been run live.
+stand-ins. Run live on 25 Nov 2026 from an app's token, a Linear team and the
+inspector, through rounds on the same pull request and an approval; not yet
+from Slack or GitHub issues. See "What has been run for real" in the
+repository's README.
