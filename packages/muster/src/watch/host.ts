@@ -31,6 +31,19 @@ const GRACE = 5000
 /** The most threads one pass looks at, and the most events it keeps to deliver: the rest wait for the next pass. */
 const MAX_LANES = 500
 const MAX_EVENTS = 2000
+/** The most of the log one pass reads, in seqs, whatever it keeps: the next pass reads on from there. */
+export const LOOK_AHEAD = 5000
+/** The most events one `coalesce` run stands for. */
+export const MAX_COALESCED = 500
+
+/** Where a watcher's reading has got to in this process, when a pass stopped short of the board's head. */
+export type WatchState = { resume: number | null; floor: number; blocked: Set<string> }
+
+export const stateOf = (states: Map<string, WatchState>, name: string): WatchState => {
+  let state = states.get(name)
+  if (!state) states.set(name, (state = { resume: null, floor: Infinity, blocked: new Set() }))
+  return state
+}
 
 /** Lets the event loop run: the file backend's calls are synchronous, so awaiting them never yields. */
 const yieldNow = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -69,7 +82,7 @@ type Pass = { delivered: number; failed: number; lost?: true }
  * Its place is the cursor `watch:<name>`, kept as its profile: everything at or below it is delivered.
  * The first pass puts it at the board's head, so a watcher starts from now.
  */
-async function pass(team: Board, watcher: Watcher, fence: Fence, halt: AbortSignal, grace: number, log: (line: string) => void): Promise<Pass> {
+async function pass(team: Board, watcher: Watcher, fence: Fence, state: WatchState, halt: AbortSignal, grace: number, log: (line: string) => void): Promise<Pass> {
   const store = deliveriesOf(team)
   const me = watcher.as !== undefined ? team.as(watcher.as) : team
   const who = await me.whoami()
@@ -87,38 +100,61 @@ async function pass(team: Board, watcher: Watcher, fence: Fence, halt: AbortSign
     const row = known.get(head.seq)
     return (row !== undefined && row.retryAt > now) || (watcher.coalesce !== undefined && Date.parse(head.at) + watcher.coalesce > now)
   }
-  // Read from the cursor to the head, keeping what this pass can deliver: a thread's first event, and the
+  // Read a stretch of the log, keeping what this pass can deliver: a thread's first event, and the
   // events after it only while that thread can go now. `dropped` is the oldest event left for later.
+  // A stretch is at most LOOK_AHEAD seqs, counted whether an event is kept or not, so a pass never reads
+  // an unbounded part of a busy board; the next pass reads on from where this one stopped, and comes
+  // back round to the cursor once it reaches the head.
+  const end = await me.head()
+  if (state.resume === null || state.resume <= cursor || state.resume > end) {
+    state.resume = null
+    state.floor = Infinity
+    state.blocked = new Set()
+  }
+  const start = state.resume ?? cursor
   const lanes = new Map<string, Lane>()
+  // Threads with an event this pass leaves undelivered: their later events wait behind it, in this
+  // stretch and the next ones, until the reading comes back round.
+  const blocked = new Set(state.blocked)
   let kept = 0
   let dropped = Infinity
-  let read = cursor
-  for (;;) {
-    const page = await me.events({ after: read, filter: watcher.tail, limit: 500 })
+  let read = start
+  const leave = (name: string, seq: number) => {
+    dropped = Math.min(dropped, seq)
+    blocked.add(name)
+  }
+  while (read < end && read - start < LOOK_AHEAD && lanes.size < MAX_LANES && kept < MAX_EVENTS) {
+    const page = await me.events({ after: read, filter: watcher.tail, limit: 500, through: Math.min(read + 500, end) })
     for (const event of page.events) {
       if (known.get(event.seq)?.done || own(watcher, event)) continue
       const name = laneOf(event)
+      if (state.blocked.has(name)) {
+        leave(name, event.seq)
+        continue
+      }
       let lane = lanes.get(name)
       if (!lane) {
         if (lanes.size >= MAX_LANES) {
-          dropped = Math.min(dropped, event.seq)
+          leave(name, event.seq)
           continue
         }
         lane = { head: event, waiting: waits(event), events: [], seqs: [], last: event }
         lanes.set(name, lane)
       }
       if (watcher.coalesce !== undefined) {
-        lane.seqs.push(event.seq)
-        lane.last = event
+        // One run stands for at most so many events: the rest are the next run's.
+        if (lane.seqs.length < MAX_COALESCED) {
+          lane.seqs.push(event.seq)
+          lane.last = event
+        } else leave(name, event.seq)
       } else if (!lane.waiting && kept < MAX_EVENTS) {
         lane.events.push(event)
         kept += 1
       } else if (event !== lane.head) {
-        dropped = Math.min(dropped, event.seq)
+        leave(name, event.seq)
       }
     }
     read = page.cursor
-    if (page.events.length < 500 || lanes.size >= MAX_LANES || kept >= MAX_EVENTS) break
     await yieldNow()
   }
   const settled = new Set<number>()
@@ -156,13 +192,24 @@ async function pass(team: Board, watcher: Watcher, fence: Fence, halt: AbortSign
       for (const seq of gone) settled.add(seq)
     }
   }
-  // Everything at or below the cursor is delivered: it stops below the oldest event that isn't.
-  let oldest = dropped
-  for (const lane of lanes.values()) {
-    for (const seq of [lane.head.seq, ...lane.events.map((event) => event.seq), ...lane.seqs]) if (!settled.has(seq)) oldest = Math.min(oldest, seq)
+  // Everything at or below the cursor is delivered: it stops below the oldest event that isn't, in this
+  // stretch or one read before it since the reading last came back round.
+  let oldest = Math.min(dropped, state.floor)
+  for (const [name, lane] of lanes) {
+    for (const seq of [lane.head.seq, ...lane.events.map((event) => event.seq), ...lane.seqs]) {
+      if (settled.has(seq)) continue
+      oldest = Math.min(oldest, seq)
+      blocked.add(name)
+    }
   }
   const to = oldest === Infinity ? read : oldest - 1
   if (to > cursor && !(await store.advance(caller, { watcher: watcher.name, to, fence })).held) return lost()
+  if (read >= end) state.resume = null
+  else {
+    state.resume = read
+    state.floor = oldest
+    state.blocked = blocked
+  }
   return out
 }
 
@@ -303,7 +350,7 @@ async function giveUp(me: Board, store: ReturnType<typeof deliveriesOf>, watcher
 const own = (watcher: Watcher, event: FeedEvent) => watcher.as !== undefined && event.by.profile === watcher.as && !(event.data as { schedule?: unknown }).schedule
 
 /** Runs each watcher once, under its lease, taken for the pass and not renewed: for tests. */
-export async function deliver(team: Board, watchers: Watcher[], log: (line: string) => void = () => {}): Promise<Delivered> {
+export async function deliver(team: Board, watchers: Watcher[], states: Map<string, WatchState>, log: (line: string) => void = () => {}): Promise<Delivered> {
   const out: Delivered = { delivered: 0, failed: 0, held: [] }
   if (watchers.length === 0) return out
   const leases = leasesOf(team)
@@ -316,7 +363,7 @@ export async function deliver(team: Board, watchers: Watcher[], log: (line: stri
       continue
     }
     try {
-      const did = await pass(team, watcher, { name, holder, epoch: taken.epoch }, new AbortController().signal, GRACE, log)
+      const did = await pass(team, watcher, { name, holder, epoch: taken.epoch }, stateOf(states, watcher.name), new AbortController().signal, GRACE, log)
       out.delivered += did.delivered
       out.failed += did.failed
     } finally {
@@ -344,7 +391,7 @@ const sleeper = (stop: AbortSignal) => (ms: number) =>
  * it, ready to take over when that host stops renewing. A renewal that finds the lease taken signals
  * the run in flight at once. Nothing it meets ends it but a stop.
  */
-async function loop(team: Board, watcher: Watcher, stop: AbortSignal, options: StartOptions, log: (line: string) => void): Promise<void> {
+async function loop(team: Board, watcher: Watcher, stop: AbortSignal, options: StartOptions, state: WatchState, log: (line: string) => void): Promise<void> {
   const leases = leasesOf(team)
   const sleep = sleeper(stop)
   const ttl = options.lease?.ttl ?? LEASE_TTL
@@ -378,7 +425,7 @@ async function loop(team: Board, watcher: Watcher, stop: AbortSignal, options: S
           break
         }
         try {
-          const did = await pass(team, watcher, { name: `watch:${watcher.name}`, holder: held.holder, epoch: held.epoch }, halt, options.grace ?? GRACE, log)
+          const did = await pass(team, watcher, { name: `watch:${watcher.name}`, holder: held.holder, epoch: held.epoch }, state, halt, options.grace ?? GRACE, log)
           said = ''
           if (did.lost) {
             log(`lost      ${watcher.name}  another host runs it now`)
@@ -424,7 +471,7 @@ function refuseClash(watchers: Watcher[]) {
  * handle, or on another copy of the same module (the same watchers), returns the host already running;
  * one with other watchers for a board this process already runs is refused.
  */
-export function start(team: Board, watchers: Watcher[], options: StartOptions = {}): Host {
+export function start(team: Board, watchers: Watcher[], states: Map<string, WatchState>, options: StartOptions = {}): Host {
   if (watchers.length > 0) {
     leasesOf(team)
     deliveriesOf(team)
@@ -452,7 +499,7 @@ export function start(team: Board, watchers: Watcher[], options: StartOptions = 
   options.signal?.addEventListener('abort', stopNow, { once: true })
   const loops = watchers.map((watcher) =>
     // A loop doesn't throw; if one ever did, the host says so rather than leave a rejection nobody awaits.
-    loop(team, watcher, controller.signal, options, log).catch((error) => log(`stopped   ${watcher.name}  ${(error as Error).message}`)),
+    loop(team, watcher, controller.signal, options, stateOf(states, watcher.name), log).catch((error) => log(`stopped   ${watcher.name}  ${(error as Error).message}`)),
   )
   const done = Promise.all(loops).then(() => {
     options.signal?.removeEventListener('abort', stopNow)

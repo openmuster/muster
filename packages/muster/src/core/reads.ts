@@ -212,8 +212,12 @@ export type FeedEvent = BoardEvent & {
   for?: 'mention' | 'assigned' | 'reply'
 }
 
-/** What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on from. */
-export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number }): { events: FeedEvent[]; cursor: number } {
+/**
+ * What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on
+ * from. `through` reads no further than that seq, so one call looks at a bounded stretch of the log
+ * however few events match.
+ */
+export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number; through?: number }): { events: FeedEvent[]; cursor: number } {
   const filter = compile(request.filter ?? {}, caller)
   if (filter.re !== null) messageFor(ctx, caller, filter.re)
   const limit = limitOf(request.limit, 200, 1000)
@@ -229,7 +233,7 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
   let cursor = after
   // Read in pages so a quiet filter on a busy board still moves its cursor forward.
   for (;;) {
-    const rows = ctx.db.raw.prepare('select * from events where seq > ? order by seq limit 500').all(cursor) as Parameters<typeof toEvent>[0][]
+    const rows = ctx.db.raw.prepare('select * from events where seq > ? and seq <= ? order by seq limit 500').all(cursor, request.through ?? Number.MAX_SAFE_INTEGER) as Parameters<typeof toEvent>[0][]
     if (rows.length === 0) break
     for (const row of rows) {
       // What a reader sees of the event is also what a filter is matched against: a filter on text can't

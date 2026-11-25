@@ -214,7 +214,11 @@ run did is delivered again by the new holder. Watchers run where the board's fil
 Events in one thread are delivered in order, and each thread on its own. A
 run that throws is a failed delivery: that event is tried again 10 seconds
 later, then 20, 40 and 80, and the events after it in its thread wait, while
-other threads go on, however many events wait behind it. Tries are counted
+other threads go on, however many events wait behind it. A pass reads at
+most 5,000 of the board's events, matched or not, and the next pass reads on
+from there, so a long backlog or a busy board never holds a host's event loop
+for long. With `coalesce`, one run stands for at most 500 events; the rest go
+in the next. Tries are counted
 in the board's file before each run,
 so a host that restarts, or dies during a run, carries on where it was and
 never delivers a thread's event twice once it was recorded. After 5 tries the

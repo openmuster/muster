@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { GAVE_UP } from '../src/daemon/check.ts'
-import { DELIVERY_ATTEMPTS, SLOWEST } from '../src/daemon/watchers.ts'
+import { DELIVERY_ATTEMPTS } from '../src/daemon/watchers.ts'
+import { LOOK_AHEAD, MAX_COALESCED } from '../src/watch/host.ts'
 import { board, file, http, listen, mint, type Board, type Watch } from '../src/index.ts'
 import { cliStart, clock, reason, tempDir } from './helpers.ts'
 
@@ -902,4 +903,95 @@ describe('the lease fences what a host records', () => {
     host.stop()
     await host.done
   })
+})
+
+describe('what one pass reads', () => {
+  it('a pass reads at most its stretch of the log, whatever the backlog, and reaches a thread past it on the next', async () => {
+    const time = clock()
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now })
+    // How far each pass reads, measured where the watcher reads the board.
+    let span = 0
+    const counted = { ...backend, events: async (...args: Parameters<typeof backend.events>) => {
+      const page = await backend.events(...args)
+      span += page.cursor - (args[1].after ?? 0)
+      return page
+    } }
+    let poison = 0
+    const woke: number[] = []
+    const tried: number[] = []
+    const team = board({
+      backend: counted,
+      watch: {
+        lead: {
+          tail: { channel: 'work/' },
+          run: ({ event }) => {
+            if (event.thread === poison) {
+              tried.push(event.seq)
+              throw new Error('bad thread')
+            }
+            woke.push(event.seq)
+          },
+        },
+      },
+    })
+    await team.deliver()
+    poison = (await team.post({ channel: 'work/a', text: 'a' })).id
+    for (let i = 0; i < 2 * LOOK_AHEAD; i++) await team.reply({ to: poison, text: `r${i}` })
+    const b = await team.post({ channel: 'work/b', text: 'b' })
+    const spans: number[] = []
+    for (let i = 0; i < 5 && !woke.includes(b.id); i++) {
+      span = 0
+      await team.deliver()
+      spans.push(span)
+      time.advance(SECOND)
+    }
+    expect(woke).toEqual([b.id])
+    // Three passes: the failing thread's first stretch, then two of the most a pass reads.
+    expect(spans.length).toBe(3)
+    expect(Math.max(...spans)).toBeLessThanOrEqual(LOOK_AHEAD)
+    // Back round from the cursor, the failing thread is tried again once its wait is up.
+    time.advance(10 * SECOND)
+    expect((await team.deliver()).failed).toBe(1)
+    // The thread's first event, kept below the cursor all along: never a later one in its place.
+    expect(tried).toEqual([poison, poison])
+  }, 120_000)
+
+  it('a coalesce run stands for at most so many events: it settles what it ran for, and the rest go in the next', async () => {
+    const handed: string[] = []
+    const { team, time } = watched({ lead: { tail: { channel: 'work/' }, coalesce: '1s', run: ({ event }) => void handed.push(event.message?.text ?? '') } })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/a', text: 'e0' })
+    for (let i = 1; i < MAX_COALESCED + 100; i++) await team.reply({ to: root.id, text: `e${i}` })
+    time.advance(2 * SECOND)
+    expect((await team.deliver()).delivered).toBe(1)
+    expect(handed).toEqual([`e${MAX_COALESCED - 1}`])
+    expect((await team.deliver()).delivered).toBe(1)
+    expect(handed).toEqual([`e${MAX_COALESCED - 1}`, `e${MAX_COALESCED + 99}`])
+    expect((await team.deliver()).delivered).toBe(0)
+  }, 60_000)
+})
+
+describe('a quiet watcher on a busy board', () => {
+  it('reads at most its stretch per pass, though nothing in it matches', async () => {
+    const backend = file({ memory: true, principal: 'local:user:ada', now: clock().now })
+    let span = 0
+    const counted = { ...backend, events: async (...args: Parameters<typeof backend.events>) => {
+      const page = await backend.events(...args)
+      span += page.cursor - (args[1].after ?? 0)
+      return page
+    } }
+    const { seen, watch } = noting()
+    const team = board({ backend: counted, watch: { lead: watch } })
+    await team.deliver()
+    for (let i = 0; i < 2 * LOOK_AHEAD; i++) await team.post({ channel: 'noise', text: `n${i}` })
+    const wanted = await team.post({ channel: 'work/a', text: 'for the watcher' })
+    const spans: number[] = []
+    for (let i = 0; i < 4 && seen.length === 0; i++) {
+      span = 0
+      await team.deliver()
+      spans.push(span)
+    }
+    expect(seen).toEqual([wanted.id])
+    expect(Math.max(...spans)).toBeLessThanOrEqual(LOOK_AHEAD)
+  }, 120_000)
 })
