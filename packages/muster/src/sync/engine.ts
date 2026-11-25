@@ -171,7 +171,8 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
       ctx.db,
       {
         type: 'message.posted',
-        by: { principal: `${key}:user:${event.parent.author}`, profile: null },
+        // A platform that doesn't say who opened it: the thread is put down to the sync itself.
+        by: { principal: event.parent.author ? `${key}:user:${event.parent.author}` : key, profile: null },
         channel,
         thread: 'self',
         data: { re: null, replyTo: null, text, labels: { ...taken({ source: key, ...event.parent.labels }), source: key }, attachments: [], noSync: false, mentions: [], origin: { key, external: event.thread, thread: event.thread, place: event.place } },

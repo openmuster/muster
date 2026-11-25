@@ -835,6 +835,24 @@ describe('sync: Linear catch-up after downtime', () => {
     third.close()
   })
 
+  it('an older issue started by a label webhook reads as one catching up started, and catching up after adds no second thread', async () => {
+    const { time, open, first, state } = await downtime()
+    // ENG-16 predates sync: a label put on it arrives as an update. ENG-17, as old, is labelled while the board is down.
+    const older = (id: string, title: string) => ({ id, identifier: `ENG-${id.slice(4)}`, title, description: 'From October.', creatorId: 'u-nico', team: { key: 'ENG' }, state: { name: 'Todo' }, labels: [{ name: 'agent' }], labelIds: ['l-1'] })
+    await webhook(first, { type: 'Issue', action: 'update', data: older('iss-16', 'Labelled by webhook') })
+    first.close()
+    const listedNode = (id: string, title: string) => issueNode(id, title, { description: 'From October.', labels: { nodes: [{ name: 'agent' }] } })
+    state.issues = [listedNode('iss-16', 'Labelled by webhook'), listedNode('iss-17', 'Labelled while down')]
+    time.advance(3_600_000)
+    const second = open()
+    await second.syncTick()
+    const threads = (await board({ backend: second }).readChannel({ channel: 'eng' })).threads.map((thread) => thread.message)
+    const shape = (title: string) => threads.filter((message) => message.text.startsWith(title)).map((message) => [message.text.replace(title, ''), message.by.principal, { ...message.labels, ref: '' }])
+    expect(shape('Labelled by webhook')).toHaveLength(1)
+    expect(shape('Labelled by webhook')).toEqual(shape('Labelled while down'))
+    second.close()
+  })
+
   it('what webhooks already brought, and what the board itself sent, is not imported again, with no bot to tell its own writes apart', async () => {
     const { time, open, first, state } = await downtime()
     await webhook(first, { type: 'Comment', action: 'create', data: { id: 'c-1', body: 'heard by webhook', issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } } } })

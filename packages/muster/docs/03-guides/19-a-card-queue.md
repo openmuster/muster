@@ -198,9 +198,12 @@ way the card's text is fenced.
   budget on `cards` is the cap. Without a key there is no catch-up: an issue
   made while the board was down never arrives, and a label added meanwhile
   to a card it has arrives with the issue's next update.
-- **An issue from before sync was set up.** Linear's webhook for a label
-  added to it is dropped, since the board never saw the issue: see
-  [Linear](../02-sync/03-linear.md). Make a new issue instead.
+- **An issue from before sync was set up.** Labelling it `agent` starts the
+  card: Linear's update carries the whole issue, so its thread starts with
+  the title, description and labels, as a new issue's would. If someone
+  commented on it first, after sync was set up, the thread started from that
+  comment, which carries only the title: the card then runs on the title
+  alone. See [Linear](../02-sync/03-linear.md#an-issue-from-before-sync).
 - **A long card.** The spec task quotes the first 2,000 characters.
 - **Files on a card** don't reach the sandbox: the worker's token reaches
   the run's channel only.

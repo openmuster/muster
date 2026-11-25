@@ -379,13 +379,22 @@ export function linear(options: LinearOptions): Provider {
       }
       if (payload.type === 'Issue' && payload.action === 'update') {
         const filed = filing(data)
-        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels } }]
+        // An update carries the whole issue, so one the board never saw (made before sync was set up) starts its
+        // thread from it, as catching up would: by whoever opened it, filed as it is now. A board that has it ignores
+        // this. Its description's uploads stay links: the update's own event would otherwise wait for them.
+        const opener = typeof data.title === 'string' ? rootOf({ ...data, creator: data.creator ?? (data.creatorId ? { id: data.creatorId } : undefined) }, '') : null
+        const parent = opener ? { parent: { author: opener.author, text: opener.text ?? '', labels: opener.labels ?? {} } } : {}
+        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels }, ...parent }]
       }
       if (payload.type === 'Comment' && (payload.action === 'update' || payload.action === 'remove')) {
         return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? '') } : {}) }]
       }
       if (payload.type === 'Comment' && payload.action === 'create') {
-        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? ''), ...(uploads(data.body) ? { files: uploads(data.body)! } : {}) }]
+        // A comment on an issue the board never saw carries the issue's title, not its description or who opened it:
+        // its thread starts from the title, put down to the sync, and the comment lands as its first reply.
+        const issue = data.issue
+        const parent = typeof issue?.title === 'string' ? { parent: { author: '', text: issue.title.trim(), labels: { kind: 'issue', ...(issue.identifier ? { ref: String(issue.identifier) } : {}) } } } : {}
+        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? ''), ...(uploads(data.body) ? { files: uploads(data.body)! } : {}), ...parent }]
       }
       return []
     },
