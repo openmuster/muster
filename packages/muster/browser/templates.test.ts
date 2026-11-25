@@ -140,14 +140,21 @@ const statusAs = (url: string, path: string, host: string) =>
 
 describe('the factory template, in a browser', () => {
   it('shows what is set up and what is not, lists threads, and a reply from the page is on the board as you', async () => {
-    const { url, team, page, errors } = await start('factory')
+    const { url, team, dir, page, errors } = await start('factory')
     expect([await statusAs(url, '/', 'evil.example'), await statusAs(url, '/', new URL(url).host)]).toEqual([403, 200])
     const issue = await team.as('triage').post({ channel: 'factory/intake', text: 'The login redirect goes to the wrong host\nSeen on staging.' })
     await team.taskCreate({ thread: issue.id })
 
     await page.goto(url)
     expect(await page.locator('h1').textContent()).toBe('factory')
-    expect(await page.locator('.item', { hasText: 'a watcher wakes the agent' }).first().textContent()).toMatch(/^to do · a watcher wakes the agent/)
+    const watcher = page.locator('.item', { hasText: 'a watcher wakes the agent' }).first()
+    expect(await watcher.textContent()).toBe('to do · a watcher wakes the agent"factory" on #factory/ is declared, and nothing runs itpnpm host   (node host.ts, in this folder)')
+    // The template's host, on the same board: it takes the watcher's lease, and the page names it.
+    const host = spawn(process.execPath, ['host.ts'], { cwd: join(TEMPLATES, 'factory'), detached: true, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: dir, MUSTER_DIR: join(dir, 'board'), MUSTER_CONFIG: join(dir, 'config'), FACTORY_AGENT: 'true' } })
+    servers.push(host)
+    await expect.poll(async () => (await team.backend.leases!.holder('watch:factory'))?.holder ?? '', { timeout: 20_000 }).toContain(`:${host.pid}:`)
+    await page.reload()
+    expect(await watcher.textContent()).toMatch(new RegExp(`^done · a watcher wakes the agent"factory" on #factory/, run by .+ \\(pid ${host.pid}\\)$`))
     expect(await page.locator('h2', { hasText: 'recent threads' }).textContent()).toBe('recent threads: 1 · open tasks: 1')
     const link = page.locator('.item a', { hasText: 'The login redirect goes to the wrong host' })
     expect(await link.textContent()).toBe(`#${issue.id} The login redirect goes to the wrong host`)

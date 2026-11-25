@@ -17,24 +17,34 @@ access. What a thread needs is for the agent to judge from the thread.
 
 ## Set it up
 
-`templates/factory` has the pieces: a watcher, a sync file, a wake script, the
-agent's instructions, and a page.
+`templates/factory` has the pieces: a board module (`lib/board.ts`) with the
+watcher, a host that runs it (`host.ts`), a wake script (`lib/wake.ts`), a
+sync file, the agent's instructions, and a page.
 
 ```bash
-cp templates/factory/watchers.json templates/factory/sync.json ~/.config/muster/
+cp templates/factory/sync.json ~/.config/muster/
 export GITHUB_WEBHOOK_SECRET=...
 mu serve --allow-host board.example.com
 ```
 
-Then edit `~/.config/muster/watchers.json` so `run` names `wake.sh` by its
-full path, and point the platform's webhook at the board. With `mu serve`
-running, check that the watcher wakes the agent and that the agent answers:
+`mu serve` takes the webhooks and syncs, without the module: with one it
+doesn't read `sync.json` yet. In another terminal, run the watcher, and leave
+it running:
 
 ```bash
-mu daemon check factory --in factory/issues
+cd templates/factory
+pnpm host
 ```
- `mu serve` listens
-on 127.0.0.1: the webhook reaches it through a proxy or a tunnel with a public
+
+Point the platform's webhook at the board. With both running, check from
+`templates/factory` that the watcher wakes the agent and that the agent
+answers:
+
+```bash
+mu daemon check factory --module "$PWD/lib/board.ts" --in factory/issues
+```
+
+`mu serve` listens on 127.0.0.1: the webhook reaches it through a proxy or a tunnel with a public
 HTTPS name, and `--allow-host` is that name.
 
 The template's `sync.json` brings threads in and sends nothing back. To have
@@ -50,7 +60,8 @@ cd templates/factory
 pnpm dev
 ```
 
-The page lists what is set up and what isn't, with the command for each, and
+The page lists what is set up and what isn't, with the command for each, who
+holds each role (`tick` for `mu serve`, `watch:factory` for the host), and
 the recent threads. `/board` shows every thread, where you read and reply from
 a browser.
 
@@ -144,8 +155,9 @@ mu read "$MUSTER_THREAD" --json | grep -q '"product":' && echo '{"wake": false}'
 mu read "$MUSTER_THREAD" --json | grep -q "\"product\": \"$1\"" || echo '{"wake": false}'
 ```
 
-`route.sh` and `answer.sh` are `templates/factory/wake.sh` with other
-instructions: they pass a pointer, and the agent reads the thread itself.
+`route.sh` and `answer.sh` do what the factory's `lib/wake.ts` does, with
+other instructions: they pass a pointer, and the agent reads the thread
+itself.
 
 Try the plumbing by hand, with you as the router:
 

@@ -6,13 +6,15 @@ import { setup, tilde } from '@/lib/setup'
 export const dynamic = 'force-dynamic'
 
 export default async function Page() {
-  const me = await team().whoami()
+  const me = await team.whoami()
   const config = process.env.MUSTER_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'muster')
-  // Whoever ticks the board holds its `tick` lease. A board at a URL is ticked by its server, which this page can't see into.
-  const ticking = (await team().backend.leases?.holder('tick').catch(() => null)) != null
-  const steps = setup({ config, ticking, channel: FACTORY })
-  const page = await team().readChannel({ channel: `${FACTORY}/`, limit: 15 }).catch(() => ({ threads: [] }))
-  const open = (await team().taskList({ channel: `${FACTORY}/` }).catch(() => ({ tasks: [] }))).tasks
+  // Who holds each role: `tick` (mu serve or a daemon) and each watcher's `watch:<name>` (host.ts). A board at
+  // a URL keeps its leases on its server, which this page can't see into.
+  const roles = ['tick', ...team.watchers.map((watcher) => `watch:${watcher.name}`)]
+  const holders = Object.fromEntries(await Promise.all(roles.map(async (role) => [role, (await team.backend.leases?.holder(role).catch(() => null))?.holder ?? null] as const)))
+  const steps = setup({ config, channel: FACTORY, watchers: team.watchers, holders })
+  const page = await team.readChannel({ channel: `${FACTORY}/`, limit: 15 }).catch(() => ({ threads: [] }))
+  const open = (await team.taskList({ channel: `${FACTORY}/` }).catch(() => ({ tasks: [] }))).tasks
   return (
     <>
       <h1>factory</h1>

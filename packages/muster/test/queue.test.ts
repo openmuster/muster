@@ -4,12 +4,13 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { loadWatchers, tickOnce, watcherEnv } from '../src/daemon/daemon.ts'
+import { tickOnce, watcherEnv } from '../src/daemon/daemon.ts'
 import { openRuns, threadQuote, type Spawner } from '../src/daemon/runs.ts'
 import { fillResults, pushesTask } from '../src/daemon/steps.ts'
-import type { Deps, WatchState } from '../src/daemon/watchers.ts'
-import { board, file, linear, loadSync, loadWorkflows } from '../src/index.ts'
-import { BIN, tempDir } from './helpers.ts'
+import { RETRY_MOST } from '../src/core/deliveries.ts'
+import { board, file, linear, loadSync, loadWorkflows, type Board, type WatchContext } from '../src/index.ts'
+import * as module from '../../../templates/queue/board.ts'
+import { BIN, cliStart, tempDir } from './helpers.ts'
 
 const queue = resolve(dirname(fileURLToPath(import.meta.url)), '../../../templates/queue')
 const SECRET = 'whsec'
@@ -47,14 +48,18 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
     if (String(body.query).includes('issueCreate')) return Response.json({ data: { issueCreate: { success: true, issue: { id: `li-${made}`, identifier: `ENG-${made}`, state: { name: 'Todo' } } } } })
     return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${made}` } } } })
   }) as typeof fetch
-  const open = () => file({ dir: join(dir, 'board'), sync: { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'cards' } }) }, fetch: fetcher })
+  // The board's clock, ahead of this machine's by what `later()` has added.
+  let skew = 0
+  const open = () => file({ dir: join(dir, 'board'), sync: { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'cards' } }) }, fetch: fetcher, now: () => new Date(Date.now() + skew) })
   let backend = open()
-  let team = board({ backend })
+  // The module's board, on the test's backend: Linear's API is a stand-in, so sync is the test's.
+  const make = () => board({ backend, watch })
+  let team!: Board
   /** The daemon stopped and started again: a new process, which catches up on what Linear changed meanwhile. */
   const restart = () => {
     backend.close()
     backend = open()
-    team = board({ backend })
+    team = make()
     return team
   }
   const lin = (payload: unknown) => {
@@ -83,37 +88,53 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
   // macOS's own notifier, stood in for: a test never pops a notification, and Linux has none.
   writeFileSync(join(bin, 'osascript'), '#!/bin/sh\nexit 0\n')
   chmodSync(join(bin, 'osascript'), 0o755)
-  const ran: { command: string[]; code: number | null; stderr: string }[] = []
-  // As spawnCommand does: no cwd of its own (the daemon's, here the test's), and the environment built the
-  // same way, from the daemon's own rather than this process's.
-  const run: Deps['spawn'] = (command, env, allow) =>
-    new Promise((done) => {
-      const child = spawn(command[0]!, command.slice(1), { env: watcherEnv(env, allow, daemonEnv), stdio: ['ignore', 'pipe', 'pipe'] })
-      let stdout = ''
-      let stderr = ''
-      child.stdout.on('data', (chunk) => (stdout += chunk))
-      child.stderr.on('data', (chunk) => (stderr += chunk))
-      child.on('error', () => done({ code: 127, stdout }))
-      child.on('exit', (code) => {
-        ran.push({ command, code, stderr })
-        done({ code, stdout })
-      })
-    })
+  /** Each run of the module's watchers, as the host ran it: which watcher, and how its script exited. */
+  const ran: { watcher: string; code: number | null }[] = []
+  // The module's own watchers, each run recorded on its way through: the script is the template's, run by command().
+  const watch = Object.fromEntries(
+    Object.entries(module.watch).map(([name, watcher]) => [
+      name,
+      {
+        ...watcher,
+        run: async (context: WatchContext) => {
+          try {
+            await watcher.run(context)
+            ran.push({ watcher: name, code: 0 })
+          } catch (error) {
+            const exit = /^exit (\d+)$/.exec(String((error as { why?: string }).why ?? ''))
+            ran.push({ watcher: name, code: exit ? Number(exit[1]) : null })
+            throw error
+          }
+        },
+      },
+    ]),
+  )
+  team = make()
   const workers: Parameters<Spawner>[0][] = []
-  let now = Date.now()
-  const states = new Map<string, WatchState>()
   const runs = { spawn: (async (worker) => void workers.push(worker)) as Spawner, now: () => Date.now(), runs: openRuns(), env: daemonEnv }
-  // As the guide says to install them: each script named by its full path. As shipped, they are `./start.sh`.
-  const watchers = loadWatchers(join(queue, 'watchers.json')).map((watcher) => ({ ...watcher, run: watcher.run.map((part, at) => (at === 0 && part.startsWith('./') ? join(queue, part.slice(2)) : part)) }))
   const workflows = loadWorkflows(join(queue, 'workflows.json'))
-  /** One daemon tick, a minute after the last, so every watcher is due, after a pass of its sync loop (run beside the tick, under the `sync` lease). */
+  /**
+   * One pass of what `mu serve --module board.ts` runs: a pass of its sync loop (under the `sync` lease),
+   * the module's watchers through its host (`deliver()`), then the daemon's tick with no JSON watchers:
+   * schedules and requested workflows.
+   * A command a watcher runs starts from this process's environment, so for the pass it is the daemon's.
+   */
   const tick = async () => {
-    now += 60_000
-    await team.backend.syncTick()
-    return tickOnce(team, watchers, states, { now: () => now, spawn: run }, undefined, { list: workflows, deps: runs })
+    const saved = { ...process.env }
+    Object.assign(process.env, daemonEnv)
+    try {
+      await team.backend.syncTick()
+      await team.deliver()
+    } finally {
+      for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]
+      Object.assign(process.env, saved)
+    }
+    return tickOnce(team, [], new Map(), { now: () => Date.now(), spawn: async () => ({ code: 0, stdout: '' }) }, undefined, { list: workflows, deps: runs })
   }
+  /** Time passing on the board's clock: a failed delivery is tried again only once its wait is up. */
+  const later = (ms = RETRY_MOST) => void (skew += ms)
   const requests = async () => (await team.events({ after: 0, filter: { types: ['workflow.requested'] }, limit: 1000 })).events
-  return { dir, bin, team, lin, sent, tick, ran, workers, requests, daemonEnv, listed, restart }
+  return { dir, bin, team, lin, sent, tick, later, ran, workers, requests, daemonEnv, listed, restart }
 }
 
 const issue = (more: Record<string, unknown> = {}) => ({ id: 'iss-1', identifier: 'ENG-42', title: 'Fix the login redirect', description: 'It loops.', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' }, ...more })
@@ -213,9 +234,10 @@ describe('the queue template: what later steps read', () => {
 })
 
 describe('the queue template: config', () => {
-  it('its watchers, workflow and sync file are ones the daemon loads, with the secrets named and not written', () => {
-    const watchers = loadWatchers(join(queue, 'watchers.json'))
-    expect(watchers.map((each) => each.name)).toEqual(['card-start', 'needs-me'])
+  it('its board module, workflow and sync file are ones the daemon loads, with the secrets named and not written', () => {
+    const watchers = module.team.watchers
+    expect(watchers.map((each) => [each.name, each.as])).toEqual([['card-start', 'intake'], ['needs-me', null]])
+    expect(existsSync(join(queue, 'watchers.json'))).toBe(false)
     expect(loadWorkflows(join(queue, 'workflows.json')).map((each) => each.name)).toEqual(['card'])
     // The daemon refuses a workflow named like a watcher.
     expect(watchers.map((each) => each.name)).not.toContain('card')
@@ -363,20 +385,26 @@ describe('the queue template: when a script fails', () => {
     `#!/bin/sh\ncase "$1" in ${verbs.join('|')}) echo 'error: the board is busy' >&2; exit 1 ;; esac\nexec ${process.execPath} ${BIN} "$@"\n`
 
   it("start.sh fails when the board can't be written, so the daemon tries the card again and then says so on it", async () => {
-    const { team, lin, tick, ran } = setup({ mu: (dir) => failing(['label'], dir) })
+    const { team, lin, tick, later, ran } = setup({ mu: (dir) => failing(['label'], dir) })
     await tick()
     await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
-    for (let i = 0; i < 5; i++) await tick()
+    for (let i = 0; i < 5; i++) {
+      await tick()
+      later()
+    }
     expect(ran.map((each) => each.code)).toEqual([1, 1, 1, 1, 1])
     const card = (await team.readChannel({ channel: 'cards' })).threads[0]!.message
     expect(await gaveUp(team, card.id, 'card-start')).toHaveLength(1)
   }, 60_000)
 
   it("start.sh fails when neither the request nor the reply saying so goes through, and isn't silent about it", async () => {
-    const { team, lin, tick, ran } = setup({ mu: (dir) => failing(['workflow', 'reply'], dir) })
+    const { team, lin, tick, later, ran } = setup({ mu: (dir) => failing(['workflow', 'reply'], dir) })
     await tick()
     await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
-    for (let i = 0; i < 5; i++) await tick()
+    for (let i = 0; i < 5; i++) {
+      await tick()
+      later()
+    }
     expect(ran.map((each) => each.code)).toEqual([1, 1, 1, 1, 1])
     const card = (await team.readChannel({ channel: 'cards' })).threads[0]!.message
     expect(await gaveUp(team, card.id, 'card-start')).toHaveLength(1)
@@ -386,16 +414,55 @@ describe('the queue template: when a script fails', () => {
     // The first label write lands, but its answer doesn't come back, as over HTTP when the server went away mid-request.
     const lost = (dir: string) =>
       `#!/bin/sh\nif [ "$1" = label ] && [ ! -e ${dir}/lost ]; then touch ${dir}/lost; ${process.execPath} ${BIN} "$@" >/dev/null 2>&1; echo '{"error":{"reason":"network_error"}}'; exit 1; fi\nexec ${process.execPath} ${BIN} "$@"\n`
-    const { team, lin, tick, ran, requests } = setup({ mu: lost })
+    const { team, lin, tick, later, ran, requests } = setup({ mu: lost })
     await tick()
     await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
     await tick()
     expect(ran.map((each) => each.code)).toEqual([1])
     expect((await team.readChannel({ channel: 'cards' })).threads[0]!.message.labels.started).toBe('yes')
+    later()
     await tick()
     expect(ran.map((each) => each.code)).toEqual([1, 0])
     expect(await requests()).toHaveLength(1)
   }, 30_000)
+})
+
+describe('the queue template: its board module, run by mu daemon run --module', () => {
+  /** Waited for, not timed: on a busy machine the daemon takes longer to start and to deliver. */
+  const until = async (done: () => Promise<boolean>, ms = 30_000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) if (await done()) return
+    throw new Error('waited too long')
+  }
+
+  it('starts the card workflow once for a labelled card, as intake, and only warns about a sync.json it then does not read', async () => {
+    const { dir, bin, team, daemonEnv, requests } = setup()
+    // sync.json where the daemon looks for it, with its secrets set: a board module doesn't read it, and says so.
+    copyFileSync(join(queue, 'sync.json'), join(dir, 'config', 'sync.json'))
+    // The worker the daemon starts for the run: a stand-in that notes how it was called.
+    writeFileSync(join(bin, 'worker'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${dir}/workers.txt\n`)
+    chmodSync(join(bin, 'worker'), 0o755)
+    const daemon = cliStart(dir, ['daemon', 'run', '--module', join(queue, 'board.ts')], { ...(daemonEnv as Record<string, string>), MUSTER_BIN: join(bin, 'worker'), LINEAR_WEBHOOK_SECRET: 'whsec' })
+    try {
+      // The watcher starts from now: its place on the board is set once it first runs.
+      await until(async () => (await team.as('intake').cursorGet('watch:card-start')) !== null)
+      const card = await team.post({ channel: 'cards', text: 'Make the footer year current', labels: { 'tag.agent': 'agent' }, noSync: true })
+      await until(async () => (await requests()).length === 1 && existsSync(join(dir, 'workers.txt')))
+      // A reply wakes the watcher again; the label says the card has started.
+      await team.reply({ to: card.id, text: 'also on the about page', noSync: true })
+      const replied = await team.head()
+      await until(async () => ((await team.as('intake').cursorGet('watch:card-start')) ?? 0) >= replied)
+      const asked = await requests()
+      expect(asked.map((each) => [each.thread, each.by.profile])).toEqual([[card.id, 'intake']])
+      expect((await team.readThread({ id: card.id })).message.labels.started).toBe('yes')
+      expect(readFileSync(join(dir, 'workers.txt'), 'utf8')).toContain(`--ready cards/card-${asked[0]!.seq}`)
+    } finally {
+      daemon.child.kill('SIGTERM')
+    }
+    const ended = await daemon.done
+    // A daemon told to stop stops cleanly.
+    expect(ended.code).toBe(0)
+    expect(ended.stderr).toContain(`warning: ${join(dir, 'config', 'sync.json')} isn't read with a board module: nothing it lists is synced.`)
+  }, 60_000)
 })
 
 describe('the queue template: a blocked task', () => {
@@ -472,10 +539,13 @@ exec ${node} "$@"
   }, 30_000)
 
   it("fails when the ping can't be sent, so the daemon tries again and then says so on the task", async () => {
-    const { team, tick, spec, ran, bin } = await blocked()
+    const { team, tick, later, spec, ran, bin } = await blocked()
     writeFileSync(join(bin, 'notified'), '#!/bin/sh\nexit 1\n')
-    for (let i = 0; i < 5; i++) await tick()
-    expect(ran.filter((each) => each.command[0]!.endsWith('notify.sh')).map((each) => each.code)).toEqual([1, 1, 1, 1, 1])
+    for (let i = 0; i < 5; i++) {
+      await tick()
+      later()
+    }
+    expect(ran.filter((each) => each.watcher === 'needs-me').map((each) => each.code)).toEqual([1, 1, 1, 1, 1])
     expect(await gaveUp(team, spec.id, 'needs-me')).toHaveLength(1)
   }, 60_000)
 

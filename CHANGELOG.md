@@ -174,6 +174,22 @@ versions are affected.
   server ticks that board and exits 0. Before, it stayed up and every tick
   was refused.
 
+- The factory and card queue templates declare their watchers in a board
+  module instead of `watchers.json`. The factory's `lib/board.ts` exports a
+  module-scope `team` with the watcher `factory`; `pnpm host` (`host.ts`) runs
+  it, holding the lease `watch:factory`, and stops cleanly on SIGTERM or
+  SIGINT. `lib/wake.ts` replaces `wake.sh`, and in a Vercel sandbox keys the
+  wake's task by the event, so a retried wake makes no second task. The page
+  says who holds `tick` and `watch:factory`, and the route is
+  `export const GET = team.fetch`. The queue's `board.ts` runs `start.sh` and
+  `notify.sh` with `command()`, by their full paths; run it with
+  `mu serve --module`. If you copied either template's `watchers.json` into
+  `~/.config/muster/`, remove its `factory`, `card-start` and `needs-me`
+  entries: a watcher there and in a module under one name is refused. Sync
+  stays in `sync.json` for now, and a board module doesn't read it: the
+  factory's `mu serve` runs without the module, and the queue gets no Linear
+  sync under `mu serve --module` until sync moves into the module.
+
 ### Fixed
 
 - A feed (`GET /api/board/feed`) whose client left while it was still
