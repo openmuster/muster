@@ -261,7 +261,8 @@ export function file(options: FileOptions = {}): Backend {
       await fetchFiles(ctx(), sync, options.fetch ?? fetch)
       const inbound = importPending(ctx(), sync)
       const outbound = await deliverPending(ctx(), sync, options.fetch ?? fetch)
-      return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed, ...(caught.skipped.length ? { skipped: caught.skipped } : {}) }
+      const skipped = [...caught.skipped, ...inbound.stale, ...outbound.stale]
+      return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed, ...(skipped.length ? { skipped } : {}) }
     },
     close() {
       db?.close()

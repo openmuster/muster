@@ -118,6 +118,17 @@ versions are affected.
 - A feed (`GET /api/board/feed`) whose client left while it was still
   opening is now closed. Before, `mu serve` went on reading the board for it
   every half second until the client's token ran out.
+- Linear: a webhook that arrives late no longer undoes a newer change. Sync
+  applied issue updates in the order they arrived, so a removal Linear sent
+  again after a failed delivery, landing after the label was put back, took
+  `tag.agent` off an issue that has it, and its card never started. Each
+  update now carries when Linear says the issue changed (`updatedAt`), and
+  one no newer than the last applied to that issue is skipped, with a
+  `skipped sync` line in the log. Catching up after downtime follows the
+  same rule both ways, and so do comment edits. The board keeps what it
+  applied in its file, so a restart doesn't forget it. Covered by tests, not
+  run live. See
+  [Linear](./packages/muster/docs/02-sync/03-linear.md#in-the-order-linear-made-them).
 - Linear: a change to an issue made before sync was set up, such as the label
   `agent`, now starts its thread from the update, with the issue's title,
   description and labels, and then applies the change. Before, the webhook

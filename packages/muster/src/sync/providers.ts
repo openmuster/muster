@@ -373,6 +373,8 @@ export function linear(options: LinearOptions): Provider {
       const delivery = `lin:${hmac('id', body).slice(0, 32)}`
       const author = String(data.userId ?? data.user?.id ?? payload.actor?.id ?? 'unknown')
       const self = options.bot !== undefined && author === options.bot
+      // When Linear says the issue or comment changed, not when it sent this: a retry is sent later, of the same change.
+      const updated = typeof data.updatedAt === 'string' ? { updated: data.updatedAt } : {}
       if (payload.type === 'Issue' && payload.action === 'create') {
         const thread = `issue:${data.id}`
         return [{ id: delivery, author: String(data.creatorId ?? author), place: String(data.team?.key ?? ''), self, kind: 'root', thread, external: thread, text: `${data.title}\n\n${data.description ?? ''}`.trim(), labels: { kind: 'issue', ref: String(data.identifier ?? ''), ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filing(data).labels }, ...(uploads(data.description) ? { files: uploads(data.description)! } : {}) }]
@@ -384,17 +386,17 @@ export function linear(options: LinearOptions): Provider {
         // this. Its description's uploads stay links: the update's own event would otherwise wait for them.
         const opener = typeof data.title === 'string' ? rootOf({ ...data, creator: data.creator ?? (data.creatorId ? { id: data.creatorId } : undefined) }, '') : null
         const parent = opener ? { parent: { author: opener.author, text: opener.text ?? '', labels: opener.labels ?? {} } } : {}
-        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels }, ...parent }]
+        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels }, ...parent, ...updated }]
       }
       if (payload.type === 'Comment' && (payload.action === 'update' || payload.action === 'remove')) {
-        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? '') } : {}) }]
+        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? ''), ...updated } : {}) }]
       }
       if (payload.type === 'Comment' && payload.action === 'create') {
         // A comment on an issue the board never saw carries the issue's title, not its description or who opened it:
         // its thread starts from the title, put down to the sync, and the comment lands as its first reply.
         const issue = data.issue
         const parent = typeof issue?.title === 'string' ? { parent: { author: '', text: issue.title.trim(), labels: { kind: 'issue', ...(issue.identifier ? { ref: String(issue.identifier) } : {}) } } } : {}
-        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? ''), ...(uploads(data.body) ? { files: uploads(data.body)! } : {}), ...parent }]
+        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? ''), ...(uploads(data.body) ? { files: uploads(data.body)! } : {}), ...parent, ...updated }]
       }
       return []
     },
@@ -488,7 +490,7 @@ export function linear(options: LinearOptions): Provider {
         // that already says so changes nothing. Linear doesn't say here who moved it, so it is put down to the sync, not to whoever opened the issue.
         if (root.labels?.state) {
           const filedNow = filing(listed(issue))
-          out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, ...(issue.updatedAt ? { at: String(issue.updatedAt) } : {}), kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, ...filedNow, labels: { state: root.labels.state, ...filedNow.labels } })
+          out.push({ ...root, id: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, author: '', self: false, ...(issue.updatedAt ? { at: String(issue.updatedAt), updated: String(issue.updatedAt) } : {}), kind: 'labels', external: `catchup:state:${issue.id}:${issue.updatedAt ?? ''}`, ...filedNow, labels: { state: root.labels.state, ...filedNow.labels } })
         }
       }
       for (const comment of comments.nodes) {
@@ -496,7 +498,7 @@ export function linear(options: LinearOptions): Provider {
         // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
         const { author, text, labels, place } = rootOf(comment.issue, '')
         const by = String(comment.user?.id ?? 'unknown')
-        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} }, ...(uploads(comment.body) ? { files: uploads(comment.body)! } : {}) })
+        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} }, ...(uploads(comment.body) ? { files: uploads(comment.body)! } : {}), ...(comment.updatedAt ? { updated: String(comment.updatedAt) } : {}) })
       }
       // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
       const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)

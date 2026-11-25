@@ -30,6 +30,12 @@ export type Inbound = {
    * since then is newer than it, and is left as it is.
    */
   at?: string
+  /**
+   * When the platform says the thing this event is about (an issue, a comment) last changed, as its own clock has
+   * it: Linear's `updatedAt`. An update or an edit no newer than the newest one applied to the same thing is late
+   * (a retry, or one held up) and is skipped. Without it, an event is applied in the order it arrived.
+   */
+  updated?: string
   /** Whether the app itself wrote it: its own echoes are never imported. */
   self?: boolean
   /**

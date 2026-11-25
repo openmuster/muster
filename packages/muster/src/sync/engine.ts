@@ -44,7 +44,7 @@ function isSending(ctx: Context, key: string) {
  * Takes a platform's webhook: checks it is the platform's, stores what it carried, and only then
  * answers. A stored event is imported right away, and again by the ticker if that fails.
  */
-export function receive(ctx: Context, sync: Sync, key: string, received: Received): { status: number; body: string } {
+export function receive(ctx: Context, sync: Sync, key: string, received: Received): { status: number; body: string; skipped?: string[] } {
   const provider = sync[key]
   if (!provider) return { status: 404, body: 'no such sync' }
   try {
@@ -71,14 +71,15 @@ export function receive(ctx: Context, sync: Sync, key: string, received: Receive
     // Not stored: the platform must send it again.
     return { status: 500, body: 'not stored' }
   }
-  importPending(ctx, sync, key)
-  return { status: 200, body: 'ok' }
+  const { stale } = importPending(ctx, sync, key)
+  return { status: 200, body: 'ok', ...(stale.length ? { skipped: stale } : {}) }
 }
 
 /** Imports what is in the inbox, oldest first, a platform thread at a time: one bad event holds only its own thread. */
-export function importPending(ctx: Context, sync: Sync, only?: string): { imported: number; failed: number } {
+export function importPending(ctx: Context, sync: Sync, only?: string): { imported: number; failed: number; stale: string[] } {
   let imported = 0
   let failed = 0
+  const stale: string[] = []
   // What a board imported before it stopped keeping payloads: emptied once, the first time it is looked at.
   if (ctx.db.raw.prepare("select 1 from inbox where done = 1 and payload != '{}' limit 1").get()) ctx.db.write(() => ctx.db.raw.prepare("update inbox set payload = '{}' where done = 1 and payload != '{}'").get())
   const rows = ctx.db.raw.prepare('select key, id, payload, attempts from inbox where done = 0 order by received, id').all() as { key: string; id: string; payload: string; attempts: number }[]
@@ -97,7 +98,8 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
     }
     try {
       ctx.db.write(() => {
-        importOne(ctx, provider, row.key, event)
+        const late = importOne(ctx, provider, row.key, event)
+        if (late) stale.push(late)
         // On the board now, or not for it: the row stays, so the same delivery is never taken twice, and what it
         // carried goes. The inbox is bookkeeping, not a second copy of what people wrote.
         ctx.db.raw.prepare("update inbox set done = 1, payload = '{}' where key = ? and id = ?").get(row.key, row.id)
@@ -110,7 +112,35 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
       if (attempts < IMPORT_ATTEMPTS) stuck.add(lane)
     }
   }
-  return { imported, failed }
+  return { imported, failed, stale }
+}
+
+/**
+ * Where the newest change applied to a platform thing (an issue, a comment) is kept: when the platform says it was
+ * made, in ms. A cursor, so it is bookkeeping in the board's file and outlasts a restart; under `sync:`, so a caller
+ * held to channels can't move it.
+ */
+const appliedCursor = (key: string, thing: string) => `sync:${key}:applied:${thing}`
+
+const timeOf = (updated: string | undefined) => {
+  const time = updated === undefined ? Number.NaN : Date.parse(updated)
+  return Number.isNaN(time) ? null : time
+}
+
+/** A line saying why an event is skipped, when one no older than it has been applied to the same thing. */
+function late(ctx: Context, key: string, thing: string, updated: string | undefined): string | null {
+  const time = timeOf(updated)
+  if (time === null) return null
+  const row = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(appliedCursor(key, thing)) as { seq: number } | undefined
+  if (!row || row.seq < time) return null
+  return `${key} ${thing}: a change made at ${new Date(time).toISOString()} came after one made at ${new Date(row.seq).toISOString()}, and was not applied`
+}
+
+/** Notes that a change the platform made at `updated` is applied to a thing: one no newer that comes later is late. */
+function applied(ctx: Context, key: string, thing: string, updated: string | undefined) {
+  const time = timeOf(updated)
+  if (time === null) return
+  ctx.db.raw.prepare("insert into cursors (name, profile, seq) values (?, '', ?) on conflict (name, profile) do update set seq = max(seq, excluded.seq)").get(appliedCursor(key, thing), time)
 }
 
 /**
@@ -125,9 +155,18 @@ function changedSince(ctx: Context, message: number, name: string, at: string | 
   return latest.at !== null && Date.parse(latest.at) > Date.parse(at)
 }
 
-function importOne(ctx: Context, provider: Provider, key: string, event: Inbound) {
+/** Imports one event. Returns a line saying so when it is late, and skipped. */
+function importOne(ctx: Context, provider: Provider, key: string, event: Inbound): string | undefined {
   // The app's own writes come back as webhooks; so does what the board itself delivered.
   if (event.self) return
+  // A platform resends what wasn't answered, later, and a webhook can be held up: one that says less than what the
+  // board already applied for the same issue or comment would put an older state back. Removals stay final, so a
+  // delete is never late.
+  const thing = event.kind === 'labels' ? event.thread : event.external
+  if (event.kind === 'labels' || event.kind === 'edit') {
+    const skip = late(ctx, key, thing, event.updated)
+    if (skip) return skip
+  }
   // What its files gave: those that came, and a line for each that didn't, so none is lost without a word.
   let attachments = event.fetched?.attachments ?? []
   if (event.text !== undefined) event = { ...event, text: withLines(event.text, event.fetched?.notes ?? []) }
@@ -153,6 +192,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
       // A task's brief changed from outside is instructions nobody on the board wrote: its owner looks first.
       holdIfEdited(ctx, who, target, (draft) => append(ctx.db, draft, when))
     }
+    if (event.kind === 'edit') applied(ctx, key, thing, event.updated)
     return
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
@@ -201,6 +241,8 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
       set[name] = value
     }
     if (Object.keys(set).length || unset.size) append(ctx.db, { type: 'labels.changed', by, channel: message.channel, thread: message.thread, data: { id: message.id, set, unset: [...unset], before: message.labels } }, at)
+    // Noted even when it changed nothing here: an older one after it would still say less than this one did.
+    applied(ctx, key, thing, event.updated)
     return
   }
 
@@ -234,6 +276,8 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     },
     at,
   )
+  // A comment read with its latest edit: an older edit's webhook, after it, is late.
+  applied(ctx, key, event.external, event.updated)
 }
 
 /**
@@ -241,9 +285,10 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
  * message goes out once: a delivery is recorded with the ID the platform gave, and after five failed
  * tries the failure is recorded on the thread and the next message goes.
  */
-export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ delivered: number; failed: number }> {
+export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof fetch = fetch): Promise<{ delivered: number; failed: number; stale: string[] }> {
   let delivered = 0
   let failed = 0
+  const stale: string[] = []
   for (const [key, provider] of Object.entries(sync)) {
     const name = `sync:${key}`
     const stored = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(name) as { seq: number } | undefined
@@ -324,9 +369,9 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
     }
     // What the platform sent while it was being written to waited; its answers are recorded now.
-    importPending(ctx, sync, key)
+    stale.push(...importPending(ctx, sync, key).stale)
   }
-  return { delivered, failed }
+  return { delivered, failed, stale }
 }
 
 /**
@@ -400,6 +445,6 @@ export async function catchUp(ctx: Context, sync: Sync, fetcher: typeof fetch = 
     })
     fetched += events.length
   }
-  if (fetched) importPending(ctx, sync)
+  if (fetched) skipped.push(...importPending(ctx, sync).stale)
   return { fetched, skipped }
 }
