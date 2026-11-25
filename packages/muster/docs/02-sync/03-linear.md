@@ -69,6 +69,33 @@ starts when the issue is created, or when [catching up](#catching-up) reads it.
 What the board sent is not imported back, and neither are comments by the
 user named in `bot`.
 
+## Files
+
+- **In:** a file uploaded to Linear is a markdown link to
+  `uploads.linear.app` in an issue's description or a comment. The board
+  fetches each with the key and attaches it to the message; the link stays
+  in the text. A link to anywhere else is only text, and so is an upload of
+  another workspace: the key asks Linear which workspace it is for.
+- **Who can bring what in:** Linear lists no uploads for a comment, so the
+  board goes by the link, which whoever wrote the comment chose. Someone
+  who can comment in a mapped team can link an upload from elsewhere in the
+  workspace, one they can't open themselves, and the key will fetch it onto
+  the board. If the board is read by people who shouldn't see every upload
+  in the workspace, use a key whose user sees only the mapped teams.
+- **Out:** each file on a board message is uploaded to Linear's storage, and
+  a link to it is added to the comment or the new issue's description. An
+  image shows inline. The bytes go only to `storage.googleapis.com`, where
+  Linear's upload URLs point today, with only the storage's own headers from
+  Linear's answer; an upload URL anywhere else is refused and the file named.
+
+A personal API key with read and write access fetches and uploads files.
+What an OAuth app's scopes need for files has not been checked.
+
+Linear's docs don't say whether `uploads.linear.app` answers with the file
+or redirects to a storage host. The board follows no redirect, so if Linear
+sends one, the file is named in the text instead of attached. This has not
+been tried against Linear. See [Files](./01-overview.md#files) for the limits.
+
 ## Catching up
 
 After downtime, and when a token is set, the ticker asks Linear for the issues in
@@ -87,6 +114,8 @@ first, in pages of 50. If there are more, the next read goes on a minute
 later from the newest change it read. If Linear refuses, a rate limit among
 the reasons, it is asked again from the same point five minutes later. See
 [After downtime](./01-overview.md#after-downtime) for the rest.
+A file linked from an issue or comment read this way is fetched as one from a
+webhook would be, with the same limits.
 
 ## Set it up
 

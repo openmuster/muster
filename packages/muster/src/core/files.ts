@@ -43,6 +43,11 @@ export function filePut(ctx: Context, caller: Caller, request: { name: string; t
   const bytes = Buffer.from(request.data, 'base64')
   if (bytes.length > FILE_MAX) throw new Failure('file_too_large', `${request.name} is over 25 MB.`, { hint: 'Compress it, or link to it.' })
   if (caller.can) spend(ctx, caller, bytes.length)
+  return { id: storeBytes(ctx, bytes), name: request.name, type: request.type ?? 'application/octet-stream', size: bytes.length }
+}
+
+/** Stores bytes by their hash and returns it. Callers check size and permission first. */
+export function storeBytes(ctx: Context, bytes: Buffer): string {
   const id = createHash('sha256').update(bytes).digest('hex')
   const dir = filesDir(ctx)
   if (dir === null) held(ctx).set(id, bytes)
@@ -50,7 +55,19 @@ export function filePut(ctx: Context, caller: Caller, request: { name: string; t
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     if (!existsSync(join(dir, id))) writeFileSync(join(dir, id), bytes, { mode: 0o600 })
   }
-  return { id, name: request.name, type: request.type ?? 'application/octet-stream', size: bytes.length }
+  return id
+}
+
+/** A stored file's bytes by its ID, or null. For the board's own use: a caller reads through `fileGet`. */
+export function fileBytes(ctx: Context, id: string): Buffer | null {
+  if (!/^[0-9a-f]{64}$/.test(id)) return null
+  const dir = filesDir(ctx)
+  if (dir === null) return held(ctx).get(id) ?? null
+  try {
+    return readFileSync(join(dir, id))
+  } catch {
+    return null
+  }
 }
 
 /** A file, for a caller who can read the message that carries it. A file's ID alone opens nothing. */
@@ -58,16 +75,7 @@ export function fileGet(ctx: Context, caller: Caller, request: { message: number
   const message = messageFor(ctx, caller, request.message)
   const record = message.attachments.find((file) => file.id === request.id)
   if (!record || !/^[0-9a-f]{64}$/.test(request.id)) throw new Failure('not_found', `Message ${request.message} carries no such file.`)
-  const dir = filesDir(ctx)
-  let bytes: Buffer | undefined
-  if (dir === null) bytes = held(ctx).get(request.id)
-  else {
-    try {
-      bytes = readFileSync(join(dir, request.id))
-    } catch {
-      bytes = undefined
-    }
-  }
+  const bytes = fileBytes(ctx, request.id)
   if (!bytes) throw new Failure('not_found', `The board no longer has ${record.name}.`)
   return { ...record, data: bytes.toString('base64') }
 }

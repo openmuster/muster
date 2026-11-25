@@ -57,7 +57,7 @@ A claim's token never appears in an event a reader gets.
 | `schedule.created` | `thread`, `text`, `first`, `every`, `times`, `until` |
 | `schedule.canceled` | `id` |
 | `schedule.skipped` | `id`, `slot`: a slot too late to send |
-| `sync.delivered` | `id`, `key`, `external`: a message reached a platform |
+| `sync.delivered` | `id`, `key`, `external`: a message reached a platform. `files`: the platform's IDs for the files sent with it, if any |
 | `sync.failed` | `id`, `key`, `error`: it didn't, after five tries |
 | `schema.registered` | `name`, `version`, `schema` |
 | `budget.set` | `channel`, `usd` |

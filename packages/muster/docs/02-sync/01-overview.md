@@ -99,6 +99,56 @@ never needs it, so a broken sync file stops neither.
 
 A sync makes threads, not tasks. `mu tasks create <id>` makes one a task.
 
+## Files
+
+Files on a message follow it where the platform allows. This is covered by
+tests against stand-ins for each platform, and has not been run live.
+
+| | Comes in | Goes back |
+| --- | --- | --- |
+| [Slack](./04-slack.md) | Files on a message | Uploaded, and shared into the thread after the text |
+| [Linear](./03-linear.md) | Files uploaded to Linear and linked from the text | Uploaded to Linear, and linked from the text |
+| [GitHub](./02-github.md) | No: a link to an attachment stays in the text | No: GitHub has no upload API. The text names each file |
+
+The rules are the same for each platform:
+
+- **A file comes only from the platform's own file host**: `files.slack.com`
+  or `uploads.linear.app`, over https, with no redirect followed. A link to
+  anywhere else stays text and is never fetched, so a message can't make the
+  board fetch an address of its choosing. The platform's token goes only to
+  that host.
+- **The same limits as `--attach`**: up to 10 files of up to 25 MB each.
+  The board stops reading a file as soon as it passes 25 MB.
+- **A day's allowance per sync.** Anyone who can post in a synced place can
+  send files, so each sync brings in at most 500 MB of them a day (UTC).
+  Past that a file is named, not stored, and one with no size given is not
+  even fetched. Bytes count when they are stored, so deleting the message
+  gives none back. Set `"filesPerDayMB"` on the sync's entry in `sync.json`
+  to change it.
+- **Any content type.** The board keeps the type as data and only ever hands
+  a file out as bytes: it never shows one in a page.
+- **Nothing is lost without a word.** A file that is too big, on another
+  host, or that the platform would not hand over is named in a line at the
+  end of the text: `[file not imported: core.dump: 26.0 MB, over 25 MB]`.
+  Going out it reads `[file not sent: ...]`.
+- **No credential is kept.** What the board stores is the file, its name,
+  type and size. A file's platform URL leaves with the rest of the webhook
+  once it is imported.
+- **Once each way.** A file is fetched once, when its message is new: a
+  message the board already has, or one it sent, fetches nothing, and the
+  board knows the files it uploaded when they come back. Nothing is fetched
+  for a place that isn't mapped.
+
+A webhook is answered first and its files are fetched on the next tick of
+`mu serve` or the daemon, so a message with files arrives a moment after the
+rest. Replies after it in its thread wait for it. A tick fetches up to
+50 MB, and leaves the rest for the next one. A file that fails is tried
+again on five ticks, alone: the files that came are kept. Then the message
+comes without it and says so.
+
+Files added or removed by an edit don't follow it. Deleting a message on the
+board doesn't remove the files it put in a Slack thread.
+
 ## When delivery fails
 
 A delivery that fails is tried again on the next tick, and the messages after
@@ -125,6 +175,12 @@ printf %s "$text"
 
 It runs with `PATH` and `HOME` only. It sees a message's text, not the names
 of a platform's labels or assignees, which come in as labels.
+
+The filter sees the text, with the lines that name files not imported. It
+never sees a file or a file's name. So it decides first: a message it drops
+fetches nothing, and a message whose text it changes keeps none of its
+files, and says so: `[files not imported: the filter changed this message]`.
+Text it passes as it is, give or take a final newline, keeps its files.
 
 ## After downtime
 

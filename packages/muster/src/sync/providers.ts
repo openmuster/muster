@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { Failure } from '../failure.ts'
 import { channelPath } from '../model.ts'
-import { SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
+import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
+import { SEND_MS, type Inbound, type Provider, type Received, type Remote } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -82,6 +83,8 @@ export type GitHubOptions = {
 
 /** GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors. */
 export function github(options: GitHubOptions): Provider {
+  // GitHub has no API that attaches a file to an issue or a comment: each file is named, and stays on the board.
+  const named = (message: { text: string; attachments: { name: string; size: number }[] }, text: string) => withLines(text, message.attachments.map((file) => noteOut(`${file.name} (${sizeOf(file.size)})`, 'GitHub takes no uploads, it is on the board')))
   /**
    * An issue's or a pull request's labels and assignees, as GitHub lists them now. Every event about one
    * carries both whole, so the thread is made to say the same: `owns` is each list the item came with.
@@ -265,14 +268,14 @@ export function github(options: GitHubOptions): Provider {
         // A thread started on the board opens an issue: its first line is the title.
         const repo = target.place.split('|')[0]!
         const [title, ...rest] = message.text.split('\n')
-        const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: rest.join('\n').trim() }) })
+        const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
         return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${made.number}` } }
       }
       const [repo, number] = target.threadExternal.split('#')
       const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/${number}/comments`, {
         method: 'POST',
         headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' },
-        body: JSON.stringify({ body: message.text }),
+        body: JSON.stringify({ body: named(message, message.text) }),
       })
       return { external: `comment:${made.id}` }
     },
@@ -325,11 +328,20 @@ export function linear(options: LinearOptions): Provider {
   }
   /** An issue as the API lists it, in the shape its webhook has: its labels are a list there, not a page of one. */
   const listed = (issue: Record<string, any>) => (Array.isArray(issue.labels?.nodes) ? { ...issue, labels: issue.labels.nodes } : issue)
-  const postAs = (query: string, variables: unknown, fetcher: typeof fetch) => {
-    // A personal API key goes as it is; an OAuth token is a bearer token.
+  let organization: Promise<string> | undefined
+  // A personal API key goes as it is; an OAuth token is a bearer token.
+  const authorization = () => {
     const token = options.token!
-    const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
-    return send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+    return token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
+  }
+  /** Files uploaded to Linear, as the markdown links its text carries. Links anywhere else are only text. */
+  const uploads = (text: unknown): Remote[] | undefined => {
+    const found = [...String(text ?? '').matchAll(/!?\[([^\]\n]*)\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g)].map((match) => ({ url: match[2]!, name: match[1] || match[2]!.split('/').pop()! }))
+    const once = found.filter((file, index) => found.findIndex((other) => other.url === file.url) === index)
+    return once.length ? once : undefined
+  }
+  const postAs = (query: string, variables: unknown, fetcher: typeof fetch) => {
+    return send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
   }
   /** An issue as a thread's first message, as its webhook would have brought it, in the state it is in now. */
   const rootOf = (issue: Record<string, any>, id: string): Inbound => {
@@ -345,6 +357,7 @@ export function linear(options: LinearOptions): Provider {
       external: thread,
       text: `${issue.title ?? ''}\n\n${issue.description ?? ''}`.trim(),
       labels: { kind: 'issue', ref: String(issue.identifier ?? ''), ...(issue.state?.name ? { state: slug(String(issue.state.name)) } : {}), ...filing(listed(issue)).labels },
+      ...(uploads(issue.description) ? { files: uploads(issue.description)! } : {}),
     }
   }
   return {
@@ -362,7 +375,7 @@ export function linear(options: LinearOptions): Provider {
       const self = options.bot !== undefined && author === options.bot
       if (payload.type === 'Issue' && payload.action === 'create') {
         const thread = `issue:${data.id}`
-        return [{ id: delivery, author: String(data.creatorId ?? author), place: String(data.team?.key ?? ''), self, kind: 'root', thread, external: thread, text: `${data.title}\n\n${data.description ?? ''}`.trim(), labels: { kind: 'issue', ref: String(data.identifier ?? ''), ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filing(data).labels } }]
+        return [{ id: delivery, author: String(data.creatorId ?? author), place: String(data.team?.key ?? ''), self, kind: 'root', thread, external: thread, text: `${data.title}\n\n${data.description ?? ''}`.trim(), labels: { kind: 'issue', ref: String(data.identifier ?? ''), ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filing(data).labels }, ...(uploads(data.description) ? { files: uploads(data.description)! } : {}) }]
       }
       if (payload.type === 'Issue' && payload.action === 'update') {
         const filed = filing(data)
@@ -372,7 +385,7 @@ export function linear(options: LinearOptions): Provider {
         return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? '') } : {}) }]
       }
       if (payload.type === 'Comment' && payload.action === 'create') {
-        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? '') }]
+        return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: 'reply', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, text: String(data.body ?? ''), ...(uploads(data.body) ? { files: uploads(data.body)! } : {}) }]
       }
       return []
     },
@@ -388,6 +401,23 @@ export function linear(options: LinearOptions): Provider {
     mirrors(place) {
       const to = team(place)
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
+    },
+    async download(file, fetcher, limit) {
+      if (!options.token) throw refused('no token to fetch it with')
+      // Linear lists no uploads for a comment, so a link is all there is, and anyone who can comment writes it. The
+      // key fetches only what its own workspace holds: the first part of an upload's path is the workspace's ID.
+      organization ??= send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query: '{ organization { id } }' }) }).then((answer) => {
+        const id = answer?.data?.organization?.id
+        if (typeof id !== 'string' || !id) throw new Failure('platform_refused', 'Linear did not say which workspace the key is for.')
+        return id
+      })
+      const workspace = await organization.catch((error) => {
+        organization = undefined
+        throw error
+      })
+      const path = URL.canParse(file.url) ? new URL(file.url).pathname.split('/')[1] : undefined
+      if (path !== workspace) throw refused("not an upload of this board's Linear workspace")
+      return fetchFile(fetcher, file.url, { hosts: ['uploads.linear.app'], headers: { authorization: authorization() }, limit })
     },
     async catchUp(since, fetcher) {
       if (!options.token) return []
@@ -457,27 +487,51 @@ export function linear(options: LinearOptions): Provider {
         // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
         const { author, text, labels, place } = rootOf(comment.issue, '')
         const by = String(comment.user?.id ?? 'unknown')
-        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} } })
+        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} }, ...(uploads(comment.body) ? { files: uploads(comment.body)! } : {}) })
       }
       // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
       const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)
       return cuts.length ? { events: out, ...soonest(cuts) } : out
     },
-    async deliver(message, target, fetcher) {
+    async deliver(message, target, fetcher, read) {
       const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)
+      // Each file is uploaded to Linear's storage first, then linked from the text. The upload URL is signed by
+      // Linear and gets only the headers Linear gave for it, never the token.
+      const lines: string[] = []
+      for (const file of message.attachments) {
+        const bytes = read(file.id)
+        if (!bytes) {
+          lines.push(noteOut(file.name, 'the board no longer has it'))
+          continue
+        }
+        try {
+          const made = await post('mutation($type: String!, $name: String!, $size: Int!) { fileUpload(contentType: $type, filename: $name, size: $size) { success uploadFile { uploadUrl assetUrl headers { key value } } } }', { type: file.type, name: file.name, size: bytes.length })
+          const upload = made?.data?.fileUpload?.uploadFile
+          // The bytes go only to Linear's storage, with only the storage's own headers from Linear's answer.
+          const to = URL.canParse(String(upload?.uploadUrl)) ? new URL(String(upload.uploadUrl)) : null
+          if (!to || to.protocol !== 'https:' || to.hostname !== 'storage.googleapis.com' || to.port !== '' || to.username !== '' || !String(upload.assetUrl).startsWith('https://uploads.linear.app/')) throw new Failure('platform_refused', 'Linear gave no upload URL.')
+          const headers: Record<string, string> = { 'content-type': file.type, 'cache-control': 'public, max-age=31536000' }
+          for (const { key, value } of upload.headers ?? []) if (/^(x-goog-[a-z0-9-]+|content-disposition)$/i.test(String(key))) headers[String(key).toLowerCase()] = String(value)
+          const put = await fetcher(to.href, { method: 'PUT', headers, body: new Uint8Array(bytes), redirect: 'manual', signal: AbortSignal.timeout(SEND_MS) })
+          if (!put.ok) throw new Failure(`platform_${put.status}`, `Linear's storage answered ${put.status}.`)
+          lines.push(`${file.type.startsWith('image/') ? '!' : ''}[${file.name.replace(/[[\]\n]/g, '_')}](${upload.assetUrl})`)
+        } catch {
+          lines.push(noteOut(file.name, 'Linear did not take it'))
+        }
+      }
       if (target.threadExternal === null) {
         const found = await post('query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }', { key: target.place })
         const teamId = found?.data?.teams?.nodes?.[0]?.id
         if (!teamId) throw new Failure('platform_refused', `Linear has no team "${target.place}".`)
         const [title, ...rest] = message.text.split('\n')
-        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier state { name } } } }', { input: { teamId, title: title!.slice(0, 250), description: rest.join('\n').trim() } })
+        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier state { name } } } }', { input: { teamId, title: title!.slice(0, 250), description: withLines(rest.join('\n').trim(), lines) } })
         const created = made?.data?.issueCreate?.issue
         const issue = created?.id
         if (!issue) throw new Failure('platform_refused', 'Linear did not make the issue.')
         const labels: Record<string, string> = { kind: 'issue', ...(created.identifier ? { ref: String(created.identifier) } : {}), ...(created.state?.name ? { state: slug(String(created.state.name)) } : {}) }
         return { external: `issue:${issue}`, thread: `issue:${issue}`, labels }
       }
-      const made = await post('mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: message.text } })
+      const made = await post('mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: withLines(message.text, lines) } })
       const id = made?.data?.commentCreate?.comment?.id
       if (!id) throw new Failure('platform_refused', 'Linear did not make the comment.')
       return { external: `comment:${id}` }
@@ -525,10 +579,21 @@ type SlackPage = { messages?: Record<string, any>[]; has_more?: boolean; respons
 /** Slack: messages in mapped channels come in as threads, and board replies go back into the Slack thread. */
 export function slack(options: SlackOptions): Provider {
   const now = options.now ?? (() => Date.now())
+  const base = options.api ?? 'https://slack.com/api'
+  /** The files on a message. One Slack only links to, or no longer offers, is named and not fetched. */
+  const filesOf = (files: unknown): Remote[] | undefined => {
+    if (!Array.isArray(files) || files.length === 0) return undefined
+    return files.map((file: Record<string, any>) => {
+      const url = String(file.url_private_download ?? file.url_private ?? '')
+      const outside = file.mode === 'external' || file.is_external === true || file.filetype === 'remote'
+      const skip = outside ? 'a link to somewhere outside Slack' : !url || file.mode === 'tombstone' || file.mode === 'hidden_by_limit' ? 'Slack does not offer it' : undefined
+      return { url, id: String(file.id ?? ''), name: String(file.name ?? file.title ?? file.id ?? 'file'), ...(file.mimetype ? { type: String(file.mimetype) } : {}), ...(typeof file.size === 'number' ? { size: file.size } : {}), ...(skip ? { skip } : {}) }
+    })
+  }
   const isSelf = (message: Record<string, any>) => message.bot_id !== undefined && (options.bot === undefined || message.bot_id === options.bot)
   /** A Web API read. Slack says no with a 200 and `ok: false`, which is a failure here too, never "nothing new". */
   const api = async (fetcher: typeof fetch, method: string, query: Record<string, string>): Promise<SlackPage> => {
-    const body = await send(fetcher, `${options.api ?? 'https://slack.com/api'}/${method}?${new URLSearchParams(query)}`, { headers: { authorization: `Bearer ${options.token}` } })
+    const body = await send(fetcher, `${base}/${method}?${new URLSearchParams(query)}`, { headers: { authorization: `Bearer ${options.token}` } })
     if (body.ok !== true) throw new Failure(`slack_${body.error ?? 'error'}`, `Slack refused ${method}: ${body.error ?? 'unknown'}.`)
     return body as SlackPage
   }
@@ -543,9 +608,10 @@ export function slack(options: SlackOptions): Provider {
     external: `${channel}:${each.ts}`,
     text: String(each.text ?? ''),
     ...(parent ? { parent } : {}),
+    ...(filesOf(each.files) ? { files: filesOf(each.files)! } : {}),
   })
   // Joins, topic changes and replies also sent to the channel: what a webhook ignores, this does too.
-  const isPlain = (each: Record<string, any>) => each.subtype === undefined && (each.thread_ts === undefined || each.thread_ts === each.ts)
+  const isPlain = (each: Record<string, any>) => (each.subtype === undefined || each.subtype === 'file_share') && (each.thread_ts === undefined || each.thread_ts === each.ts)
   /** Whether a thread may have had replies after a point. A parent that doesn't say when its last came is read to find out. */
   const repliedAfter = (each: Record<string, any>, from: number) => Number(each.reply_count) > 0 && (each.latest_reply === undefined || fromTs(each.latest_reply) > from)
   /** A thread's replies after a point, oldest first, in up to `pages` requests; `done` is false if there were more. */
@@ -559,7 +625,7 @@ export function slack(options: SlackOptions): Provider {
       const got = await api(fetcher, 'conversations.replies', { channel, ts: parent.ts, oldest: toTs(from), limit: '200', ...(cursor ? { cursor } : {}) })
       used++
       for (const reply of got.messages ?? []) {
-        if (reply.ts !== parent.ts && fromTs(reply.ts) > from && reply.subtype === undefined) out.push(inbound(channel, reply, parent.ts, opener))
+        if (reply.ts !== parent.ts && fromTs(reply.ts) > from && (reply.subtype === undefined || reply.subtype === 'file_share')) out.push(inbound(channel, reply, parent.ts, opener))
       }
       cursor = got.has_more ? (got.response_metadata?.next_cursor ?? '') : ''
       if (!cursor) return { events: out, used, done: true }
@@ -631,7 +697,8 @@ export function slack(options: SlackOptions): Provider {
       if (event.subtype === 'message_deleted') {
         return [{ id: String(payload.event_id ?? `${event.channel}:${event.ts}`), author: String(event.previous_message?.user ?? 'unknown'), place: String(event.channel), self: false, kind: 'delete', thread: `${event.channel}:${event.previous_message?.thread_ts ?? event.deleted_ts}`, external: `${event.channel}:${event.deleted_ts}` }]
       }
-      if (event.subtype !== undefined) return []
+      // A message with files is a `file_share`; any other subtype is Slack's own.
+      if (event.subtype !== undefined && event.subtype !== 'file_share') return []
       const root = event.thread_ts === undefined || event.thread_ts === event.ts
       return [{
         id: String(payload.event_id ?? `${event.channel}:${event.ts}`),
@@ -642,6 +709,7 @@ export function slack(options: SlackOptions): Provider {
         thread: `${event.channel}:${event.thread_ts ?? event.ts}`,
         external: `${event.channel}:${event.ts}`,
         text: String(event.text ?? ''),
+        ...(filesOf(event.files) ? { files: filesOf(event.files)! } : {}),
       }]
     },
     channelFor(place) {
@@ -655,11 +723,11 @@ export function slack(options: SlackOptions): Provider {
     },
     async update(external, text, _place, fetcher) {
       const [channel, ts] = external.split(':')
-      await send(fetcher, `${options.api ?? 'https://slack.com/api'}/chat.update`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts, text }) })
+      await send(fetcher, `${base}/chat.update`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts, text }) })
     },
     async remove(external, _place, fetcher) {
       const [channel, ts] = external.split(':')
-      await send(fetcher, `${options.api ?? 'https://slack.com/api'}/chat.delete`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts }) })
+      await send(fetcher, `${base}/chat.delete`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts }) })
     },
     /**
      * Each mapped channel's history since a point, oldest first, and the new replies in its threads. A tick that
@@ -713,15 +781,56 @@ export function slack(options: SlackOptions): Provider {
       const to = options.channels[place]
       return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
-    async deliver(message, target, fetcher) {
+    async download(file, fetcher, limit) {
+      if (!options.token) throw refused('no token to fetch it with')
+      const got = await fetchFile(fetcher, file.url, { hosts: ['files.slack.com'], headers: { authorization: `Bearer ${options.token}` }, limit, ...(file.size !== undefined ? { size: file.size } : {}) })
+      // A web page in place of a file that isn't one is likely Slack's sign-in page: the token can't read files.
+      if ((got.type ?? '').startsWith('text/html') && !(file.type ?? '').startsWith('text/html')) throw refused('Slack sent a page, not the file: does the app have files:read?')
+      if (file.size !== undefined && got.bytes.length !== file.size) throw refused(`Slack sent ${sizeOf(got.bytes.length)}, not the ${sizeOf(file.size)} it named`)
+      return got
+    },
+    async deliver(message, target, fetcher, read) {
       const [channel, ts] = (target.threadExternal ?? target.place).split(':')
-      const made = await send(fetcher, `${options.api ?? 'https://slack.com/api'}/chat.postMessage`, {
+      const auth = { authorization: `Bearer ${options.token}` }
+      // Each file's bytes go up first, so a retry never posts the text twice; they are shared into the thread last.
+      const uploaded: { id: string; title: string }[] = []
+      const lines: string[] = []
+      for (const file of message.attachments) {
+        const bytes = read(file.id)
+        if (!bytes) {
+          lines.push(noteOut(file.name, 'the board no longer has it'))
+          continue
+        }
+        try {
+          const got = await send(fetcher, `${base}/files.getUploadURLExternal`, { method: 'POST', headers: { ...auth, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ filename: file.name, length: String(bytes.length) }).toString() })
+          const to = new URL(String(got.upload_url ?? 'about:blank'))
+          // The bytes go only to Slack's own file host.
+          if (got.ok !== true || to.protocol !== 'https:' || to.hostname !== 'files.slack.com') throw new Failure('platform_refused', 'Slack gave no upload URL.')
+          const put = await fetcher(to.href, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: new Uint8Array(bytes), redirect: 'manual', signal: AbortSignal.timeout(SEND_MS) })
+          if (!put.ok) throw new Failure(`platform_${put.status}`, `Slack answered ${put.status}.`)
+          uploaded.push({ id: String(got.file_id), title: file.name })
+        } catch {
+          lines.push(noteOut(file.name, 'Slack did not take it'))
+        }
+      }
+      const text = withLines(message.text, lines)
+      const made = await send(fetcher, `${base}/chat.postMessage`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ channel, thread_ts: ts, text: message.text }),
+        headers: { ...auth, 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ channel, thread_ts: ts, text }),
       })
       if (made.ok !== true) throw new Failure(`slack_${made.error ?? 'error'}`, `Slack refused the message: ${made.error ?? 'unknown'}.`)
-      return { external: `${channel}:${made.ts}`, ...(target.threadExternal === null ? { thread: `${channel}:${made.ts}` } : {}) }
+      if (uploaded.length) {
+        try {
+          const shared = await send(fetcher, `${base}/files.completeUploadExternal`, { method: 'POST', headers: { ...auth, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ files: uploaded, channel_id: channel, thread_ts: ts ?? made.ts }) })
+          if (shared.ok !== true) throw new Failure(`slack_${shared.error ?? 'error'}`, 'Slack did not share the files.')
+        } catch {
+          // The text is posted and is the record: it says which files didn't follow. Best effort.
+          await send(fetcher, `${base}/chat.update`, { method: 'POST', headers: { ...auth, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts: made.ts, text: withLines(text, uploaded.map((file) => noteOut(file.title, 'Slack did not take it'))) }) }).catch(() => undefined)
+          uploaded.length = 0
+        }
+      }
+      return { external: `${channel}:${made.ts}`, ...(target.threadExternal === null ? { thread: `${channel}:${made.ts}` } : {}), ...(uploaded.length ? { files: uploaded.map((file) => file.id) } : {}) }
     },
   }
 }

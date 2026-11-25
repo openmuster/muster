@@ -40,6 +40,29 @@ than five minutes is refused however well it is signed.
 
 Messages from the app's own bot, named by `bot`, are not imported back.
 
+## Files
+
+- **In:** a file on a Slack message is fetched from `files.slack.com` with
+  the bot token and attached to the message. It needs `files:read`. A web
+  page in place of the file is taken to be Slack's sign-in page, and the
+  message says to check that scope. Slack's docs don't say whether
+  `files.slack.com` redirects; the board follows no redirect, and a file
+  Slack redirects is named instead. Not tried against Slack. A file
+  Slack only links to (from Google Drive, say) is named, not fetched.
+- **Out:** each file on a board message is uploaded with
+  `files.getUploadURLExternal`, then shared into the Slack thread after the
+  text with `files.completeUploadExternal`. It needs `files:write`. When the
+  board message is a new thread, its files are the thread's first reply.
+
+When the shared files come back as a message with no text, in the thread
+they were sent to, the board knows them by their IDs and doesn't import
+them back, whether or not Slack marks the message as the bot's. Someone who
+shares one of them again, with words of their own, is imported. Deleting the board
+message removes its text from Slack, not the files. An app made before
+files synced needs the two scopes added under **OAuth & Permissions**, and
+reinstalling. See
+[Files](./01-overview.md#files) for the limits.
+
 ## After downtime
 
 Slack retries an event that wasn't answered three times, within minutes.
@@ -49,8 +72,9 @@ threads started meanwhile: see [After downtime](./01-overview.md#after-downtime)
 for when it starts, waits and goes on. A message or reply posted while the
 board was down arrives once: one the board already has, whether it came in by
 webhook or the board sent it, is not imported again, and the app's own
-messages are skipped, as they are from webhooks. Edits and deletes made
-meanwhile are not read.
+messages are skipped, as they are from webhooks. Files on a message read
+this way are fetched as a webhook's would be, with the same limits. Edits
+and deletes made meanwhile are not read.
 
 - A tick makes up to 24 requests for what was posted while down, shared by the
   channels, at least three each, 200 messages a request. A longer gap is read
@@ -93,6 +117,8 @@ oauth_config:
       - channels:history
       - groups:history
       - chat:write
+      - files:read
+      - files:write
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: false

@@ -277,7 +277,8 @@ the container image; `mu conformance`; the inspector and `mu demo`; `mu run`
 with a local runner for Claude Code, Codex and any command, session resume,
 and a choice of a Vercel or Cloudflare sandbox; sync for GitHub, Linear and
 Slack in both directions, with edits, deletes, a filter for incoming text, and
-a catch-up read from GitHub, Linear and Slack; skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
+a catch-up read from GitHub, Linear and Slack, and files with Slack and
+Linear both ways (tests only, not run live); skills, docs, and the swarm and factory apps. `packages/muster/docs` describes
 each.
 
 Driven in a real browser by a test (`pnpm test:browser`, Chromium through
@@ -366,7 +367,10 @@ Different from the plan:
 
 Not built:
 
-- Sync of files.
+- Files with GitHub, either way. GitHub has no API to attach a file to an
+  issue or comment, and documents none for a token to read an attachment in a
+  private repository. A board file is named in the comment instead; an
+  attachment that comes in stays a link in the text.
 
 ## 10. What a session costs to start
 

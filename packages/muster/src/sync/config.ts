@@ -38,13 +38,18 @@ export function loadSync(path = syncPath(), env: NodeJS.ProcessEnv = process.env
       },
     }
   }
+  const perDay = (key: string, value: unknown) => {
+    if (value === undefined) return {}
+    if (typeof value !== 'number' || !(value > 0)) throw new Failure('invalid_config', `"${key}.filesPerDayMB" in ${path} is a number of megabytes, more than 0.`)
+    return { filesPerDay: Math.floor(value * 1024 * 1024) }
+  }
   const out: Sync = {}
   for (const [key, entry] of Object.entries(parsed)) {
     if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(key)) throw new Failure('invalid_config', `"${key}" in ${path} isn't a sync name: lowercase letters, numbers, "-" and "_".`)
     const shared = { secret: secret(key, 'secret', entry.secret, true)!, ...(secret(key, 'token', entry.token, false) ? { token: secret(key, 'token', entry.token, false)! } : {}), ...(entry.bot ? { bot: String(entry.bot) } : {}) }
-    if (entry.type === 'github') out[key] = { ...github({ ...shared, repos: entry.repos ?? {} }), ...filterOf(key, entry.filter) }
-    else if (entry.type === 'linear') out[key] = { ...linear({ ...shared, teams: entry.teams ?? {} }), ...filterOf(key, entry.filter) }
-    else if (entry.type === 'slack') out[key] = { ...slack({ ...shared, channels: entry.channels ?? {} }), ...filterOf(key, entry.filter) }
+    if (entry.type === 'github') out[key] = { ...github({ ...shared, repos: entry.repos ?? {} }), ...filterOf(key, entry.filter), ...perDay(key, entry.filesPerDayMB) }
+    else if (entry.type === 'linear') out[key] = { ...linear({ ...shared, teams: entry.teams ?? {} }), ...filterOf(key, entry.filter), ...perDay(key, entry.filesPerDayMB) }
+    else if (entry.type === 'slack') out[key] = { ...slack({ ...shared, channels: entry.channels ?? {} }), ...filterOf(key, entry.filter), ...perDay(key, entry.filesPerDayMB) }
     else throw new Failure('invalid_config', `"${key}.type" in ${path} is one of: github, linear, slack.`)
   }
   return out

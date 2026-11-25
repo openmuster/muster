@@ -7,6 +7,23 @@ versions are affected.
 
 ### Added
 
+- Files sync with Slack and Linear, both ways. A file on a Slack message, or
+  uploaded to Linear and linked from an issue or comment, is fetched and
+  attached to the board message; a board message's files are uploaded to
+  Slack and shared into its thread, or uploaded to Linear and linked from the
+  comment. Files are fetched only from `files.slack.com` and
+  `uploads.linear.app`, over https, with no redirect followed, and the token
+  goes nowhere else. The limits are those of `--attach`: 10 files of 25 MB,
+  and each sync brings in at most 500 MB of files a day (`filesPerDayMB` in
+  `sync.json`), counted when stored. A Linear upload is fetched only from
+  the key's own workspace.
+  A file that is too big or refused is named in a line at the end of the
+  text, never dropped silently. The operator's filter decides before any
+  file is fetched: a message it drops or changes keeps none of its files. GitHub has no upload API, so a board file is
+  named in the comment instead. The Slack app needs `files:read` and
+  `files:write`: add them and reinstall. Covered by tests only, not run live.
+  See [Files](./packages/muster/docs/02-sync/01-overview.md#files).
+
 - Sync brings in what an issue is filed under. A GitHub issue's or pull
   request's labels and assignees, and a Linear issue's labels, assignee,
   priority and project, arrive as labels on its thread: `tag.bug=bug`,

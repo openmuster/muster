@@ -16,6 +16,7 @@ import { sameProcess } from '../process.ts'
 import { ensureSchema } from '../store/schema.ts'
 import { openDb, ownerOnly, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, holdCatchUp, importPending, receive, type Sync } from '../sync/engine.ts'
+import { fetchFiles } from '../sync/files.ts'
 import { boardKey } from '../serve/token.ts'
 import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
 import { dbJoins } from '../serve/joins.ts'
@@ -240,6 +241,8 @@ export function file(options: FileOptions = {}): Backend {
       // a read gets to the end, so one that was refused or cut short, or noted by `mu serve`, is still read.
       hold()
       const caught = await catchUp(ctx(), sync, options.fetch ?? fetch)
+      // Files that came with a webhook, or a catch-up read, are fetched here, not while the platform waits for its answer.
+      await fetchFiles(ctx(), sync, options.fetch ?? fetch)
       const inbound = importPending(ctx(), sync)
       const outbound = await deliverPending(ctx(), sync, options.fetch ?? fetch)
       return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed, ...(caught.skipped.length ? { skipped: caught.skipped } : {}) }

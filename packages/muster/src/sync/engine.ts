@@ -1,10 +1,12 @@
 import { Failure } from '../failure.ts'
 import type { Context } from '../core/context.ts'
 import { findMessage } from '../core/context.ts'
+import { fileBytes } from '../core/files.ts'
 import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
 import { LIMITS, labelKey, labelValue, type By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
+import { FILTERED, withLines } from './files.ts'
 import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
 
 export type Sync = Record<string, Provider>
@@ -88,6 +90,11 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
     const event = JSON.parse(row.payload) as Inbound
     const lane = `${row.key}\n${event.thread}`
     if (stuck.has(lane)) continue
+    // Its files are fetched on the ticker first; the rest of its thread waits for it.
+    if (event.files?.length) {
+      stuck.add(lane)
+      continue
+    }
     try {
       ctx.db.write(() => {
         importOne(ctx, provider, row.key, event)
@@ -121,10 +128,18 @@ function changedSince(ctx: Context, message: number, name: string, at: string | 
 function importOne(ctx: Context, provider: Provider, key: string, event: Inbound) {
   // The app's own writes come back as webhooks; so does what the board itself delivered.
   if (event.self) return
+  // What its files gave: those that came, and a line for each that didn't, so none is lost without a word.
+  let attachments = event.fetched?.attachments ?? []
+  if (event.text !== undefined) event = { ...event, text: withLines(event.text, event.fetched?.notes ?? []) }
   if (event.text !== undefined && provider.filter) {
+    // The filter sees the text and the lines about files, never the files: one that drops or changes the
+    // message can't vouch for them, so none of them is kept, and the message says so in words the filter can't touch.
     const kept = provider.filter(event.text)
     if (kept === null) return
-    event = { ...event, text: kept }
+    if (kept.trimEnd() !== event.text.trimEnd() && (attachments.length > 0 || event.fetched?.withheld)) {
+      attachments = []
+      event = { ...event, text: withLines(kept, [FILTERED]) }
+    } else event = { ...event, text: kept }
   }
   if (event.kind === 'edit' || event.kind === 'delete') {
     const link = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.external) as { message: number } | undefined
@@ -141,6 +156,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     return
   }
   if (ctx.db.raw.prepare('select 1 from links where key = ? and external = ?').get(key, event.external) && event.kind !== 'labels') return
+  const text = event.text ?? ''
   const at = ctx.now().toISOString()
   const by: By = { principal: event.author ? `${key}:user:${event.author}` : key, profile: null }
   let root = ctx.db.raw.prepare('select message from links where key = ? and external = ?').get(key, event.thread) as { message: number } | undefined
@@ -198,7 +214,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
         by,
         channel,
         thread: 'self',
-        data: { re: null, replyTo: null, text: event.text ?? '', labels: { ...taken({ source: key, ...(event.labels ?? {}) }), source: key }, attachments: [], noSync: false, mentions: [], origin: { key, external: event.kind === 'root' ? event.external : event.thread, thread: event.thread, place: event.place } },
+        data: { re: null, replyTo: null, text: event.kind === 'root' ? text : (event.text ?? ''), labels: { ...taken({ source: key, ...(event.labels ?? {}) }), source: key }, attachments: event.kind === 'root' ? attachments : [], noSync: false, mentions: [], origin: { key, external: event.kind === 'root' ? event.external : event.thread, thread: event.thread, place: event.place } },
       },
       at,
     )
@@ -213,7 +229,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
       by,
       channel: parent.channel,
       thread: parent.thread,
-      data: { re: parent.thread, replyTo: null, text: event.text ?? '', labels: {}, attachments: [], noSync: false, mentions: [], origin: { key, external: event.external, thread: event.thread, place: event.place } },
+      data: { re: parent.thread, replyTo: null, text, labels: {}, attachments, noSync: false, mentions: [], origin: { key, external: event.external, thread: event.thread, place: event.place } },
     },
     at,
   )
@@ -273,12 +289,12 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
         ctx.db.write(() => ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString()))
-        const sent = await provider.deliver(message, { place, threadExternal }, fetcher)
+        const sent = await provider.deliver(message, { place, threadExternal }, fetcher, (id) => fileBytes(ctx, id))
         ctx.db.write(() => {
           // Recorded and released at once: a webhook for it, imported after this, finds the link.
           ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
           const at = ctx.now().toISOString()
-          append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place } }, at)
+          append(ctx.db, { type: 'sync.delivered', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, external: sent.external, thread: sent.thread ?? threadExternal, place, ...(sent.files?.length ? { files: sent.files } : {}) } }, at)
           if (isRoot && sent.labels) {
             // The labels an imported thread would have had, so a reader can't tell where a thread started.
             const current = findMessage(ctx.db, message.id)!
