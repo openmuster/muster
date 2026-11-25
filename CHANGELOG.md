@@ -64,6 +64,15 @@ versions are affected.
 
 ### Fixed
 
+- Linear: a change to an issue made before sync was set up, such as the label
+  `agent`, now starts its thread from the update, with the issue's title,
+  description and labels, and then applies the change. Before, the webhook
+  was dropped, so labelling an older issue did nothing and the card queue
+  couldn't start a card from it. A comment on such an issue now starts its
+  thread from the issue's title, with the comment as its first reply; before,
+  the comment was both the thread's first message and a reply. Issues in
+  unmapped teams still start nothing. Covered by tests, not run live. See
+  [Linear](./packages/muster/docs/02-sync/03-linear.md#an-issue-from-before-sync).
 - A registered workflow's run that was summed up as failed, and then went on
   after someone reopened its failed task (`mu tasks reopen`), now gets a new
   summary once it settles again, such as `implement finished (updated): 3

@@ -55,9 +55,26 @@ set by hand on a synced thread is replaced, or taken off when the issue has
 none. All of this holds for a thread started on the board too, once it has
 opened its issue.
 
-Not imported: an assignee's email. A webhook about a change to an issue the
-board has never seen, one made before sync was set up, is dropped: its thread
-starts when the issue is created, or when [catching up](#catching-up) reads it.
+Not imported: an assignee's email.
+
+### An issue from before sync
+
+An issue made before sync was set up has no thread until something happens
+to it in a mapped team:
+
+- **A change to it** (a label, its state, an assignee, a priority) starts
+  its thread from the update, which carries the whole issue: the title and
+  description, by whoever opened it, with `kind`, `ref`, `state` and what it
+  is filed under, as a new issue's thread would be and as
+  [catching up](#catching-up) would start it. Then the change is applied.
+  Two updates for it give one thread. An upload linked from its description
+  stays a link in the text; it isn't fetched.
+- **A comment on it** starts its thread from what the comment's webhook
+  carries: the issue's title and `ref`, not its description or who opened
+  it. That thread is put down to `lin`, its text is the title alone, and the
+  description doesn't arrive later. The comment is its first reply.
+
+An issue in a team that isn't mapped starts nothing.
 
 ## What goes back
 

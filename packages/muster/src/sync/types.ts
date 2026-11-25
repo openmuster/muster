@@ -34,7 +34,8 @@ export type Inbound = {
   self?: boolean
   /**
    * The platform thread itself, when the event is about one the board may never have seen (a comment on
-   * an issue opened before sync, or while the board was down). The board starts the thread from it first.
+   * an issue opened before sync, or while the board was down). The board starts the thread from it first. An
+   * empty `author` is a platform that doesn't say who opened it: the thread is put down to the sync itself.
    */
   parent?: { author: string; text: string; labels: Record<string, string> }
   /** Files the message carries on the platform, still to be fetched. Never holds a credential. */

@@ -254,6 +254,17 @@ describe('the queue template: a card starts a run', () => {
     expect((await requests()).map((each) => each.thread)).toEqual([card.id, card.id])
   }, 30_000)
 
+  it('starts a card for an issue made before sync was set up, once it is labelled', async () => {
+    const { team, lin, tick, requests } = setup()
+    await tick()
+    await lin(labelled(['Agent'], '2026-11-25T10:00:00Z'))
+    await tick()
+    const cards = (await team.readChannel({ channel: 'cards' })).threads.map((thread) => thread.message)
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.text).toBe('Fix the login redirect\n\nIt loops.')
+    expect((await requests()).map((each) => each.thread)).toEqual([cards[0]!.id])
+  }, 30_000)
+
   it('starts a card labelled while the daemon was down, once catching up reads it, new or already on the board', async () => {
     const { lin, tick, requests, listed, restart } = setup()
     await tick()

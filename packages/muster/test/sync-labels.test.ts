@@ -111,6 +111,68 @@ describe('sync: what a Linear issue is filed under', () => {
   })
 })
 
+describe('sync: a Linear issue the board never saw', () => {
+  // An issue made before sync was set up, as Linear's update webhook carries it: the whole issue, with what changed.
+  const older = (more: Record<string, unknown> = {}) => linearIssue({ id: 'iss-16', identifier: 'ENG-16', title: 'Older than sync', description: 'Made in October.', labels: [{ id: 'l-1', name: 'agent' }], labelIds: ['l-1'], updatedFrom: { labelIds: [] }, ...more })
+  const threads = async (team: ReturnType<typeof setup>['team'], channel: string) => (await team.readChannel({ channel })).threads.map((thread) => thread.message)
+  const posted = async (team: ReturnType<typeof setup>['team']) => (await team.events({ after: 0, limit: 1000 })).events.filter((event) => event.type === 'message.posted')
+
+  it('a label put on it starts its thread from the update, with its title, text and labels, written by whoever opened it', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'update', actor: { id: 'u-maya' }, data: older({ userId: 'u-maya' }) })
+    const roots = await threads(team, 'eng')
+    expect(roots).toHaveLength(1)
+    expect(roots[0]).toMatchObject({ text: 'Older than sync\n\nMade in October.', by: { principal: 'lin:user:u-nico' } })
+    expect(roots[0]!.labels).toEqual({ kind: 'issue', ref: 'ENG-16', state: 'todo', source: 'lin', 'tag.agent': 'agent' })
+    expect((await team.readThread({ id: roots[0]!.id })).replies).toEqual([])
+  })
+
+  it("starts nothing for a team that isn't mapped", async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'update', data: older({ team: { key: 'OPS' } }) })
+    expect(await posted(team)).toEqual([])
+  })
+
+  it('two updates for it give one thread, filed as the later one says', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'update', data: older() })
+    await lin({ type: 'Issue', action: 'update', data: older({ state: { name: 'In Progress' }, labels: [{ id: 'l-1', name: 'agent' }, { id: 'l-2', name: 'Bug' }], labelIds: ['l-1', 'l-2'] }) })
+    const roots = await threads(team, 'eng')
+    expect(roots).toHaveLength(1)
+    expect(roots[0]!.labels).toMatchObject({ ref: 'ENG-16', state: 'in-progress', 'tag.agent': 'agent', 'tag.bug': 'bug' })
+    expect(await posted(team)).toHaveLength(1)
+  })
+
+  it('an update that leaves out what the issue is starts nothing: a thread with no title is worse than none', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'update', data: { id: 'iss-16', team: { key: 'ENG' }, state: { name: 'Done' } } })
+    expect(await posted(team)).toEqual([])
+  })
+
+  it('an update for an issue the board has changes only its labels, as before', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'create', data: linearIssue() })
+    await lin({ type: 'Issue', action: 'update', data: linearIssue({ title: 'Renamed in Linear', labels: [{ name: 'Agent' }], labelIds: ['l-1'] }) })
+    const roots = await threads(team, 'eng')
+    expect(roots).toHaveLength(1)
+    expect(roots[0]).toMatchObject({ text: 'SAML sign-in\n\nOkta first', labels: { ref: 'ENG-42', 'tag.agent': 'agent' } })
+    expect(await posted(team)).toHaveLength(1)
+  })
+
+  it('a comment on it starts its thread from the title the comment carries, and lands once, as a reply', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Comment', action: 'create', data: { id: 'c-1', body: 'still happening', issueId: 'iss-16', userId: 'u-maya', issue: { id: 'iss-16', identifier: 'ENG-16', title: 'Older than sync', team: { key: 'ENG' } } } })
+    const roots = await threads(team, 'eng')
+    expect(roots).toHaveLength(1)
+    expect(roots[0]).toMatchObject({ text: 'Older than sync', by: { principal: 'lin' }, labels: { kind: 'issue', ref: 'ENG-16', source: 'lin' } })
+    expect((await team.readThread({ id: roots[0]!.id })).replies.map((reply) => [reply.text, reply.by.principal])).toEqual([['still happening', 'lin:user:u-maya']])
+    // A label put on it next files the same thread.
+    await lin({ type: 'Issue', action: 'update', data: older() })
+    expect(await threads(team, 'eng')).toHaveLength(1)
+    expect((await threads(team, 'eng'))[0]!.labels).toMatchObject({ 'tag.agent': 'agent' })
+  })
+})
+
 describe('sync: what a GitHub issue or pull request is filed under', () => {
   it('an issue arrives with its labels and assignees, and labelling, unlabelling, assigning and unassigning it change them', async () => {
     const { gh, labels } = setup()
