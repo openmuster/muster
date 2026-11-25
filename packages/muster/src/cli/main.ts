@@ -205,10 +205,12 @@ const filterOf = (parsed: Parsed, channelAt: number): Filter => {
   const types = list(parsed.flags, 'type')
   if (types.length) filter.types = types
   if (on(parsed.flags, 'root')) filter.root = true
+  const kinds = list(parsed.flags, 'kind')
+  if (kinds.length) filter.kinds = kinds
   return filter
 }
 
-const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'for', 'after', 'timeout', 'last'], many: ['label', 'type'], bool: ['root'] }
+const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'for', 'after', 'timeout', 'last'], many: ['label', 'type', 'kind'], bool: ['root'] }
 
 type Command = { spec: Spec; run: (run: Run, parsed: Parsed) => Promise<number | void> }
 
@@ -1085,7 +1087,7 @@ const commands: Record<string, Command> = {
 
   tasks: {
     spec: {
-      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key', 'by'],
+      value: ['state', 'limit', 'for', 'lease', 'ready', 'wait', 'result', 'kind', 'file', 'idempotency-key', 'by', 'hold', 'reason'],
       many: ['label', 'needs', 'from'],
       bool: ['claim', 'no-sync', 'round', 'pool', 'none', 'no-count', 'latest'],
     },
@@ -1185,7 +1187,11 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
     case 'create': {
       const needs = list(parsed.flags, 'needs').map((need) => id(need, 'a task'))
       const assignee = str(parsed.flags, 'for')
-      const common = { ...(needs.length ? { needs } : {}), ...(assignee !== undefined ? { for: assignee } : {}), ...(on(parsed.flags, 'claim') ? { claim: { ...lease(parsed.flags), ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}) } } : {}), ...key(parsed.flags) }
+      const holdKind = str(parsed.flags, 'hold')
+      const holdReason = str(parsed.flags, 'reason')
+      if (holdReason !== undefined && holdKind === undefined) throw misuse('invalid_args', '--reason says why a task is held: give --hold <kind> with it.')
+      const hold = holdKind === undefined ? {} : { hold: { kind: holdKind, ...(holdReason !== undefined ? { reason: holdReason } : {}) } }
+      const common = { ...hold, ...(needs.length ? { needs } : {}), ...(assignee !== undefined ? { for: assignee } : {}), ...(on(parsed.flags, 'claim') ? { claim: { ...lease(parsed.flags), ...(chosenClaim(run) !== undefined ? { token: chosenClaim(run) } : {}) } } : {}), ...key(parsed.flags) }
       const planFile = str(parsed.flags, 'file')
       if (planFile !== undefined && parsed.positionals[2] === undefined && target !== undefined && !/^#?[1-9][0-9]*$/.test(target)) {
         let source: string
@@ -1200,6 +1206,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
           ...list(parsed.flags, 'needs').flatMap((need) => ['--needs', need]),
           ...(assignee !== undefined ? ['--for', assignee] : []),
           ...(on(parsed.flags, 'claim') ? ['--claim'] : []),
+          ...(holdKind !== undefined ? ['--hold', holdKind] : []),
           ...(on(parsed.flags, 'no-sync') ? ['--no-sync'] : []),
         ]
         let plan: PlanTask[]
@@ -1253,7 +1260,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
     }
     case 'fail': {
       const task = id(target, 'a task')
-      const reason = parsed.positionals[2]
+      const reason = parsed.positionals[2] ?? str(parsed.flags, 'reason')
       if (reason === undefined) throw misuse('missing_reason', 'Say why: mu tasks fail 812 "the endpoint was removed".')
       const failed = await run.team.taskFail({ ...held(task), reason, ...(on(parsed.flags, 'no-count') ? { counts: false } : {}) })
       dropClaim(me, task)
@@ -1261,7 +1268,7 @@ async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
     }
     case 'block': {
       const task = id(target, 'a task')
-      const reason = parsed.positionals[2]
+      const reason = parsed.positionals[2] ?? str(parsed.flags, 'reason')
       const kind = str(parsed.flags, 'kind')
       const blocked = await run.team.taskBlock({ ...held(task), ...(reason !== undefined ? { reason } : {}), ...(kind !== undefined ? { kind } : {}) })
       dropClaim(me, task)

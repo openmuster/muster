@@ -49,6 +49,7 @@ describe('watchers in code', () => {
       [{ lead: { tail: {}, run: () => {}, timeout: 0 } }, /Watcher "lead" has a "timeout"/],
       [{ lead: { tail: {}, run: () => {}, coalesce: -1 } }, /Watcher "lead" has a "coalesce"/],
       [{ lead: { tail: { root: 'yes' }, run: () => {} } }, /Watcher "lead" has a "root"/],
+      [{ lead: { tail: { kinds: ['Backlog'] }, run: () => {} } }, /Watcher "lead" has "kinds"/],
     ]
     for (const [watch, message] of bad) {
       let thrown: unknown
@@ -69,6 +70,18 @@ describe('watchers in code', () => {
     const fresh = await team.post({ channel: 'work/api', text: 'new' })
     expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
     expect(seen).toEqual([fresh.id])
+  })
+
+  it('a watcher in code that leaves out a hold kind is not run for work parked with it', async () => {
+    const { seen, watch } = noting({ tail: { channel: 'work/', types: ['task.blocked'], kinds: ['!backlog'] } })
+    const { team } = watched({ lead: watch })
+    await team.deliver()
+    await team.taskCreate({ channel: 'work/api', text: 'later', hold: { kind: 'backlog' } })
+    expect(await team.deliver()).toEqual({ delivered: 0, failed: 0, held: [] })
+    const asked = (await team.taskCreate({ channel: 'work/api', text: 'ask' })).task
+    await team.taskBlock({ id: asked.id, reason: 'which region?' })
+    expect((await team.deliver()).delivered).toBe(1)
+    expect(seen).toHaveLength(1)
   })
 
   it('fires once for each event it matches, and only for those', async () => {

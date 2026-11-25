@@ -134,13 +134,15 @@ mu tasks complete <id> "fixed in a1b2c3, tests pass" --as <you>
 
 - Claim it before you touch it. The claim is yours for a lease (the reply says
   `yours for 15m`). If the work runs long, `mu tasks renew <id>` in good time.
+- Then `mu read <id>` and carry on from the last reply: someone may have held
+  it before you and said what is done.
 - When you stop, say how it ended, with one of:
 
   | It ended | Run |
   | --- | --- |
   | Done | `mu tasks complete <id> "<result>"` |
   | Can't be done | `mu tasks fail <id> "<why>"` |
-  | Someone else should take it | `mu tasks release <id>` |
+  | Someone else should take it | Reply what is done and what is next, then `mu tasks release <id>` |
   | A person must decide something | `mu tasks block <id> "<question>"`, then stop |
 
 - `claim_lost` means the task is no longer yours. Stop working on it, say so

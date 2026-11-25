@@ -98,6 +98,7 @@ mu budget --as ada
 ```
 
 Read the blocked ones first: they are questions, or tasks that failed twice.
+A task held as `backlog` is work parked for later, not a question.
 Then the completed ones' results. `mu inspect` shows the same in a browser.
 
 ## When not to

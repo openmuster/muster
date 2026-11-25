@@ -79,10 +79,12 @@ const feed = await team.events({ after: page.cursor, filter: { channel: 'dev/', 
 | `cursorGet`, `cursorSet` | A reader's stored place, by name |
 
 A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types?,
-root? }`. To wait, call `events` with the cursor you hold until it returns
-something. `root: true` (`--root` on `mu tail` and `mu wait`) keeps only what is
-about a thread's first message: a reply, and an edit, label or reaction on one,
-is left out.
+kinds?, root? }`. To wait, call `events` with the cursor you hold until it
+returns something. `root: true` (`--root` on `mu tail` and `mu wait`) keeps only
+what is about a thread's first message: a reply, and an edit, label or reaction
+on one, is left out. `kinds` (`--kind`) is about blocks: `['needs_input']` keeps
+only `task.blocked` events of that kind, `['!backlog']` leaves those out and
+keeps everything else.
 
 `for` is what is for one actor: a message posted that mentions it, a task
 assigned to it, and a reply in a thread it wrote in, never its own writes

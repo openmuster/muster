@@ -164,3 +164,9 @@ export const matchesLabels = (labels: Record<string, string>, filters: readonly 
     const value = labels[filter.key]
     return value !== undefined && (filter.values === null || filter.values.includes(value))
   })
+
+/** A hold kind: what a block says it is, `needs_input`, `backlog` or your own. */
+export const KIND = /^[a-z0-9][a-z0-9_.-]{0,63}$/
+
+/** Whether a filter's `kinds` is a list of hold kinds, each with `!` in front to leave it out. */
+export const kindsValid = (kinds: unknown): boolean => Array.isArray(kinds) && kinds.every((kind) => typeof kind === 'string' && KIND.test(kind.replace(/^!/, '')))

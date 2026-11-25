@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
-import { forName } from '../model.ts'
+import { forName, kindsValid } from '../model.ts'
 import { holdLease, type Held } from './lease.ts'
 import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
 import { openRuns, runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
@@ -38,6 +38,10 @@ export function loadWatchers(path = watchersPath()): Watcher[] {
       } catch {
         throw new Failure('invalid_config', `Watcher "${entry.name}" has a "for" that isn't a profile name or an actor ID: ${JSON.stringify(entry.tail.for)}.`)
       }
+    }
+    const kinds = entry.tail?.kinds as unknown
+    if (kinds !== undefined && !kindsValid(kinds)) {
+      throw new Failure('invalid_config', `Watcher "${entry.name}" has "kinds" that aren't a list of hold kinds, each with "!" in front to leave it out: ${JSON.stringify(kinds)}.`)
     }
     return { name: entry.name, tail: entry.tail ?? {}, run: entry.run, ...(entry.gate ? { gate: entry.gate } : {}), ...(entry.as ? { as: entry.as } : {}), ...(entry.every !== undefined ? { every: entry.every } : {}), ...(Array.isArray(entry.env) ? { env: entry.env.map(String) } : {}) }
   })

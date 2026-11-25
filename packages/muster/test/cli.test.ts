@@ -87,6 +87,21 @@ describe('cli', () => {
     expect(JSON.parse(again.stderr).error).toMatchObject({ reason: 'task_finished', message: 'Task 1 is completed.' })
   })
 
+  it('tasks create --hold makes a task parked, which --ready skips and a --kind filter leaves out', async () => {
+    const dir = tempDir()
+    const made = await cli(dir, ['tasks', 'create', 'work', 'later', '--hold', 'backlog', '--reason', 'after the launch'])
+    expect(made.code).toBe(0)
+    expect(JSON.parse((await cli(dir, ['tasks', 'work', '--json'])).stdout).tasks[0]).toMatchObject({ id: 1, state: 'blocked', hold: { kind: 'backlog', reason: 'after the launch' } })
+    expect((await cli(dir, ['tasks', 'claim', '--ready', 'work'])).code).toBe(1)
+    expect((await cli(dir, ['wait', 'work', '--type', 'task.blocked', '--kind', '!backlog', '--after', '0', '--timeout', '300ms'])).code).toBe(1)
+    const parked = await cli(dir, ['wait', 'work', '--type', 'task.blocked', '--kind', 'backlog', '--after', '0', '--timeout', '300ms', '--json'])
+    expect(JSON.parse(parked.stdout).event).toMatchObject({ type: 'task.blocked', data: { id: 1, kind: 'backlog' } })
+    expect((await cli(dir, ['tasks', 'create', 'work', 'x', '--reason', 'why'])).code).toBe(2)
+    await cli(dir, ['tasks', 'create', 'work', 'now'])
+    await cli(dir, ['tasks', 'block', '4', '--kind', 'backlog', '--reason', 'next week'])
+    expect(JSON.parse((await cli(dir, ['tasks', 'work', '--json'])).stdout).tasks[1]).toMatchObject({ id: 4, hold: { kind: 'backlog', reason: 'next week' } })
+  })
+
   it('prints no colour and no line over 80 columns for ordinary output', async () => {
     const dir = tempDir()
     await cli(dir, ['tasks', 'create', 'db/storage', 'Write-ahead log', '--label', 'group=storage'])

@@ -99,6 +99,22 @@ export async function conformance(team: Board): Promise<Check[]> {
     const held = await a.taskBlock({ id: task.id, reason: '?', kind: 'awaiting_approval' })
     return held.task.hold?.kind === 'awaiting_approval' && (await a.taskUnblock({ id: task.id })).task.state === 'ready'
   })
+  await check('a task made held is blocked from the start, and no claim takes it', async () => {
+    const made = (await a.taskCreate({ channel, text: 'parked', hold: { kind: 'backlog' } })).task
+    return (made.state === 'blocked' && made.hold?.kind === 'backlog' && (await reasonOf(b.taskClaim({ id: made.id }))) === 'task_blocked') || `made ${made.state}`
+  })
+  await check('a feed keeps or leaves out blocks by their kind', async () => {
+    const after = await team.head()
+    const parked = (await a.taskCreate({ channel, text: 'later' })).task.id
+    const asked = (await a.taskCreate({ channel, text: 'ask again' })).task.id
+    await a.taskBlock({ id: parked, reason: 'not yet', kind: 'backlog' })
+    await a.taskBlock({ id: asked, reason: '?', kind: 'needs_input' })
+    const blocks = async (kinds: string[]) =>
+      (await team.events({ after, filter: { channel, types: ['task.blocked'], kinds }, limit: 10 })).events.map((event) => (event.data as { id: number }).id).join()
+    const only = await blocks(['needs_input'])
+    const not = await blocks(['!backlog'])
+    return (only === `${asked}` && not === `${asked}`) || `kept ${only} and ${not}`
+  })
   await check('the last active tasks are listed on request, the latest last', async () => {
     const first = (await a.taskCreate({ channel, text: 'made first' })).task.id
     const second = (await a.taskCreate({ channel, text: 'made second' })).task.id

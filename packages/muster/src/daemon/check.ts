@@ -24,6 +24,9 @@ export function checkWrite(watcher: Watcher, options: { in?: string; principal?:
   if (tail.types && !tail.types.some((type) => type === 'message.posted' || (type.endsWith('.') && 'message.posted'.startsWith(type)))) {
     throw notCheckable(watcher, `it listens for ${tail.types.join(', ')}, not for messages.`)
   }
+  // A plain kind keeps only blocks, and a message is never one.
+  const only = (tail.kinds ?? []).filter((kind) => !kind.startsWith('!'))
+  if (only.length) throw notCheckable(watcher, `it listens only for tasks held as ${only.join(', ')}, not for messages.`)
   let as: string | undefined
   if (tail.by !== undefined) {
     if (tail.by.includes(':')) throw notCheckable(watcher, `it listens only to ${tail.by}.`)

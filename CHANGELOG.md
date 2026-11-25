@@ -7,6 +7,18 @@ versions are affected.
 
 ### Added
 
+- Parking work for later: `mu tasks create … --hold backlog --reason "…"`
+  makes a task already blocked, in one write, so no `--ready` claim takes it
+  before you unblock it. Any kind works; `backlog` is the convention.
+- `--kind` on `mu wait` and `mu tail`, and `kinds` in a watcher's or
+  webhook's filter: `--kind needs_input` keeps only blocks of that kind,
+  `--kind '!backlog'` leaves parked work out and keeps everything else. A
+  watcher on `task.blocked` no longer has to wake you for work nobody is
+  asking about. Nothing new is stored: the kind is read from the event.
+- `mu tasks block` and `mu tasks fail` take the reason as `--reason` too.
+- The board skill tells an agent to read a task's thread after claiming it,
+  and to reply what is done and what is next before releasing it. Run
+  `mu skills install` again to get it.
 - A card queue template, `templates/queue`. A Linear issue labelled `agent`,
   or a card posted with `--label tag.agent=agent --no-sync`, starts the
   `card` workflow once: a spec, the change as a pull request, and a review,

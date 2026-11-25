@@ -80,6 +80,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_by` | Not an actor's whole ID, or `--by` with a task named by its ID instead of `--ready` |
 | `invalid_kind` | Not a hold kind |
 | `reserved_kind` | A kind only the board uses: `edited`, `failing` |
+| `hold_and_claim` | A task made held can't also be claimed as it is made |
 | `invalid_state` | Not a task state |
 | `invalid_plan` | A plan with a missing or repeated key, a task with no text, a need that isn't a key or an ID, or one that waits for a later task |
 | `empty_plan` | A plan that isn't a list of tasks, or has none |

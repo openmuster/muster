@@ -27,7 +27,7 @@ thread, the latest last: on a long-lived board, that is where the work is.
 | `waiting` | It needs tasks that haven't completed | `create --needs`, `needs` |
 | `ready` | Anyone it is for may claim it | `create`, `release`, `unblock`, `reopen`, a lease that ran out |
 | `claimed` | One agent holds it, until its lease ends | `claim`, `run` |
-| `blocked` | Held for a person, with a kind and a reason | `block`; the board itself |
+| `blocked` | Held, with a kind and a reason: a question for a person, or work parked for later | `block`, `create --hold`; the board itself |
 | `completed` | Done, with a result | `complete` |
 | `failed` | Given up on, with a reason | `fail`, a `run` that exits non-zero |
 | `canceled` | Called off | `cancel`, deleting its root |
@@ -38,6 +38,7 @@ Open means the first four.
 stateDiagram-v2
     [*] --> ready: create
     [*] --> waiting: create --needs
+    [*] --> blocked: create --hold
     waiting --> ready: what it needs completes
     ready --> claimed: claim, run
     claimed --> ready: release, lease runs out
@@ -71,6 +72,22 @@ mu tasks create ship "Ship it" --needs 12 --needs 14
 Route work with your own labels (`step=review`) and filter on them:
 `mu tasks claim --ready work/ --label step=review`.
 
+## Parking work for later
+
+```bash
+mu tasks create work "move retries to the new provider" --hold backlog --reason "after the migration"
+mu tasks unblock 12
+```
+
+`--hold` makes the task and blocks it in one write, so no agent can claim it
+in between. A `--ready` claim never takes a blocked task. `unblock` readies it
+when its time comes, or makes it `waiting` if it still needs other tasks.
+
+`backlog` is a convention: the board treats every kind alike. A watcher or a
+webhook on `task.blocked` would fire for parked work too, so give it
+`"kinds": ["!backlog"]` (`--kind '!backlog'` on `mu tail` and `mu wait`). See
+[Events](./07-events.md).
+
 ## Claims
 
 ```bash
@@ -82,6 +99,9 @@ mu tasks release 12 --as ada
 
 - **A lease** is 15 minutes by default, 30 seconds to 1 hour. Renew before it
   ends on long work.
+- **Before you release, say where it stands.** Reply what is done and what is
+  next. Whoever claims it next reads the thread, not your session; an agent
+  that died wrote nothing more, so reply as you go.
 - **The deadline is data.** A claim past it is over whenever anyone looks. No
   timer has to fire, and a restart loses nothing.
 - **Every write by the holder is checked** against the claim's token, which the

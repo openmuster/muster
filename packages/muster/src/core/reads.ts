@@ -1,5 +1,5 @@
 import { Failure, misuse } from '../failure.ts'
-import { actorId, channelScope, forName, inScope, labelFilter, LIMITS, matchesLabels, profileName, type BoardEvent, type Caller, type LabelFilter, type Message } from '../model.ts'
+import { actorId, channelScope, forName, inScope, KIND, labelFilter, LIMITS, matchesLabels, profileName, type BoardEvent, type Caller, type LabelFilter, type Message } from '../model.ts'
 import { toEvent } from '../store/log.ts'
 import { allowed, findMessage, limitOf, messageFor, toMessage, type Context } from './context.ts'
 import { findTask, type Task } from './tasks.ts'
@@ -16,6 +16,12 @@ export type Filter = {
   mentions?: string
   text?: string
   types?: string[]
+  /**
+   * Hold kinds a `task.blocked` event must have. A plain kind (`needs_input`) keeps only blocks of that kind;
+   * `!kind` (`!backlog`) drops blocks of that kind and keeps everything else. Other events pass unless a plain
+   * kind is given, which keeps only blocks.
+   */
+  kinds?: string[]
   /**
    * What is for one actor: messages posted that mention it, tasks assigned to it, and replies in threads it
    * wrote in, never its own writes except a message it scheduled. A profile name is one of the caller's own; a
@@ -117,6 +123,7 @@ type Compiled = {
   mentions: string | null
   text: string | null
   types: string[] | null
+  kinds: { only: string[]; not: string[] } | null
   for: { id: string; principal: string; profile: string | null } | null
   root: boolean
 }
@@ -130,6 +137,18 @@ function forTarget(value: string, caller: Caller): NonNullable<Compiled['for']> 
   return { id: value, principal: value.slice(0, plus), profile: value.slice(plus + 1) }
 }
 
+function kindsOf(kinds: string[] | undefined): Compiled['kinds'] {
+  if (kinds === undefined || kinds.length === 0) return null
+  const only: string[] = []
+  const not: string[] = []
+  for (const kind of kinds) {
+    const name = kind.startsWith('!') ? kind.slice(1) : kind
+    if (!KIND.test(name)) throw misuse('invalid_kind', `"${kind}" isn't a kind.`, 'A kind is lowercase letters, numbers, ".", "_" and "-", with "!" in front to leave it out.')
+    ;(kind.startsWith('!') ? not : only).push(name)
+  }
+  return { only, not }
+}
+
 function compile(filter: Filter, caller: Caller): Compiled {
   return {
     scope: filter.channel === undefined ? null : channelScope(filter.channel),
@@ -139,6 +158,7 @@ function compile(filter: Filter, caller: Caller): Compiled {
     mentions: filter.mentions ?? null,
     text: filter.text?.toLowerCase() ?? null,
     types: filter.types ?? null,
+    kinds: kindsOf(filter.kinds),
     for: filter.for === undefined ? null : forTarget(filter.for, caller),
     root: filter.root === true,
   }
@@ -184,6 +204,11 @@ function matches(ctx: Context, caller: Caller, event: BoardEvent, filter: Compil
   if (filter.types && !filter.types.some((type) => (type.endsWith('.') ? event.type.startsWith(type) : event.type === type))) return false
   if (filter.by !== null && !names(filter.by, event)) return false
   const data = event.data as Record<string, any>
+  if (filter.kinds) {
+    const kind = event.type === 'task.blocked' ? String(data.kind) : null
+    if (filter.kinds.only.length > 0 && (kind === null || !filter.kinds.only.includes(kind))) return false
+    if (kind !== null && filter.kinds.not.includes(kind)) return false
+  }
   if (filter.mentions !== null) {
     const mentioned = (data.mentions ?? []) as string[]
     if (!mentioned.some((id) => named(id, filter.mentions!))) return false

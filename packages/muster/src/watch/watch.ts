@@ -1,5 +1,5 @@
 import { Failure } from '../failure.ts'
-import { channelScope, forName, labelFilter, profileName } from '../model.ts'
+import { channelScope, forName, kindsValid, labelFilter, profileName } from '../model.ts'
 import type { Task } from '../core/tasks.ts'
 import type { FeedEvent, Filter } from '../core/reads.ts'
 import type { Board } from '../handle.ts'
@@ -75,7 +75,7 @@ export function millis(value: unknown): number | null {
 
 const NAME = /^[a-z0-9][a-z0-9_.-]{0,63}$/
 const WATCH_KEYS = new Set(['tail', 'run', 'as', 'timeout', 'coalesce'])
-const FILTER_KEYS = new Set(['channel', 're', 'labels', 'by', 'mentions', 'text', 'types', 'for', 'root'])
+const FILTER_KEYS = new Set(['channel', 're', 'labels', 'by', 'mentions', 'text', 'types', 'kinds', 'for', 'root'])
 
 const wrong = (name: string, why: string) => new Failure('invalid_watch', `Watcher "${name}" ${why}`, { exit: 2 })
 
@@ -110,6 +110,7 @@ function checkFilter(name: string, tail: unknown): Filter {
   const target = string('for')
   if (target !== undefined) named(name, 'a "for" that isn\'t a profile name or an actor ID', () => forName(target))
   if (filter.root !== undefined && typeof filter.root !== 'boolean') throw wrong(name, 'has a "root" that isn\'t true or false.')
+  if (filter.kinds !== undefined && !kindsValid(filter.kinds)) throw wrong(name, 'has "kinds" that aren\'t a list of hold kinds, each with "!" in front to leave it out.')
   return { ...(filter as Filter) }
 }
 

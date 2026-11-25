@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
-import { actorId, channelScope, inScope, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
+import { actorId, channelScope, inScope, KIND, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
 import { allowed, authorize, byOf, findMessage, fingerprintBy, limitOf, messageFor, once, type Context, type IdempotencyMatch } from './context.ts'
 import { hooks, post, type PostRequest } from './messages.ts'
@@ -18,7 +18,6 @@ export const FROM_MAX = 32
 export const PLAN_MAX = 100
 /** How long a result or a reason may be: what `complete`, `fail`, `block` and `cancel` take. */
 export const RESULT_MAX = 1000
-const KIND = /^[a-z0-9][a-z0-9_.-]{0,63}$/
 
 export const TASK_STATES = ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled'] as const
 export type TaskState = (typeof TASK_STATES)[number]
@@ -325,6 +324,21 @@ export type CreateRequest = (PostRequest | { thread: number; idempotencyKey?: st
   needs?: number[]
   for?: string
   claim?: { lease?: number; pid?: number; pidStart?: string; token?: string }
+  /** Made held, in the same write: no one can claim it between its making and its block. */
+  hold?: { kind?: string; reason?: string }
+}
+
+/** A hold's kind and reason, checked as `block` checks them. */
+function holdOf(hold: { kind?: string; reason?: string }): { kind: string; reason: string | null } {
+  const kind = hold.kind ?? 'needs_input'
+  if (!KIND.test(kind)) throw misuse('invalid_kind', `"${kind}" isn't a kind.`, 'A kind is lowercase letters, numbers, ".", "_" and "-".')
+  if (kind === 'edited' || kind === 'failing') throw new Failure('reserved_kind', `Only the board holds a task as "${kind}".`)
+  return { kind, reason: outcome(hold.reason, 'reason') }
+}
+
+/** Holds a task made in this same write. */
+function holdNew(ctx: Context, caller: Caller, root: Message, hold: { kind: string; reason: string | null }, emit: Emit) {
+  emit({ type: 'task.blocked', by: byOf(caller), channel: root.channel, thread: root.id, data: { id: root.id, kind: hold.kind, reason: hold.reason, from: rowOf(ctx, root.id)!.state } })
 }
 
 function makeTask(
@@ -373,33 +387,37 @@ function claimNow(ctx: Context, caller: Caller, row: TaskRow, root: Message, cla
 }
 
 export function create(ctx: Context, caller: Caller, request: CreateRequest): { task: Task; message: Message; token?: string } {
+  const hold = request.hold ? holdOf(request.hold) : null
+  if (hold && request.claim) throw misuse('hold_and_claim', 'A task made held is not claimed: it is for later.', 'Make it held, or claim it, not both.')
   if ('thread' in request) {
     return once(
       ctx,
       caller,
       request.idempotencyKey,
-      fingerprintBy(request, { op: 'tasks.create', thread: request.thread, needs: request.needs ?? [], for: request.for ?? null }, { op: 'tasks.create', thread: request.thread }),
+      fingerprintBy(request, { op: 'tasks.create', thread: request.thread, needs: request.needs ?? [], for: request.for ?? null, ...(hold ? { hold } : {}) }, { op: 'tasks.create', thread: request.thread }),
       (emit) => {
         const root = messageFor(ctx, caller, request.thread)
         if (root.re !== null) throw new Failure('not_a_root', `${request.thread} is a reply; a task is a thread's first message.`, { next: [`mu tasks create ${root.thread}`] })
         authorize(caller, root.channel, 'post')
         makeTask(ctx, caller, root, { needs: request.needs ?? [], for: request.for }, emit)
+        if (hold) holdNew(ctx, caller, root, hold, emit)
         const token = request.claim && rowOf(ctx, root.id)!.state === 'ready' ? claimNow(ctx, caller, rowOf(ctx, root.id)!, root, request.claim, emit) : undefined
         return { answer: { task: view(ctx, root.id), message: findMessage(ctx.db, root.id)!, ...(token ? { token } : {}) }, ref: root.id }
       },
       (id: number) => ({ task: view(ctx, id), message: findMessage(ctx.db, id)! }),
     )
   }
-  const { needs, for: assignee, claim, idempotencyKey, idempotencyMatch, ...message } = request
+  const { needs, for: assignee, claim, idempotencyKey, idempotencyMatch, hold: _hold, ...message } = request
   return once(
     ctx,
     caller,
     idempotencyKey,
-    fingerprintBy({ idempotencyMatch }, { op: 'tasks.create', message, needs: needs ?? [], for: assignee ?? null }, { op: 'tasks.create', channel: message.channel }),
+    fingerprintBy({ idempotencyMatch }, { op: 'tasks.create', message, needs: needs ?? [], for: assignee ?? null, ...(hold ? { hold } : {}) }, { op: 'tasks.create', channel: message.channel }),
     (emit) => {
       // The transaction is already open: post() joins it through the same write.
       const root = postInside(ctx, caller, message, emit)
       makeTask(ctx, caller, root, { needs: needs ?? [], for: assignee }, emit)
+      if (hold) holdNew(ctx, caller, root, hold, emit)
       const token = claim && rowOf(ctx, root.id)!.state === 'ready' ? claimNow(ctx, caller, rowOf(ctx, root.id)!, root, claim, emit) : undefined
       return { answer: { task: view(ctx, root.id), message: findMessage(ctx.db, root.id)!, ...(token ? { token } : {}) }, ref: root.id }
     },
@@ -659,10 +677,7 @@ export function fail(ctx: Context, caller: Caller, request: Held & { reason?: st
 }
 
 export function block(ctx: Context, caller: Caller, request: Held & { reason?: string; kind?: string }): { task: Task } {
-  const kind = request.kind ?? 'needs_input'
-  if (!KIND.test(kind)) throw misuse('invalid_kind', `"${kind}" isn't a kind.`, 'A kind is lowercase letters, numbers, ".", "_" and "-".')
-  if (kind === 'edited' || kind === 'failing') throw new Failure('reserved_kind', `Only the board holds a task as "${kind}".`)
-  const reason = outcome(request.reason, 'reason')
+  const { kind, reason } = holdOf(request)
   return write(ctx, caller, (emit) => {
     const found = taskFor(ctx, caller, request.id)
     const row = request.token ? found.row : settleLapse(ctx, found.row, found.root, emit)
