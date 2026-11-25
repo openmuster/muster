@@ -200,5 +200,9 @@ claimed answers `task_ready`, with the claim to run first.
 | `module_failed` | The board module didn't load: Node's message, and what to change in the module. `mu daemon run` says so and exits 0, so a service manager leaves it stopped; `mu serve` serves the board without it |
 | `module_not_a_board` | The board module exports no board: `export default board({ ... })`, or `export const team` |
 | `module_two_copies` | The board module's board was made by a second copy of muster: give the project one |
-| `module_version_skew` | The board module's project has a muster that can't run a module: update it there, or remove it |
-| `module_and_board` | `--dir`, `--board` or `--url` beside a board module, which names its own board. The default `~/.config/muster/board.ts` counts: it is the module whenever it is there |
+| `module_version_skew` | The first `node_modules/muster` above the board module can't run a module: update it there, or remove it. The message names where it is |
+| `module_and_board` | `--dir`, `--board` or `--url` beside a module named with `--module` or `MUSTER_MODULE`, which names its own board. The default `~/.config/muster/board.ts` is left out instead whenever a flag or `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL` names the board |
+| `module_and_profile` | `--as` or `MUSTER_PROFILE` beside a board module: the module says who its board and watchers write as |
+| `module_and_no_module` | `--module` and `--no-module` together |
+| `module_not_absolute` | `MUSTER_MODULE` isn't an absolute path |
+| `module_broken_install` | The board module's project has a muster whose `mu` isn't there, or is outside its package: install it again, or remove it |

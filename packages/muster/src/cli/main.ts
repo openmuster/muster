@@ -1,18 +1,18 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
 import { TASK_STATES, type PlanTask, type Task, type TaskState } from '../core/tasks.ts'
 import { Failure, misuse } from '../failure.ts'
-import { board, type Board } from '../handle.ts'
+import { ROOT, board, type Board } from '../handle.ts'
 import type { Host } from '../watch/host.ts'
 import { processStart } from '../process.ts'
 import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { FAILING_PAUSE, clashWithCode, loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
-import { DAEMON_SPEC, SERVE_SPEC, boardFlagsBeside, loadBoard, loadsModule, modulePath, refusal, self as thisCopy, type ModulePath } from './module.ts'
+import { DAEMON_SPEC, SERVE_SPEC, chooseModule, endLaunch, invokedAs, launchGuard, loadBoard, loadsModule, refusal, self as thisCopy, type ModulePath } from './module.ts'
 import { syncPath } from '../sync/config.ts'
 import { boardPath } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
@@ -96,15 +96,23 @@ const tailText = (tail: Filter) => {
  * board's head. A place that is null means it has never run.
  */
 async function moduleWatchers(run: Run) {
-  const head = await run.team.head()
+  // The handle the host runs them on, whatever profile the module exported: the cursor is kept as it.
+  const root = (run.team as unknown as Record<symbol, () => Board>)[ROOT]!()
+  const head = await root.head()
   return Promise.all(
     run.team.watchers.map(async (watcher) => {
-      const held = await run.team.backend.leases?.holder(`watch:${watcher.name}`)
-      const place = await (watcher.as !== null ? run.team.as(watcher.as) : run.team).cursorGet(`watch:${watcher.name}`)
-      return { name: watcher.name, tail: watcher.tail, as: watcher.as, holder: held?.holder ?? null, lag: place === null ? null : Math.max(0, head - place) }
+      const held = await root.backend.leases?.holder(`watch:${watcher.name}`)
+      const me = watcher.as !== null ? root.as(watcher.as) : root
+      const place = await me.cursorGet(`watch:${watcher.name}`)
+      // What it hasn't got past: the events after its place that its filter matches, counted up to a page.
+      const behind = place === null ? null : (await me.events({ after: place, filter: watcher.tail, limit: LAG_PAGE, through: head })).events.length
+      return { name: watcher.name, tail: watcher.tail, as: watcher.as, holder: held?.holder ?? null, lag: behind }
     }),
   )
 }
+
+/** The most events `mu daemon status` counts behind a watcher's place: past it, it says so with a +. */
+const LAG_PAGE = 500
 
 /**
  * Writes something a watcher's filter matches and waits for a reply: proof that the daemon is running,
@@ -1065,7 +1073,7 @@ const commands: Record<string, Command> = {
   daemon: {
     spec: DAEMON_SPEC,
     async run(run, parsed) {
-      const { name, path: guardAt } = guardOf(parsed.flags, run.io.env)
+      const { name, path: guardAt } = run.module && !run.module.error ? serviceOf(run.team) : guardOf(parsed.flags, run.io.env)
       const verb = parsed.positionals[0] ?? 'status'
       if (verb === 'check') {
         const me = await run.team.whoami()
@@ -1109,11 +1117,16 @@ const commands: Record<string, Command> = {
         try {
           // A run that stays up, and ticks, clears the restart guard's count: the starts before it were not a storm.
           const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guardAt) }
-          const ended = await runDaemon({ team: run.team, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
+          const tick = () => runDaemon({ team: run.team, watchers, hooks, workflows, stop: run.io.stop, log: run.io.out, steady })
+          let ended = await tick()
           if (ended === 'held') {
             run.io.out('another process already ticks for this board')
-            // The module's watchers stay, standing by for any another host lets go of.
-            if (run.team.watchers.length > 0) await new Promise<void>((resolve) => (run.io.stop.aborted ? resolve() : run.io.stop.addEventListener('abort', () => resolve(), { once: true })))
+            // With a module's watchers to run it stays up, and keeps asking for the tick: when the process
+            // that has it stops, this one ticks, so schedules, hooks and workflows never go unrun.
+            if (run.team.watchers.length > 0) {
+              run.io.out('standing by: its watchers run here, and it ticks when the other stops')
+              while (ended === 'held' && !run.io.stop.aborted) ended = await tick()
+            }
           }
         } finally {
           host?.stop()
@@ -1124,7 +1137,8 @@ const commands: Record<string, Command> = {
       if (verb === 'install') {
         const cliPath = fileURLToPath(new URL('./bin.ts', import.meta.url)).replace(/\/src\/cli\/bin\.ts$/, '/src/cli/bin.ts')
         // A module is recorded by its absolute path, the default one too, and run from the folder it was installed from.
-        const program = [process.execPath, process.argv[1] ?? cliPath, 'daemon', 'run', ...(run.module ? ['--module', run.module.path] : [])]
+        // The mu that was run, not one a module's project re-exec'd into: that one can vanish with an npm i, and the service with it.
+        const program = [process.execPath, invokedAs() ?? process.argv[1] ?? cliPath, 'daemon', 'run', ...(run.module ? ['--module', run.module.path] : [])]
         const log = join(configDir(), 'logs', `daemon-${name}.log`)
         // launchd starts it with almost no environment: it needs a PATH to find agents and mu, and which board and config.
         const env: Record<string, string> = { PATH: run.io.env.PATH ?? '/usr/bin:/bin' }
@@ -1140,14 +1154,16 @@ const commands: Record<string, Command> = {
         guard.reset(guardAt)
         const cwd = process.cwd()
         const path = launchd.install({ board: name, program, ...(run.io.env.MUSTER_DIR ? { dir: run.io.env.MUSTER_DIR } : {}), env, log, home: run.io.env.HOME ?? homedir(), ...(run.module ? { cwd } : {}) })
-        return print(run, { installed: path, log, ...(run.module ? { module: run.module.path, cwd } : {}) }, () => [`installed  ${path}`, `log        ${log}`, ...(run.module ? [`module     ${run.module.path}`, `cwd        ${cwd}`] : []), 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
+        return print(run, { installed: path, log, ...(run.module ? { module: run.module.path, cwd } : {}) }, () => [`installed  ${path}`, `log        ${log}`, ...(run.module ? [`module     ${run.module.path}`, `cwd        ${cwd}`] : []), ...(run.module && existsSync(syncPath()) ? [`sync       ${syncPath()} is not read with a board module: move its sync into the module's board()`] : []), 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
       }
       if (verb === 'uninstall') {
         const removed = launchd.uninstall({ board: name, home: run.io.env.HOME ?? homedir() })
         return print(run, removed, () => (removed.wasLoaded ? `removed  ${removed.path}` : 'not installed'))
       }
       if (verb === 'reset') {
-        const parked = guard.reset(guardAt)
+        // The starts counted before the module loaded, too: a module whose install was broken.
+        const launched = run.module ? guard.reset(launchGuard(run.module.path)) : null
+        const parked = guard.reset(guardAt) ?? launched
         const installed = launchd.loaded(name)
         if (installed) launchd.start(name)
         return print(run, { reset: parked !== null, started: installed }, () =>
@@ -1173,7 +1189,7 @@ const commands: Record<string, Command> = {
             `service   ${running ? 'loaded' : 'not installed'}`,
             kept.parked ? `stopped   since ${kept.parked.at}: ${kept.parked.why} It tries again at ${guard.retryAt(kept.parked)}, or now with mu daemon reset.` : `restarts  ${recent} quick starts in ${guard.RESTART_WINDOW / 60_000} minutes; it stops at ${guard.RESTART_LIMIT}`,
             ...(run.module ? [`module    ${run.module.path}${run.module.error ? `  not loaded: ${run.module.error.message}` : ''}`] : []),
-            ...watching.map((watcher) => `watch     ${watcher.name}  ${tailText(watcher.tail)}${watcher.as ? `  as ${watcher.as}` : ''}  ${watcher.holder ? `held by ${watcher.holder}` : 'not running'}  ${watcher.lag === null ? 'not started' : `lag ${watcher.lag}`}`),
+            ...watching.map((watcher) => `watch     ${watcher.name}  ${tailText(watcher.tail)}${watcher.as ? `  as ${watcher.as}` : ''}  ${watcher.holder ? `held by ${watcher.holder}` : 'not running'}  ${watcher.lag === null ? 'not started' : `lag ${watcher.lag}${watcher.lag >= LAG_PAGE ? '+' : ''}`}`),
             ...(idle.length ? [`warning   declared but not started: ${idle.map((watcher) => watcher.name).join(' ')}. Run mu daemon run or mu serve with this module, or start() it in your own process.`] : []),
             `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
             `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
@@ -2107,27 +2123,9 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     const parsed = parse(argv.slice(1), command.spec)
     // The restart guard counts each start of the daemon before anything that can fail is opened: the
     // board, the sync config. A start that ends cleanly is taken off again; one that crashed stays counted.
-    if (name === 'daemon' && parsed.positionals[0] === 'run') {
-      const { path } = guardOf(parsed.flags, io.env)
-      let at = Date.now()
-      let parked = guard.begin(path, at)
-      if (parked) {
-        // Stopped, it stays up doing nothing, so the service manager has nothing to restart. It reads its
-        // record again now and then: an hour on, or once someone runs mu daemon reset, it starts afresh.
-        io.err(`error: ${parked.why}`)
-        io.err(`  Stopped since ${parked.at}. What made it fail is earlier in this log.`)
-        io.err(`  It tries again at ${guard.retryAt(parked)}. Fix it, then, to try now: mu daemon reset`)
-        while (parked) {
-          await sleep(GUARD_POLL, io.stop)
-          if (io.stop.aborted) return 0
-          at = Date.now()
-          parked = guard.begin(path, at)
-        }
-        io.err('trying again')
-      }
-      const code = await dispatch(name, command, parsed, io, json)
-      if (code === 0) guard.ended(path, at)
-      return code
+    // A daemon on a board module is counted under the board the module opens, once it is loaded (dispatch).
+    if (name === 'daemon' && parsed.positionals[0] === 'run' && !runsModule(parsed.flags, io.env)) {
+      return await counted(guardOf(parsed.flags, io.env).path, io, () => dispatch(name, command, parsed, io, json))
     }
     return await dispatch(name, command, parsed, io, json)
   } catch (error) {
@@ -2137,6 +2135,61 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
 
 /** How often a stopped daemon reads its record again, to see whether it may start. */
 const GUARD_POLL = 2000
+
+/** Whether this command line runs a board module. A choice that is misuse is dispatch's to say. */
+function runsModule(flags: Flags, env: NodeJS.ProcessEnv): boolean {
+  try {
+    return chooseModule(flags, env).module !== null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Counts a start of the daemon in its restart guard, runs it, and takes the start off again when it ended
+ * cleanly; one that crashed stays counted. Stopped, it stays up doing nothing, so the service manager has
+ * nothing to restart. It reads its record again now and then: an hour on, or once someone runs
+ * mu daemon reset, it starts afresh.
+ */
+async function counted(path: string, io: Io, body: () => Promise<number>): Promise<number> {
+  let at = Date.now()
+  let parked = guard.begin(path, at)
+  if (parked) {
+    io.err(`error: ${parked.why}`)
+    io.err(`  Stopped since ${parked.at}. What made it fail is earlier in this log.`)
+    io.err(`  It tries again at ${guard.retryAt(parked)}. Fix it, then, to try now: mu daemon reset`)
+    while (parked) {
+      await sleep(GUARD_POLL, io.stop)
+      if (io.stop.aborted) return 0
+      at = Date.now()
+      parked = guard.begin(path, at)
+    }
+    io.err('trying again')
+  }
+  // Counted under its board now: the start counted before the module loaded is taken back.
+  endLaunch()
+  const code = await body()
+  if (code === 0) guard.ended(path, at)
+  return code
+}
+
+/**
+ * The service a daemon on a board module is, from the board the module opens: its restart guard, and
+ * the name of its LaunchAgent and log. Named for the board; with the folder's hash beside it when the
+ * board isn't where MUSTER_DIR would put one of its name, so two modules for two boards never share one.
+ */
+function serviceOf(team: Board): { name: string; path: string } {
+  const where = team.backend.where
+  const board = /^[a-z0-9_-]+$/.test(basename(where, '.db')) && where.endsWith('.db') ? basename(where, '.db') : 'module'
+  let usual = ''
+  try {
+    usual = boardPath({ name: board })
+  } catch {
+    // Not a name MUSTER_DIR could hold.
+  }
+  const hash = createHash('sha256').update(where).digest('hex').slice(0, 8)
+  return { name: where === usual ? board : `${board}-${hash}`, path: guard.guardPath(board, where) }
+}
 
 /**
  * The board the daemon's restart guard is kept for: from --board, --dir and --url as the board itself is
@@ -2188,11 +2241,12 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
     // `mu serve` and `mu daemon` run the board a module exports, with its watchers. The module says
     // where the board is, so naming one here too is a mistake.
     const verb = name === 'daemon' ? (parsed.positionals[0] ?? 'status') : undefined
-    const found = loadsModule(name, verb) ? modulePath(str(parsed.flags, 'module'), io.env) : null
+    const choice = loadsModule(name, verb) ? chooseModule(parsed.flags, io.env) : { module: null }
+    // The default module is for the board nothing else chose: a daemon installed for one keeps running it.
+    if ('skipped' in choice && choice.skipped && (name === 'serve' || verb === 'run')) io.err(`info: ${choice.skipped.path} isn't run: ${choice.skipped.because} chose the board. Pass --module to run it.`)
+    const found = choice.module
     let module: Module | undefined
     if (found) {
-      const beside = boardFlagsBeside(found, (['dir', 'board', 'url'] as const).filter((flag) => str(parsed.flags, flag) !== undefined))
-      if (beside) throw beside
       try {
         const refused = refusal()
         if (refused) throw refused
@@ -2206,13 +2260,16 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
           sayModuleFailed(io, module)
           io.err('')
           io.err('  The daemon has stopped. Fix the module and start it again (mu daemon reset, if it is installed).')
+          endLaunch()
           return 0
         }
         // `mu serve` serves the board without it, and `mu daemon status` says what is wrong; the rest fail.
-        if (name !== 'serve' && verb !== 'status') throw error
+        if (name !== 'serve' && !['status', 'reset', 'uninstall'].includes(verb!)) throw error
+        // reset and uninstall still do what they can without it: by --board or MUSTER_BOARD, as before modules.
+        if (verb === 'reset' || verb === 'uninstall') sayModuleFailed(io, module)
       }
       // sync.json goes into the board() the CLI makes: a module's board is made by the module.
-      if (team && existsSync(syncPath()) && (name === 'serve' || verb === 'run' || verb === 'status')) {
+      if (team && existsSync(syncPath()) && (name === 'serve' || ['run', 'status', 'check', 'install'].includes(verb!))) {
         io.err(`warning: ${syncPath()} isn't read with a board module: nothing it lists is synced. Give the module's board() its sync instead.`)
       }
     }
@@ -2240,8 +2297,13 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
       }
       team = board({ ...(dir ? { dir } : {}), ...(boardName ? { name: boardName } : {}), ...(sync ? { sync } : {}), as: as ?? null })
     }
-    const code = await command.run({ team, json: on(parsed.flags, 'json'), io, now: () => Date.now(), ...(module ? { module } : {}) }, parsed)
-    return typeof code === 'number' ? code : 0
+    const go = async () => {
+      const code = await command.run({ team: team!, json: on(parsed.flags, 'json'), io, now: () => Date.now(), ...(module ? { module } : {}) }, parsed)
+      return typeof code === 'number' ? code : 0
+    }
+    // A daemon on a module is counted under the board the module opened.
+    if (verb === 'run' && module && !module.error) return await counted(serviceOf(team).path, io, go)
+    return await go()
   } catch (error) {
     return fail(io, json, error)
   } finally {

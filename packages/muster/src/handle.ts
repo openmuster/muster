@@ -12,6 +12,9 @@ import { VERSION } from './version.ts'
  * one copy: a board from another throws another `Failure` class, and `instanceof` checks (a 404 for
  * `not_found`) stop holding. `mu` refuses a board module whose board carries another.
  */
+/** The handle `board()` returned, from any handle made from it with `as()`: what `start()` runs on. For `mu`, not public. */
+export const ROOT = Symbol.for('muster.root')
+
 export const COPY: { readonly version: string; readonly url: string } = Object.freeze({ version: VERSION, url: import.meta.url })
 
 /** A watcher a handle declares, as anyone may read it: its name, what it listens for, and the profile it writes as. */
@@ -90,6 +93,7 @@ export function board(options: BoardOptions = {}): Board {
       fetch: served,
       close: () => backend.close(),
       [Symbol.for('muster.copy')]: COPY,
+      [ROOT]: () => root,
     } as Record<string | symbol, unknown>
     for (const name of METHODS) {
       handle[name] = async (...args: unknown[]) => (backend[name] as (caller: Caller, ...rest: unknown[]) => unknown)(await who(), ...args)

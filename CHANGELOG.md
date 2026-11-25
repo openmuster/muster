@@ -32,11 +32,18 @@ versions are affected.
 - `mu serve` and `mu daemon run` run a board module: a `.ts` file whose
   default export (or `team`) is a `board({ watch })`. They start its watchers
   beside the ones in `watchers.json`, hooks and workflows. The module is
-  `--module <file>`, else `MUSTER_MODULE`, else `~/.config/muster/board.ts`
-  whenever that file is there, with no flag. It needs no `package.json`: a
-  global `mu` answers its `import 'muster'`. A project with its own muster
-  runs on that install instead, in the same process. A module names its own
-  board, so `--dir`, `--board` or `--url` beside one is misuse.
+  `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
+  `~/.config/muster/board.ts` when nothing named a board (no `--dir`,
+  `--board`, `--url`, `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL`), so a
+  daemon installed for a board keeps running that board. `--no-module` runs
+  none. It needs no `package.json`: a global `mu` answers its
+  `import 'muster'`. A project with its own muster runs on that install
+  instead, in the same process. A module named on purpose says which board it
+  is, so `--dir`, `--board`, `--url`, `--as` or `MUSTER_PROFILE` beside it is
+  misuse.
+  - A daemon on a module is named, logged and guarded for the board the
+    module opens. While another process ticks, it runs the module's watchers
+    and takes the tick over when that process stops.
   - A module that doesn't load (Node's message, and what to change) makes
     `mu daemon run` say so and exit 0, so launchd leaves it stopped. `mu serve`
     says so loudly and serves the board without it.
@@ -49,7 +56,8 @@ versions are affected.
   - `mu daemon install` records the module's absolute path and the folder it
     was installed from.
   - `team.watchers` lists what a handle declares.
-  - With a module, `sync.json` isn't read: `mu` says so.
+  - With a module, `sync.json` isn't read: `mu` says so, and
+    `mu daemon install` says to move its sync into the module.
 - A card queue template, `templates/queue`. A Linear issue labelled `agent`,
   or a card posted with `--label tag.agent=agent --no-sync`, starts the
   `card` workflow once: a spec, the change as a pull request, and a review,

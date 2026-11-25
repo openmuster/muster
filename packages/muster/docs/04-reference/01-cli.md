@@ -97,12 +97,12 @@ schedules and the daemon
   daemon check <hook>            send a signed ping to an outgoing webhook
   daemon install [--env NAME]... | uninstall | status
   daemon reset                   start again after it stopped restarting
-  daemon run|check|status|install [--module <file>]
+  daemon run|check|status|install [--module <file>] [--no-module]
                                  the board module, with its watchers
   Watchers are yours, in ~/.config/muster/watchers.json: never on a board.
   So are outgoing webhooks, in hooks.json: a signed POST for each event.
   A board module is a .ts file that exports board({ watch }): --module, else
-  MUSTER_MODULE, else ~/.config/muster/board.ts when it is there.
+  MUSTER_MODULE, else ~/.config/muster/board.ts if no board was named.
 
 inspect
   inspect [--port n] [--no-open] a local web page for the board, as you
