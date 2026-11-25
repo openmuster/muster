@@ -7,15 +7,15 @@ import { board, command, http, type Duration } from 'muster'
 
 export const FACTORY = process.env.FACTORY_CHANNEL ?? 'factory'
 
+/** What `mu run --runner vercel` reads: passed to the wake only when it runs in a sandbox (FACTORY_RUNNER=vercel). */
+export const SANDBOX = ['MUSTER_SANDBOX_URL', 'VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID', 'VERCEL_OIDC_TOKEN', 'GITHUB_APP_ID', 'GITHUB_APP_KEY_FILE']
+
 /**
- * What the agent's wake gets of the host's environment, beside PATH, HOME and the board's own. Nothing
- * else of it is passed on: add a name here to pass it.
+ * What the wake gets of the host's environment, beside PATH, HOME and the board's own. Nothing else of it is
+ * passed on: add a name here to pass it. The sandbox's settings only in a sandbox, where `lib/wake.ts` hands
+ * them to `mu run` and nothing else; an agent on this machine never gets them (see `agentEnv`).
  */
-export const PASS = [
-  'FACTORY_RUNNER', 'FACTORY_AGENT', 'FACTORY_REPO', 'FACTORY_PUSH', 'ANTHROPIC_API_KEY',
-  // What `mu run --runner vercel` reads, with FACTORY_RUNNER=vercel.
-  'MUSTER_SANDBOX_URL', 'VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID', 'VERCEL_OIDC_TOKEN', 'GITHUB_APP_ID', 'GITHUB_APP_KEY_FILE',
-]
+export const PASS = ['FACTORY_RUNNER', 'FACTORY_AGENT', 'FACTORY_REPO', 'FACTORY_PUSH', 'ANTHROPIC_API_KEY', ...(process.env.FACTORY_RUNNER === 'vercel' ? SANDBOX : [])]
 
 /** `lib/wake.ts`, by its full path: worked out when the watcher runs, in `host.ts`, never in a page. */
 const wakeScript = () => join(dirname(fileURLToPath(import.meta.url)), 'wake.ts')

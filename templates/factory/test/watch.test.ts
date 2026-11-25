@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from 'muster'
 import { agentWords, brief, sandboxWords } from '../lib/wake.ts'
 
@@ -14,6 +14,77 @@ async function until(done: () => boolean | Promise<boolean>, ms = 20_000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) if (await done()) return
   throw new Error('waited too long')
 }
+
+/** What `mu run --runner vercel` reads, and an agent on this machine must never hold. */
+const SANDBOX_SETTINGS = {
+  VERCEL_TOKEN: 'vercel-token',
+  VERCEL_TEAM_ID: 'team_1',
+  VERCEL_PROJECT_ID: 'prj_1',
+  VERCEL_OIDC_TOKEN: 'oidc-token',
+  GITHUB_APP_ID: '123456',
+  GITHUB_APP_KEY_FILE: '/keys/app.pem',
+  MUSTER_SANDBOX_URL: 'https://board.example.test/api/board',
+}
+
+/** The sandbox's settings found in an environment, as `env` prints it. */
+const leaked = (printed: string) => printed.split('\n').filter((line) => /^(VERCEL_|GITHUB_APP_|MUSTER_SANDBOX_URL=)/.test(line))
+
+/** A stand-in that notes the environment it started with, in `file`, and reads what it is given on stdin. */
+function standIn(dir: string, name: string, file: string) {
+  const path = join(dir, name)
+  writeFileSync(path, `#!/bin/sh\ncat > /dev/null\nenv > ${join(dir, file)}\n`)
+  chmodSync(path, 0o755)
+  return path
+}
+
+/** Runs lib/wake.ts as the watcher's command() would, on a board of the test's own. */
+function runWake(dir: string, env: Record<string, string>) {
+  return new Promise<number | null>((resolve) => {
+    const child = spawn(process.execPath, [join(HERE, 'lib', 'wake.ts'), '7'], {
+      stdio: 'ignore',
+      env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, MUSTER_DIR: join(dir, 'board'), MUSTER_CONFIG: join(dir, 'config'), MUSTER_PROFILE: 'factory', MUSTER_THREAD: '7', MUSTER_EVENT: '9', ...env } as unknown as NodeJS.ProcessEnv,
+    })
+    child.on('exit', (code) => resolve(code))
+  })
+}
+
+describe('what a wake hands on', () => {
+  it('starts an agent on this machine without the sandbox settings, even when the wake was given them', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-wake-'))
+    const agent = standIn(dir, 'agent', 'agent-env.txt')
+    expect(await runWake(dir, { ...SANDBOX_SETTINGS, FACTORY_AGENT: agent, ANTHROPIC_API_KEY: 'sk-ant-model', FACTORY_REPO: 'https://github.com/acme/web' })).toBe(0)
+    const started = readFileSync(join(dir, 'agent-env.txt'), 'utf8')
+    expect(leaked(started)).toEqual([])
+    expect(started).not.toContain('FACTORY_REPO')
+    // What it does get: the model key and the pointer.
+    for (const line of ['ANTHROPIC_API_KEY=sk-ant-model', 'MUSTER_PROFILE=factory', 'MUSTER_THREAD=7', `MUSTER_DIR=${join(dir, 'board')}`]) expect(started).toContain(`${line}\n`)
+  })
+
+  it("hands the sandbox settings to mu run in a sandbox, with the agent's own token", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-wake-'))
+    standIn(dir, 'mu', 'mu-env.txt')
+    expect(await runWake(dir, { ...SANDBOX_SETTINGS, FACTORY_RUNNER: 'vercel' })).toBe(0)
+    const started = readFileSync(join(dir, 'mu-env.txt'), 'utf8')
+    expect(leaked(started).sort()).toEqual(Object.entries(SANDBOX_SETTINGS).map(([name, value]) => `${name}=${value}`).sort())
+    expect(started).toMatch(/^MUSTER_AGENT_TOKEN=\S+$/m)
+  })
+
+  it('passes the sandbox settings from the host only when it runs wakes in a sandbox', async () => {
+    const settings = Object.keys(SANDBOX_SETTINGS)
+    const pass = async (runner: string | undefined) => {
+      vi.resetModules()
+      vi.stubEnv('FACTORY_RUNNER', runner)
+      try {
+        return (await import('../lib/board.ts')).PASS
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    }
+    expect((await pass(undefined)).filter((name) => settings.includes(name))).toEqual([])
+    expect((await pass('local')).filter((name) => settings.includes(name))).toEqual([])
+    expect((await pass('vercel')).filter((name) => settings.includes(name)).sort()).toEqual([...settings].sort())
+  })
+})
 
 describe('host.ts', () => {
   it("wakes the agent once for a new thread, with a pointer and nothing of the host's secrets, and stops cleanly", async () => {
@@ -28,7 +99,7 @@ describe('host.ts', () => {
     const host = spawn(process.execPath, ['host.ts'], {
       cwd: HERE,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { PATH: process.env.PATH, ...env, FACTORY_AGENT: agent, FACTORY_COALESCE: '0s', HOST_ONLY_SECRET: 'sk-not-for-the-agent' } as unknown as NodeJS.ProcessEnv,
+      env: { PATH: process.env.PATH, ...env, ...SANDBOX_SETTINGS, FACTORY_AGENT: agent, FACTORY_COALESCE: '0s', HOST_ONLY_SECRET: 'sk-not-for-the-agent' } as unknown as NodeJS.ProcessEnv,
     })
     let output = ''
     host.stderr!.on('data', (chunk) => (output += chunk))
@@ -50,6 +121,8 @@ describe('host.ts', () => {
       expect(started).toContain(`MUSTER_THREAD=${issue.id}\n`)
       expect(started).toContain('MUSTER_PROFILE=factory\n')
       expect(started).not.toContain('HOST_ONLY_SECRET')
+      // The sandbox's settings are the host's, and this wake runs on this machine: the agent gets none of them.
+      expect(leaked(started)).toEqual([])
     } finally {
       host.kill('SIGTERM')
     }

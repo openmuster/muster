@@ -75,7 +75,9 @@ a file; those routes check the name themselves.
 The wake starts with a clean environment: `PATH`, `HOME`, the board's own
 variables and a pointer to the thread (`MUSTER_THREAD`, `MUSTER_EVENT`, ...).
 It gets nothing else of the host's environment but the names in `PASS` in
-`lib/board.ts`: add a name there to pass it on. A thread's messages within
+`lib/board.ts`: add a name there to pass it on. The agent it starts on this
+machine gets less again: what any process needs, the pointer and
+`ANTHROPIC_API_KEY` (`AGENT_ENV` in `lib/wake.ts`). A thread's messages within
 30 seconds are one wake (`FACTORY_COALESCE`, such as `10s`), and a session
 that runs past two hours is stopped and tried again.
 
@@ -123,7 +125,9 @@ and `mu run --runner vercel` works it there, with a token for `factory/` and
 the sandbox and installs its dependencies; `FACTORY_PUSH=1` opens a pull
 request with what the agent changed, through your GitHub App. The host
 then needs the board at a URL sandboxes reach (`MUSTER_SANDBOX_URL`) and what
-`mu run --runner vercel` reads, all of them in `PASS`. See muster's
+`mu run --runner vercel` reads, listed in `SANDBOX` in `lib/board.ts`. Those
+reach the wake only with `FACTORY_RUNNER=vercel` in the host's environment,
+and from there only `mu run`: never an agent on this machine. See muster's
 guide, Agents in cloud sandboxes.
 
 In a sandbox the agent can't reach your machine, and it reaches no host but

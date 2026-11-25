@@ -179,7 +179,10 @@ versions are affected.
   module-scope `team` with the watcher `factory`; `pnpm host` (`host.ts`) runs
   it, holding the lease `watch:factory`, and stops cleanly on SIGTERM or
   SIGINT. `lib/wake.ts` replaces `wake.sh`, and in a Vercel sandbox keys the
-  wake's task by the event, so a retried wake makes no second task. The page
+  wake's task by the event, so a retried wake makes no second task. An agent
+  started on this machine gets only what any process needs, the pointer and
+  `ANTHROPIC_API_KEY`; the Vercel and GitHub App settings reach the wake only
+  with `FACTORY_RUNNER=vercel`, and then only `mu run`. The page
   says who holds `tick` and `watch:factory`, and the route is
   `export const GET = team.fetch`. The queue's `board.ts` runs `start.sh` and
   `notify.sh` with `command()`, by their full paths; run it with

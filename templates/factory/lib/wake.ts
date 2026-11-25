@@ -22,6 +22,22 @@ export function brief(thread: string, instructions: string = readFileSync(AGENT,
   return `${instructions}\nThread ${thread} changed. Open it with: mu read ${thread}\nWork out what happened after your last reply, and respond only if it concerns you.\n`
 }
 
+/**
+ * What an agent started on this machine gets: what any process needs (PATH, HOME, ...), the pointer the
+ * watcher's `command()` gave (the board, the profile, the thread and event), and the model key. Nothing
+ * else this wake was given: never the sandbox's Vercel token or the GitHub App's key, which only `mu run
+ * --runner vercel` needs.
+ */
+export const AGENT_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR',
+  'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_PROFILE',
+  'MUSTER_WATCHER', 'MUSTER_THREAD', 'MUSTER_CHANNEL', 'MUSTER_EVENT', 'MUSTER_EVENT_TYPE', 'MUSTER_ATTEMPT',
+  'ANTHROPIC_API_KEY',
+]
+
+/** The environment an agent on this machine starts with: only the names in AGENT_ENV, from this wake's. */
+export const agentEnv = (env: Env): Env => Object.fromEntries(AGENT_ENV.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]))
+
 /** The agent's command, as words: FACTORY_AGENT split on spaces, or Claude Code headless. */
 export const agentWords = (env: Env): string[] => (env.FACTORY_AGENT ?? 'claude --print').split(' ').filter(Boolean)
 
@@ -49,6 +65,8 @@ async function inSandbox(team: Board, thread: string, env: Env): Promise<number>
   const made = await team.taskCreate({ channel: 'factory-runs', text: brief(thread), labels: { wake: thread }, ...(env.MUSTER_EVENT ? { idempotencyKey: `factory-wake-${env.MUSTER_EVENT}` } : {}) })
   const permissions = ['read', 'post', 'react', 'label']
   const { token } = await team.backend.tokens.create({ profile: 'factory', can: { 'factory/': permissions, 'factory-runs': permissions }, ttl: 3600 })
+  // Only `mu run` gets the sandbox's settings (Vercel, the GitHub App, MUSTER_SANDBOX_URL): it starts the
+  // sandbox and pushes from here. The agent in the sandbox gets none of them, only its token for the board.
   return run(['mu', ...sandboxWords(made.task.id, env)], { env: { ...env, MUSTER_AGENT_TOKEN: token } })
 }
 
@@ -62,7 +80,7 @@ export async function wake(thread: string, env: Env = process.env): Promise<numb
       team.close()
     }
   }
-  return run(agentWords(env), { input: brief(thread), env })
+  return run(agentWords(env), { input: brief(thread), env: agentEnv(env) })
 }
 
 if (process.argv[1] === WAKE) {
