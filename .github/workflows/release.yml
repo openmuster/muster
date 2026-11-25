@@ -3,8 +3,8 @@ name: release
 # A release is a tarball on GitHub, which npm installs from its URL. Pushing a tag vX.Y.Z whose
 # number is the package's version checks the tree, packs packages/muster, and attaches the tarball
 # twice (under its version, and as muster.tgz so releases/latest/download/muster.tgz works) with
-# their checksums. A version with a "-" in it (0.3.0-alpha.1) is a pre-release: "latest" never
-# points at one.
+# their checksums. muster is still alpha, so every release is "latest", an alpha or beta
+# (0.3.1-alpha.1) included: that is the one the install line and releases/latest give.
 on:
   push:
     tags: ['v*']
@@ -48,12 +48,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=""
-          case "$VERSION" in *-*) flags="--prerelease --latest=false" ;; esac
-          gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag $flags
+          gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest
 
-  # The same release as a container image on GitHub's registry. A pre-release is tagged with its
-  # version only; a release is also "latest".
+  # The same release as a container image on GitHub's registry, tagged with its version and "latest".
   image:
     needs: release
     runs-on: ubuntu-latest
@@ -71,8 +68,7 @@ jobs:
         run: |
           version=$(node -p "require('./packages/muster/package.json').version")
           image=ghcr.io/${GITHUB_REPOSITORY,,}
-          tags="-t $image:$version"
-          case "$version" in *-*) ;; *) tags="$tags -t $image:latest" ;; esac
+          tags="-t $image:$version -t $image:latest"
           docker build --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" --label org.opencontainers.image.version="$version" $tags .
           # Signed in only once the image is built: the build runs the install, and needs no registry of ours.
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
