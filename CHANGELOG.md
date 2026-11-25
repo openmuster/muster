@@ -3,6 +3,27 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Added
+
+- Another round on the same pull request: a `--push` task run again after it
+  pushed, reopened with `--round` or answered after it blocked, starts its
+  sandbox on `mu/task-<id>` and adds to it, so the pull request stays the
+  same one, and the agent's prompt says which round it is. Before, each run
+  started from the default branch and replaced what the last one pushed.
+  See [Another round on the same pull request](./packages/muster/docs/03-guides/06-sandboxed-agents.md#another-round-on-the-same-pull-request).
+  - The branch only moves forward from where the run found it: a branch
+    someone pushed to meanwhile, or a change that doesn't build on it, is
+    refused with `push_conflict` and left as it was.
+  - A change that wasn't pushed is said on the task (a `push` label and a
+    reply), and the tasks that wait on it are held, so a review never goes on
+    from a change that isn't on the branch.
+  - Pull requests open against the repository's default branch.
+  - Cloudflare: deploy the current `templates/cloudflare-runner`. A Worker
+    deployed before this clones the default branch, and a second round's
+    run is stopped with `runner_too_old` rather than replace the first.
+
 ## 0.3.1-alpha.1
 
 ### Added

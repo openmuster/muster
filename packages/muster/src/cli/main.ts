@@ -28,7 +28,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
 import { SANDBOX_ENV, cloudflare, vercel, type BaseRecord, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
-import { BUNDLE, BUNDLE_MAX, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
+import { BUNDLE, BUNDLE_MAX, branchState, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -1503,10 +1503,12 @@ async function runTask(run: Run, parsed: Parsed, target: string | undefined, me:
 }
 
 /** What an agent is told: where its task is and how to settle it. A pointer, never the task's text. */
-export const agentPrompt = (task: number, profile: string | null) =>
+export const agentPrompt = (task: number, profile: string | null, rounds = 0) =>
   [
     `You hold task #${task} on a muster board${profile ? `, writing as ${profile}` : ''}.`,
     `Read its brief and everything in its thread first: mu read ${task}`,
+    // A task sent back for another round: its earlier work is where it started, and what was asked since is in the thread.
+    ...(rounds > 0 ? [`This is round ${rounds + 1}: the task was done before and sent back. Your checkout starts from the earlier round's work. Do what the thread asked since that round ended, on top of it.`] : []),
     `Reply with your plan, then after each step that matters: mu reply ${task} "<what you did, the command, its result>"`,
     `When the check in the brief passes, run it, read its output, and only then: mu tasks complete ${task} "<what now exists, and the command that shows it>"`,
     `If you can't finish: mu tasks fail ${task} "<why>". To ask a person: mu tasks block ${task} "<the question>", then stop.`,
@@ -1580,7 +1582,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const remembered = on(parsed.flags, 'fresh') || before.agent !== agent.name || !isSessionId(before.session) ? undefined : before.session
   const start = (resume: string | undefined) => runLocal({
     agent,
-    prompt: agentPrompt(task, me.profile),
+    prompt: agentPrompt(task, me.profile, claimed.task.rounds),
     cwd,
     ...(worktree ? { worktree: { repo: resolvePath(worktree), branch: str(parsed.flags, 'branch') ?? `task-${task}` } } : {}),
     env,
@@ -1886,6 +1888,10 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   // worker's is. (Its steps' results aren't filled in here: `mu run` in the sandbox can't write as the
   // daemon, so it fails such a task rather than start an agent on it. Its worker fills them in.)
   const push = pushAsked && task !== 0 && !held.claimToken ? await pushesTask(run.team, task, (await run.team.whoami()).principal, true) : pushAsked
+  // Where the task's branch stands, read here before anything starts: a task pushed before carries on from its
+  // branch, so a second round adds to the first and its pull request stays the same one.
+  let branches: { defaultBranch: string; head: string | null } | undefined
+  if (push && task !== 0 && gh && cloneToken) branches = await starting(branchState({ repo: gh, token: cloneToken, branch: `mu/task-${task}`, ...githubApi }))
   // One length of time sets them all. The agent gets `timeout`; a Vercel sandbox outlives it by the time it
   // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
@@ -1954,6 +1960,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     ...(repo ? { repo, install: !on(parsed.flags, 'no-install') } : {}),
     // Only for cloning, and only for this repository's git routes: never in the agent's policy.
     ...(cloneToken ? { github: { token: cloneToken } } : {}),
+    ...(branches?.head ? { ref: { branch: `mu/task-${task}`, sha: branches.head } } : {}),
     // In a sandbox the agent's own prompts would stop a headless run at its first command, and the sandbox with
     // its network policy is the boundary. --safe keeps the prompts on for an agent that can work that way.
     permissionMode: safe ? 'safe' : 'bypass',
@@ -1988,9 +1995,19 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const deadline = Date.now() + (lifetime ?? 30 * 60) * 1000 + 60_000
   let exitCode: number | null = null
   let pr: string | null = null
+  let unpushed: Failure | undefined
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
-    if (push && exitCode !== null && !run.io.stop.aborted) pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', runner: where === 'vercel' ? 'Vercel' : 'Cloudflare', ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) })
+    if (push && exitCode !== null && !run.io.stop.aborted) {
+      pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', runner: where === 'vercel' ? 'Vercel' : 'Cloudflare', ...(branches ? { branches } : {}), ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) }).catch(async (error: unknown) => {
+        // Anything that stopped the change reaching its branch. A pull request that wasn't opened has its branch pushed.
+        if (!(error instanceof Failure) || error.reason === 'pull_request_failed') throw error
+        // The agent may have completed its task already: what waits on it is held, so nothing goes on from a change that isn't on the branch.
+        await heldUnpushed(run, task, error)
+        unpushed = error
+        return null
+      })
+    }
   } finally {
     await started.stop().catch(() => {})
     // The token made for this run has nothing left to do: it goes now, not when it would have expired.
@@ -2002,11 +2019,32 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     run.io.err(`stopped  ${line}  removed`)
     return stopCode(run.io.stop)
   }
+  // Said on the board already (heldUnpushed), and an error here like any other: one document under --json.
+  if (unpushed) throw unpushed
   const state = task ? ((await run.team.readThread({ id: task }).catch(() => null))?.task?.state ?? null) : null
   print(run, { ...what, exit: exitCode, ...(state ? { state } : {}), ...(push ? { pr } : {}) }, () => `ended    ${line}  exit ${exitCode ?? 'unknown'}${state ? `  task ${state}` : ''}${pr ? `\npr       ${pr}` : push ? `\npr       none: ${exitCode === null ? "the run ended before it could be read" : 'nothing changed'}` : ''}`)
   // A worker's run that ended with no word on how gave its claim back: the worker tries the task again, a few times.
   if (claimed && exitCode === null) throw Object.assign(new Error('the run ended without saying how: its sandbox may have been removed'), { worker: 'retry' as const })
   return exitCode === 0 ? 0 : 1
+}
+
+/**
+ * A change that didn't reach its branch, said where people read: a reply and a `push` label on the task, and
+ * every task that waits on it held with the same kind, so a review never goes on from a change that isn't on
+ * the branch. The task itself stays as its agent left it. Holding a task takes its owner: one the board's
+ * owner doesn't own is left as it is, with the reply on the task to say why.
+ */
+async function heldUnpushed(run: Run, task: number, failure: Failure): Promise<void> {
+  await run.team.label({ id: task, set: { push: failure.reason } }).catch(() => {})
+  await run.team.reply({ to: task, text: `The change wasn't pushed (${failure.reason}): ${failure.message}${failure.hint ? ` ${failure.hint}` : ''}` }).catch(() => {})
+  const channel = (await run.team.readThread({ id: task }).catch(() => null))?.message.channel
+  if (!channel) return
+  const { tasks } = await run.team.taskList({ channel, state: 'open', limit: 1000 }).catch(() => ({ tasks: [] as { id: number; state: string; needs: number[] }[] }))
+  for (const next of tasks) {
+    if (!next.needs.includes(task) || (next.state !== 'ready' && next.state !== 'waiting')) continue
+    // As the board's owner, with no profile: `--as` names the agents' profile, and holding a task is its owner's to do.
+    await run.team.as(null).taskBlock({ id: next.id, kind: failure.reason, reason: `#${task}'s change isn't on its branch: read #${task}` }).catch(() => {})
+  }
 }
 
 /**
@@ -2016,7 +2054,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
  * agent's, and the pull request opened from here. No sandbox the agent ran in ever holds the token. Null
  * when nothing changed.
  */
-async function pushChanges(run: Run, started: CloudRun, options: { task: number; runner: string; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; api?: string; remote?: string }): Promise<string | null> {
+async function pushChanges(run: Run, started: CloudRun, options: { task: number; runner: string; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; branches?: { defaultBranch: string; head: string | null }; api?: string; remote?: string }): Promise<string | null> {
   if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' })
   if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
   const thread = await run.team.readThread({ id: options.task }).catch(() => null)
@@ -2038,9 +2076,12 @@ async function pushChanges(run: Run, started: CloudRun, options: { task: number;
   if (!bundle) throw new Failure('push_failed', `The agent's changes are missing, or over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
   // Made now, on this machine, for this repository, to write its contents and open the pull request.
   const { token } = await installationToken(options.app, options.repo, { contents: 'write', pull_requests: 'write' }, options.api ? { api: options.api } : {})
-  await pushBundle({ repo: options.repo, token, bundle, base: started.checkout.sha, branch, ...(options.remote ? { remote: options.remote } : {}) })
-  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a ${options.runner} sandbox.`, ...(options.api ? { api: options.api } : {}) })
-  await run.team.label({ id: options.task, set: { pr: url } }).catch(() => {})
+  // The branch moves only from where it was when the run started: no branch then, or the commit the sandbox began on.
+  await pushBundle({ repo: options.repo, token, bundle, base: started.checkout.sha, branch, expect: options.branches?.head ?? null, ...(options.remote ? { remote: options.remote } : {}) })
+  // Against the default branch, also when the checkout started on the task's own branch.
+  const url = await openPullRequest({ repo: options.repo, token, head: branch, base: options.branches?.defaultBranch ?? started.checkout.branch, title, body: `Task #${options.task} on the board, worked by ${options.profile} in a ${options.runner} sandbox.`, ...(options.api ? { api: options.api } : {}) })
+  // A refusal said on an earlier run is over: the change is on the branch now.
+  await run.team.label({ id: options.task, set: { pr: url }, unset: ['push'] }).catch(() => {})
   await run.team.reply({ to: options.task, text: `Pull request: ${url}` }).catch(() => {})
   return url
 }

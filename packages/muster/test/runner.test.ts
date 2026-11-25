@@ -96,6 +96,11 @@ describe('mu run', () => {
     expect(after).toMatchObject({ state: 'completed', result: 'done, tests pass', labels: { cost: '0.1234', tokens: '1000', session: 'sess-42' } })
     const thread = JSON.parse((await cli(dir, ['read', '1', '--json'])).stdout)
     expect(thread.replies.map((reply: { text: string; by: { profile: string } }) => [reply.text, reply.by.profile])).toEqual([['plan: do it', 'worker']])
+    expect(prompt).not.toContain('round')
+    // Sent back for another round, the agent is told so: it carries on from the earlier work, with what was asked since.
+    await cli(dir, ['tasks', 'reopen', '1', '--round'])
+    expect((await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir, '--as', 'worker', '--json'], { env })).code).toBe(0)
+    expect(readFileSync(join(dir, 'prompt.txt'), 'utf8')).toContain('This is round 2')
   })
 
   it('the agent\'s environment is clean, plus what a runner names for the place it runs in', async () => {

@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -239,6 +240,20 @@ export const Sandbox = { async create(options) {
     return { GITHUB_APP_ID: '123', GITHUB_APP_KEY_FILE: file }
   }
 
+  /** What GitHub answers about acme/web's branches, read from the bare repository standing in for it: main is the default. */
+  const branchAnswer = (remote: string, url: string | undefined): [number, unknown] | null => {
+    if (url === '/repos/acme/web') return [200, { default_branch: 'main' }]
+    const ref = url?.match(/^\/repos\/acme\/web\/git\/ref\/heads\/(.+)$/)
+    if (!ref) return null
+    const branch = decodeURIComponent(ref[1]!)
+    try {
+      const sha = execFileSync('git', ['-C', remote, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`], { encoding: 'utf8' }).trim()
+      return [200, { ref: `refs/heads/${branch}`, object: { sha } }]
+    } catch {
+      return [404, { message: 'Not Found' }]
+    }
+  }
+
   it('local: the flags that are about a sandbox are refused on this machine, before any agent starts', async () => {
     const dir = tempDir()
     const marker = join(dir, 'started')
@@ -298,6 +313,8 @@ export const Sandbox = { async create(options) {
         got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: parsed })
         const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
         if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
         if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
         json(201, { html_url: 'https://github.com/acme/web/pull/7' })
       })
@@ -328,11 +345,19 @@ export const Sandbox = { async create(options) {
     expect((await import('node:fs')).readFileSync(join(dir, 'sdk.log'), 'utf8')).not.toContain(Buffer.from('x-access-token:ghs_write').toString('base64'))
     expect(lines.findIndex((e) => e.deleted)).toBeGreaterThan(bundled)
 
-    // Nothing changed: no push, no pull request.
-    const quiet = fakeSdk(tempDir(), { checkout: `${base}\nmain`, bundled: 'unchanged' })
+    // A second round starts on the branch the first one pushed, not on main. Nothing changed: no push, no pull request.
+    const pushed = execFileSync('git', ['-C', remote, 'rev-parse', 'refs/heads/mu/task-12'], { encoding: 'utf8' }).trim()
+    const quiet = fakeSdk(tempDir(), { checkout: `${pushed}\nHEAD`, bundled: 'unchanged' })
     const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env } })
-    api.close()
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
+    expect((await quiet.read())[0].create.source).toEqual({ type: 'git', url: 'https://github.com/acme/web.git', revision: 'mu/task-12' })
+    // A sandbox that started anywhere else (an SDK that ignored the revision) is stopped before its agent starts.
+    const elsewhere = fakeSdk(tempDir(), { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
+    const refused = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...elsewhere.env } })
+    api.close()
+    expect(JSON.parse(refused.stderr.slice(refused.stderr.indexOf('{'))).error.reason).toBe('runner_setup_failed')
+    expect((await elsewhere.read()).some((e) => e.run?.detached)).toBe(false)
+    expect(execFileSync('git', ['-C', remote, 'rev-parse', 'refs/heads/mu/task-12'], { encoding: 'utf8' }).trim()).toBe(pushed)
   })
 
   it("vercel: pushes a workflow's task only as the daemon made it, run by ID or by a worker, whatever its labels say now", async () => {
@@ -359,6 +384,8 @@ export const Sandbox = { async create(options) {
         const parsed = body ? JSON.parse(body) : null
         const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
         if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
         if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
         pulls.push(parsed.head)
         json(201, { html_url: `https://github.com/acme/web/pull/${pulls.length}` })
@@ -387,6 +414,73 @@ export const Sandbox = { async create(options) {
       const worker = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', ...push.filter((part) => part !== '--json'), '--by', `${me}+workflows`], { env })
       expect(worker.code).toBe(0)
       expect(pulls).toEqual([`mu/task-${work}`])
+    } finally {
+      api.close()
+    }
+  })
+
+  it("vercel: a change that would replace what is on the task's branch isn't pushed, the board says so, and what waits on the task is held", async () => {
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const dir = tempDir()
+    const work = JSON.parse((await cli(dir, ['tasks', 'create', 'cards/card-1', 'work', '--json'])).stdout).task.id as number
+    const review = JSON.parse((await cli(dir, ['tasks', 'create', 'cards/card-1', 'review', '--needs', String(work), '--json'])).stdout).task.id as number
+    // GitHub: main, and the task's branch from an earlier round, one commit on top of it.
+    const repoDir = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(repoDir, 'init', '-q', '-b', 'main')
+    writeFileSync(join(repoDir, 'README.md'), 'hello\n')
+    git(repoDir, 'add', '-A')
+    git(repoDir, 'commit', '-q', '-m', 'base')
+    const base = git(repoDir, 'rev-parse', 'HEAD')
+    git(repoDir, 'checkout', '-q', '-b', `mu/task-${work}`)
+    writeFileSync(join(repoDir, 'round1.txt'), 'round one\n')
+    git(repoDir, 'add', '-A')
+    git(repoDir, 'commit', '-q', '-m', 'round one')
+    const round1 = git(repoDir, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', repoDir, remote])
+    // The sandbox starts on round one, but its agent's change is built on main: pushing it would drop round one.
+    git(repoDir, 'checkout', '-q', 'main')
+    writeFileSync(join(repoDir, 'README.md'), 'hello, again\n')
+    git(repoDir, 'commit', '-q', '-am', 'from main')
+    execFileSync('git', ['-C', repoDir, 'bundle', 'create', join(repoDir, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(repoDir, 'mu.bundle')).toString('base64')
+    const pulls: string[] = []
+    const api = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const parsed = body ? JSON.parse(body) : null
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        pulls.push(parsed.head)
+        json(201, { html_url: 'https://github.com/acme/web/pull/1' })
+      })
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    const sdk = fakeSdk(dir, { checkout: `${round1}\nHEAD`, bundled: 'bundle', file: bundle })
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env, ...appEnv(), MUSTER_VERCEL_BASE: 'off', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    try {
+      const run = await cli(dir, ['run', String(work), '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push'], { env })
+      expect(run.code).toBe(1)
+      expect(run.stderr, run.stderr + run.stdout).toContain('was left as it was')
+      // Round one is still the branch's head, and no pull request was asked for.
+      expect(git(remote, 'rev-parse', `refs/heads/mu/task-${work}`)).toBe(round1)
+      expect(pulls).toEqual([])
+      // Said where people read it, and the review that waits on the task can't start on a change that isn't there.
+      const thread = JSON.parse((await cli(dir, ['read', String(work), '--json'])).stdout)
+      expect(thread.message.labels.push).toBe('push_conflict')
+      expect(thread.replies.map((reply: { text: string }) => reply.text).join('\n')).toContain("The change wasn't pushed (push_conflict)")
+      const held = JSON.parse((await cli(dir, ['read', String(review), '--json'])).stdout).task
+      expect(held, run.stderr).toMatchObject({ state: 'blocked', hold: { kind: 'push_conflict' } })
+      // With --json, the refusal is one document, and nothing claims a pull request was made or not needed.
+      const json = await cli(dir, ['run', String(work), '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...fakeSdk(tempDir(), { checkout: `${round1}\nHEAD`, bundled: 'bundle', file: bundle }).env } })
+      expect(json.code).toBe(1)
+      expect(json.stdout).toBe('')
+      expect(JSON.parse(json.stderr.slice(json.stderr.indexOf('{'))).error.reason).toBe('push_conflict')
     } finally {
       api.close()
     }
@@ -432,6 +526,8 @@ export const Sandbox = { async create(options) {
         const parsed = body ? JSON.parse(body) : null
         got.push({ url: req.url, method: req.method, auth: req.headers.authorization, body: parsed })
         if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
         if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
         json(201, { html_url: 'https://github.com/acme/web/pull/8' })
       })
@@ -686,6 +782,8 @@ export const Sandbox = { async create(options) {
         }
         const parsed = body ? JSON.parse(body) : null
         if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
         if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
         pulls.push(parsed)
         json(201, { html_url: `https://github.com/acme/web/pull/${pulls.length}` })
@@ -748,6 +846,8 @@ export const Sandbox = { async create(options) {
         }
         const parsed = body ? JSON.parse(body) : null
         if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
         if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
         pulls.push(parsed)
         json(201, { html_url: `https://github.com/acme/web/pull/${pulls.length}` })

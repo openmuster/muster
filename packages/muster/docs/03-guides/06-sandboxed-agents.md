@@ -169,9 +169,30 @@ write, made when the push is. The App's key never leaves this machine.
 With `--push`, once the agent is done, `mu run` closes the sandbox to every
 host, commits what the agent changed on top of where the checkout started,
 and reads it out as a git bundle. It pushes that from this machine to
-`mu/task-12`, and opens a pull request into the branch the repository was
-cloned from. The pull request's address is on the task as a `pr` label and a
+`mu/task-12`, and opens a pull request into the repository's default
+branch. The pull request's address is on the task as a `pr` label and a
 reply. Nothing changed, no pull request.
+
+### Another round on the same pull request
+
+A task run again after it pushed, reopened with `mu tasks reopen 12 --round`
+or answered after it blocked, carries on from its branch. Before the sandbox
+starts, `mu run` reads where `mu/task-12` is on GitHub and checks the
+sandbox out there, so the agent's second round adds to the first, and the
+push lands on the same pull request. The agent is told which round it is.
+
+- **The branch only moves forward from where the run found it.** A change
+  that doesn't build on that commit, or a branch someone pushed to while the
+  agent worked, is refused with `push_conflict`, and the branch is left as
+  it was.
+- **A change that wasn't pushed is said on the board.** The task gets a
+  `push` label and a reply with why, and the tasks that wait on it are held
+  with the same kind, so a review never goes on from a change that isn't on
+  the branch. Read the thread, then unblock them or run the task again.
+- **A sandbox that didn't start on the branch starts no agent.** An older
+  `@vercel/sandbox`, or a Cloudflare Worker deployed before it knew the
+  branch, would clone the default branch instead: the run is stopped with
+  `runner_setup_failed` or `runner_too_old`.
 
 - **No token is ever where the agent has been.** The read token is in the
   sandbox's policy only while Vercel clones the repository, before anything of the

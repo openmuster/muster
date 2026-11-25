@@ -3,7 +3,7 @@ import { authorized, usable } from './auth.ts'
 import { type BoardProps, type ModelProps, type RepoProps, REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from './gates.ts'
 import { INSTALL_SKIPPED, KILL_GRACE_MS, agentExited, capStream, decide, ended, execRequest, exitCode, installBudget, installSteps, installed, readWithin, stillGoing, timeLeft, within } from './lifecycle.ts'
 
-type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; repoAuth?: string; setup: string[][]; /** The script that installs the repository's dependencies, when asked: muster's own, sent by the CLI. */ install?: string; timeoutMs?: number; attach?: boolean }
+type Start = { task: number; command: string[]; prompt: string; env: Record<string, string>; board: BoardProps; model?: ModelProps; repo?: string; /** The branch to clone instead of the default one: a task's earlier round, carried on. */ ref?: string; repoAuth?: string; setup: string[][]; /** The script that installs the repository's dependencies, when asked: muster's own, sent by the CLI. */ install?: string; timeoutMs?: number; attach?: boolean }
 type Instance = 'lite' | 'basic' | 'standard-1' | 'standard-2' | 'standard-3' | 'standard-4'
 type Env = { RUNNER_SECRET: string; RUNS: DurableObjectNamespace<Run>; INSTANCE?: Instance; LOG_TAIL?: string }
 
@@ -121,7 +121,9 @@ export class Run extends DurableObject<Env> {
       for (const command of input.setup) await this.run(command, '/workspace', input.env, timeLeft(startedAt, Date.now()))
       if (input.repo) {
         const left = Math.max(1, Math.floor(timeLeft(startedAt, Date.now()) / 1000))
-        await this.run(['timeout', '--kill-after=5', String(left), 'git', 'clone', '--depth', '1', '--', input.repo, 'repo'], '/workspace', input.env, left * 1000 + KILL_GRACE_MS)
+        // A branch named like an option, or like a path out of refs/heads, is no branch to clone.
+        if (input.ref !== undefined && !/^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/.test(input.ref)) throw new Error('the branch to clone is not a branch name')
+        await this.run(['timeout', '--kill-after=5', String(left), 'git', 'clone', '--depth', '1', ...(input.ref !== undefined ? ['--branch', input.ref] : []), '--', input.repo, 'repo'], '/workspace', input.env, left * 1000 + KILL_GRACE_MS)
         // Read before anything the agent decides runs, with none of the repository's own git configuration.
         const head = await this.capture(['sh', '-c', 'git rev-parse HEAD && git symbolic-ref --short -q HEAD'], '/workspace/repo', GIT_ENV)
         const [sha, branch] = head.trim().split('\n')

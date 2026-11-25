@@ -25,6 +25,11 @@ export type CloudRequest = {
   install?: boolean
   /** A GitHub token for the repository: added to its git routes while it is cloned, before anything of it runs, and never after. */
   github?: { token: string }
+  /**
+   * The branch to check out instead of the default one, and the commit it was at when this side looked: a task
+   * worked before carries on from where its last round left it. A checkout that isn't at `sha` is refused.
+   */
+  ref?: { branch: string; sha: string }
   timeoutMs?: number
   /** Stay with the run until its agent exits and keep the sandbox to be read after (`--push`): a runner that returns at once otherwise does so. */
   attach?: boolean
@@ -115,7 +120,7 @@ export type VercelMade = {
 type Made = VercelMade
 
 /** What a new sandbox is made with. */
-type CreateOptions = { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; name?: string; source?: { type: 'git'; url: string } } & Partial<VercelCredentials>
+type CreateOptions = { networkPolicy: VercelPolicy; image?: string; persistent?: boolean; env: Record<string, string>; timeout?: number; name?: string; source?: { type: 'git'; url: string; revision?: string } } & Partial<VercelCredentials>
 
 /** The part of `@vercel/sandbox` this runner uses, so it can be handed the real class or a stand-in. */
 export type VercelSandbox = {
@@ -315,7 +320,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
           } else {
             setup = []
             if (request.repo) {
-              const cloned = await sandbox.runCommand({ cmd: 'git', args: ['clone', '--quiet', '--', request.repo, dir!] })
+              const cloned = await sandbox.runCommand({ cmd: 'git', args: ['clone', '--quiet', ...(request.ref ? ['--branch', request.ref.branch] : []), '--', request.repo, dir!] })
               if (cloned && typeof cloned.exitCode === 'number' && cloned.exitCode !== 0) {
                 await end(sandbox)
                 throw new Failure('runner_setup_failed', `Cloning ${bare(request.repo)} in the sandbox failed (exit ${cloned.exitCode}).`, { hint: 'A private repository needs a GitHub App installed on it.' })
@@ -332,7 +337,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         persistent: false,
         env: sandboxEnv,
         ...(request.timeoutMs ? { timeout: request.timeoutMs } : {}),
-        ...(request.repo ? { source: { type: 'git', url: request.repo } } : {}),
+        ...(request.repo ? { source: { type: 'git', url: request.repo, ...(request.ref ? { revision: request.ref.branch } : {}) } } : {}),
       })
       if (preparing && !sandbox.update) {
         await end(sandbox)
@@ -361,7 +366,14 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         const head = await sandbox.runCommand({ cmd: 'sh', args: ['-c', 'git rev-parse HEAD && git rev-parse --abbrev-ref HEAD'], cwd: dir })
         // Read after the repository's install ran, so it is checked as anything from the sandbox is.
         const [sha, branch] = (await stdoutOf(head)).trim().split('\n')
-        if (sha && branch && SHA.test(sha) && BRANCH.test(branch)) checkout = { sha, branch }
+        if (request.ref) {
+          // Checked out at a revision, git may say HEAD rather than the branch: the commit is what counts.
+          if (sha !== request.ref.sha) {
+            await end(sandbox)
+            throw new Failure('runner_setup_failed', `The sandbox didn't start on ${request.ref.branch} at ${request.ref.sha.slice(0, 12)}, so the run was stopped before the agent started.`, { hint: 'The branch may have moved: run the task again. npm i @vercel/sandbox@latest if it keeps happening.' })
+          }
+          checkout = { sha, branch: request.ref.branch }
+        } else if (sha && branch && SHA.test(sha) && BRANCH.test(branch)) checkout = { sha, branch }
       }
       if (preparing) await sandbox.update!({ networkPolicy: { allow } })
       const { bin, args } = request.agent.command({ permissionMode: request.permissionMode ?? 'safe' })
@@ -436,6 +448,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
         // The Worker enforces this itself: the board's host with these routes, and the token it adds.
         board: { host: new URL(request.board.url).host, rules: networkPolicy.allow[new URL(request.board.url).host], token: request.board.token },
         ...(request.repo ? { repo: request.repo } : {}),
+        // The branch to clone instead of the default one. A Worker that doesn't know it clones the default: checked below.
+        ...(request.repo && request.ref ? { ref: request.ref.branch } : {}),
         // Added by the Worker to the repository's clone routes while it clones, then that host is closed: never in the container.
         ...(request.repo && request.github ? { repoAuth: `Basic ${Buffer.from(`x-access-token:${request.github.token}`).toString('base64')}` } : {}),
         setup: request.setup ?? [],
@@ -454,7 +468,15 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
       // What the Worker says about the checkout came out of the container: it is checked as anything from there is.
       const sha = made.checkout?.sha
       const branch = made.checkout?.branch
-      const checkout = typeof sha === 'string' && typeof branch === 'string' && SHA.test(sha) && BRANCH.test(branch) ? { sha, branch } : undefined
+      let checkout = typeof sha === 'string' && typeof branch === 'string' && SHA.test(sha) && BRANCH.test(branch) ? { sha, branch } : undefined
+      if (request.ref) {
+        // A Worker deployed before it knew `ref` cloned the default branch: its agent's work would replace the last round's.
+        if (sha !== request.ref.sha) {
+          await stop().catch(() => {})
+          throw new Failure('runner_too_old', `The runner Worker didn't start on ${request.ref.branch} at ${request.ref.sha.slice(0, 12)}, so the run was stopped.`, { hint: 'Deploy the current templates/cloudflare-runner, then run the task again.' })
+        }
+        checkout = { sha, branch: request.ref.branch }
+      }
       return {
         id: made.id,
         stop,
