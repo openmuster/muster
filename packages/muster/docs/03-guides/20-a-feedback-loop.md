@@ -41,8 +41,8 @@ flowchart LR
   then what to change and how to check it. The spec goes on the card as a
   reply, written as `triage`, only when the triage run's own worker completed
   it (`workflowResult`).
-- **The card run quotes that reply** with `{on.text}`, and the report with
-  `{thread.text}`, both fenced as content, not instructions.
+- **The card run quotes that reply** with `{on.text}`, fenced as content,
+  not instructions. The triage step alone reads the report.
 
 ## Set it up
 
@@ -69,7 +69,12 @@ are. Read it each time a card moves, so a change takes effect at once.
 - **Anyone else's** waits, held `approval`, and you are told. Someone trusted
   labels it `approved=yes` (`mu label 12 approved=yes`, or in the inspector).
   A label by anyone else does nothing.
-- **An author sync couldn't name** is never trusted.
+- **An author sync couldn't name** is never trusted, nor a GitHub author:
+  GitHub's sync names one by login, which can change hands, so a GitHub
+  issue always waits for an approval.
+- **The work never reads the report.** The card run quotes the spec that was
+  triaged (and approved, where it had to be) with `{on.text}`, never the
+  report itself.
 
 ## Another round
 

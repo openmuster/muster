@@ -78,7 +78,8 @@ describe('templates/loop', () => {
     const work = (await run(report.id, 'card'))!
     expect(work.spec!.text).toContain(`The message #${spec.id} this run was asked on`)
     expect(work.spec!.text).toContain('In Inbox.tsx, render the number')
-    expect(work.spec!.text).toContain('the stacks should say how many are in them')
+    // Only the spec that was triaged, and approved where it had to be: the raw report never reaches a run that pushes.
+    expect(work.spec!.text).not.toContain('the stacks should say how many are in them')
     expect(work.work!.needs).toEqual([work.spec!.id])
   })
 
@@ -108,6 +109,19 @@ describe('templates/loop', () => {
     expect(await card(report.id)).toMatchObject({ hold: { kind: 'working' } })
     expect((await run(report.id, 'card'))!.spec!.text).toContain('Add a dark theme')
     void team
+  })
+
+  it('a GitHub author is never trusted by login, and the spec on the card links nowhere', async () => {
+    const { team, as, tick, run, complete, card } = await setup()
+    process.env.LOOP_TRUSTED = 'gh:user:octocat'
+    const report = await as('gh:user:octocat').post({ channel: 'cards/github', text: 'add a footer' })
+    await tick()
+    await complete((await run(report.id, 'triage'))!.triage!.id, 'Add a footer\n\nSee https://evil.example/x and [docs][1]\n[1]: https://evil.example/y')
+    await tick()
+    expect(await card(report.id)).toMatchObject({ hold: { kind: 'approval' } })
+    const spec = (await team.readThread({ id: report.id })).replies.find((reply) => reply.by.profile === 'triage')!
+    expect(spec.text).not.toContain('://')
+    expect(spec.text).not.toMatch(/^\s*\[[^\]]+\]:/m)
   })
 
   it('a report its author changed while it waited is triaged again, from the new text', async () => {

@@ -17,6 +17,9 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { board, env, github, linear, loadWorkflows, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
 
+/** The sync keys below whose authors are named by a login someone else could take later: `gh`, GitHub's. */
+const LOGIN_KEYED = new Set(['gh'])
+
 /** The profiles this module writes as. What they write never starts anything here. */
 const OURS = new Set(['intake', 'triage', 'shots', 'workflows'])
 
@@ -32,6 +35,8 @@ const actorId = (by: By) => (by.profile ? `${by.principal}+${by.profile}` : by.p
 export function trusted(by: By, owner: string): boolean {
   if (by.principal === owner && by.profile === null) return true
   if (/:user:unknown$/.test(by.principal) || !by.principal.includes(':')) return false
+  // GitHub's sync names an author by login, which can be renamed and taken by someone else: never trusted by it.
+  if (LOGIN_KEYED.has(by.principal.slice(0, by.principal.indexOf(':')))) return false
   const list = (process.env.LOOP_TRUSTED ?? '').split(',').map((each) => each.trim()).filter(Boolean)
   return list.includes(actorId(by))
 }
@@ -50,7 +55,17 @@ const ownerOf = async (team: Board) => (await team.whoami()).principal
  * Agent text on its way to a card, which Slack, Linear and GitHub mirror: it mentions nobody, pings no channel
  * and makes no link or image, as the daemon's own quotes don't. The words stay as written.
  */
-const defused = (text: string) => text.replaceAll('@', '\uFF20').replaceAll('<', '\uFF1C').replaceAll('>', '\uFF1E').replaceAll('](', '] (').replaceAll('![', '\uFF01[')
+const defused = (text: string) =>
+  text
+    .replaceAll('@', '\uFF20')
+    .replaceAll('<', '\uFF1C')
+    .replaceAll('>', '\uFF1E')
+    .replaceAll('](', '] (')
+    .replaceAll('![', '\uFF01[')
+    // A bare address unfurls in Slack and links everywhere: `https: //host` reads the same and fetches nothing.
+    .replaceAll('://', ': //')
+    // A reference-style link definition (`[x]: https://…`) makes a link of any `[x]` above it.
+    .replace(/^(\s*)\[([^\]\n]+)\]:/gm, '$1[$2] :')
 
 /** Moves a card from one hold to another. The task is ready for a moment between: no worker takes from `cards`. */
 async function rehold(team: Board, card: number, kind: string, reason: string): Promise<void> {

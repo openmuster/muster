@@ -18,7 +18,7 @@ is [A feedback loop](../../packages/muster/docs/03-guides/20-a-feedback-loop.md)
 ```bash
 cp workflows.json ~/.config/muster/
 # then edit: your repository in workflows.json, your Slack channel ID, Linear team and GitHub repository in board.ts
-export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a...   # who may start work without your approval, and approve
+export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a...   # who may start work without your approval, and approve (not GitHub logins)
 export NOTIFY_CMD=...                                    # optional: a command that gets one line to show you
 mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDBOX_URL, not MUSTER_URL
 ```
@@ -68,7 +68,11 @@ first. Write them as a brief to an agent, not as a description for people:
 A report is written by whoever filed it, and it steers agents that can push.
 The triage agent changes nothing and pushes nothing. Work starts only on a
 report whose author is in `LOOP_TRUSTED`, as first written, or once someone
-in it approves; an author sync couldn't name is never trusted. The work
+in it approves; an author sync couldn't name is never trusted, nor a GitHub
+author, whom sync names by a login that can change hands, so a GitHub issue
+always waits for an approval. The run that does the work quotes the approved
+spec alone, never the report, and the spec reaches the card's mirrors with
+no mention, link or unfurl in it. The work
 step's sandbox pushes a branch and opens a pull request, which runs your CI
 on the agent's code: keep secrets away from pull-request jobs. The rest is
 in [A card queue](../../packages/muster/docs/03-guides/19-a-card-queue.md#what-a-card-can-reach),
