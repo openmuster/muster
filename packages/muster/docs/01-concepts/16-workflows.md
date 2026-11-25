@@ -125,6 +125,12 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   close the quote. It is cut at 2,000 characters, with `…`, and defused as a
   summary's quotes are: `@` mentions nobody, `<` and `>` make no Slack ping,
   and no Markdown link or image renders.
+- **`{on.text}` is the message the run was asked on,** a reply as often as
+  not: `mu workflow run card --on 15` quotes #15 itself, where
+  `{thread.text}` quotes the thread's first message. It is quoted the same
+  way, under `The message #15 this run was asked on, by <actor id>, …`. A
+  message deleted since, or edited after the request, starts no run: the
+  thread is told why (`asked_message_changed`), and you ask again.
 - **`{steps.<key>.result}` is an earlier step's result,** quoted into the
   task as `{thread.text}` is: the same line (`The result of step "plan", #43,
   quoted as written: …`), fence, defusing and cap. A step may name only a

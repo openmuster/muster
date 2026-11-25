@@ -326,6 +326,12 @@ describe('cloud runners', () => {
     expect([...kept.keys()]).toHaveLength(1)
     expect([...kept.keys()][0]).not.toBe(base)
     expect(calls).toContainEqual(['delete', base])
+    // A task's earlier round is cloned by its branch; a checkout that isn't at the commit asked for starts no agent.
+    calls.length = 0
+    const ref = { branch: 'mu/task-7', sha: 'c'.repeat(40) }
+    expect(await runner.start({ ...request, setup: [['npm', 'install', '-g', 'https://example.com/muster-2.tgz']], ref }).catch((error) => error.reason)).toBe('runner_setup_failed')
+    expect(calls.map((call) => call[2])).toContain('git clone --quiet --branch mu/task-7 -- https://github.com/acme/web.git /vercel/web')
+    expect(calls.some((call) => call[0] === 'run' && String(call[2]).includes('claude'))).toBe(false)
   })
 
   it('vercel: a kept sandbox this machine didn\'t make, or one that didn\'t stop cleanly, is never forked', async () => {
@@ -480,6 +486,26 @@ describe('cloud runners', () => {
     // A run not started to be read returns at once, as before: nothing to wait on or read.
     const detached = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker() }).start(request)
     expect(Object.keys(detached).sort()).toEqual(['id', 'stop'])
+  })
+
+  it("cloudflare: a task's earlier round is cloned by its branch, and a Worker that started anywhere else has its run stopped", async () => {
+    const round1 = 'c'.repeat(40)
+    const asked: { path: string; body: any }[] = []
+    const worker = (sha: string) =>
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname
+        asked.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null })
+        if (path === '/runs') return Response.json({ id: 'r1', checkout: { sha, branch: sha === round1 ? 'mu/task-7' : 'main' } })
+        return Response.json({})
+      }) as typeof fetch
+    const ref = { branch: 'mu/task-7', sha: round1 }
+    const run = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker(round1) }).start({ ...request, repo: 'https://github.com/acme/web.git', ref, attach: true })
+    expect(asked[0]!.body.ref).toBe('mu/task-7')
+    expect(run.checkout).toEqual({ sha: round1, branch: 'mu/task-7' })
+    // A Worker deployed before it knew `ref` clones main: its run is stopped, so nothing replaces round one.
+    asked.length = 0
+    expect(await reason(cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker('a'.repeat(40)) }).start({ ...request, repo: 'https://github.com/acme/web.git', ref, attach: true }))).toBe('runner_too_old')
+    expect(asked.map((each) => each.path)).toContain('/runs/r1/stop')
   })
 
   it('both refuse a board the sandbox could not reach before starting anything', async () => {

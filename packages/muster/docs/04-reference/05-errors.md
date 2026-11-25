@@ -48,6 +48,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_emoji` | Not an emoji name |
 | `invalid_workflow` | Not a workflow name: lowercase letters, numbers, `.`, `_` and `-` |
 | `invalid_args` | A workflow request's arguments: at most 10, named in lowercase and `_`, each value text up to 500 characters |
+| `asked_message_changed` | The message a workflow run was asked on was deleted, or edited after the request, so the run quoting it with `{on.text}` wasn't started |
 | `label_conflict` | `--if` or `--if-unset` didn't hold. `data.labels` has them as they are |
 | `revision_conflict` | `--if-revision` named an old revision |
 | `newer_message` | Something landed after the `--after` message |
@@ -174,6 +175,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `runner_setup_failed` | A step that prepares the sandbox failed; the sandbox was removed |
 | `push_unsupported` | `--push` was asked of a run that can't push: `--runner local`, `--detach`, `--ready` without `--loop`, or an SDK or runner Worker too old |
 | `push_failed` | Pushing the agent's branch from the sandbox failed |
+| `push_conflict` | The task's branch moved while the agent worked, or the agent's change doesn't build on where its checkout started: the branch was left as it was, and the tasks that wait on it are held |
 | `pull_request_failed` | The branch is pushed, and GitHub didn't open the pull request |
 | `github_app_not_installed` | The GitHub App isn't installed on the run's repository |
 | `github_app_failed` | GitHub refused the App's request: its ID and key don't match, or it lacks a permission the run needs |

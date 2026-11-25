@@ -1,0 +1,137 @@
+---
+title: Running the feedback loop
+description: "The day-to-day of templates/loop: going live, approving, answering, sending a card round again, and what to do when something stops."
+---
+
+## Who this is for
+
+You set up [a feedback loop](./20-a-feedback-loop.md) and now run it: cards
+come in from Slack, Linear, GitHub or your app, agents work them, and you
+step in when a card needs you. This page is what you do then, in the order
+it comes up.
+
+**You need:** the loop's `board.ts` and `workflows.json` (in
+`templates/loop`), a host the platforms and the sandboxes can reach, and the
+keys the guide lists.
+
+## Go live
+
+1. **The board's address.** The platforms' webhooks and the sandboxes reach
+   the board over HTTPS: a named tunnel or a proxy to `mu serve`'s port. Put
+   the address in the environment as `MUSTER_SANDBOX_URL`, ending in
+   `/api/board`.
+2. **The workflows.** Copy `workflows.json` to `~/.config/muster/` and set
+   `repo` in both workflows to your repository.
+3. **Who is trusted.** Set `LOOP_TRUSTED` to the actor IDs who may start work
+   without an approval and may approve: `slack:user:U0123`,
+   `lin:user:<uuid>`, an app's `<your principal>+<profile>`. You, with no
+   profile, always are. A GitHub author never is.
+4. **Where you hear.** Set `NOTIFY_CMD` to a command that takes one line: a
+   push to your phone, a message to yourself. Without it the loop tells you
+   nothing, and you read the board.
+5. **A budget.** Cap what the cards may cost, every run under them included:
+
+```bash
+mu budget cards 25
+```
+
+6. **Start it**, with the secrets `board.ts` names in its environment:
+
+```bash
+mu serve --module ~/loop/board.ts --allow-host board.example.com
+```
+
+7. **Point each platform at it**, at `https://<host>/api/board/webhooks/<key>`,
+   where `<key>` is the sync's name in `board.ts`: `slack`, `lin`, `gh`.
+   Each platform's page says what to subscribe to and which scopes its token
+   needs: [Slack](../02-sync/04-slack.md), [Linear](../02-sync/03-linear.md),
+   [GitHub](../02-sync/02-github.md).
+8. **Your app's button.** Make it a token that can only post reports, and
+   keep it on the app's server:
+
+```bash
+mu token create --as pino-app --can 'cards/app=post' --ttl 90d
+```
+
+Then file one report from each source and watch it go through: held
+`triage`, a spec on the card, `working`, a pull request.
+
+## What you hear about
+
+| The line | What to do |
+| --- | --- |
+| `card #12 needs your approval` | Read the spec on the card, then approve it or leave it |
+| `task #31 is blocked` | An agent needs a decision: answer it |
+| `card #12's change is done for now` | Review the pull request, and reply on the card if it needs another round |
+
+## Approve a card
+
+A report from someone not in `LOOP_TRUSTED` waits, held `approval`, with the
+triage agent's spec as a reply on it. Read the spec, not only the report: the
+spec is what the work will do.
+
+```bash
+mu read 12
+mu label 12 approved=yes
+```
+
+The inspector's label does the same, from a phone on your tailnet. A label
+from anyone not trusted does nothing. If the report changes after the spec
+was written, it is triaged again, and you approve the new spec.
+
+## Answer a blocked task
+
+An agent that can't go on without a decision blocks its task with where
+things stand, `->`, and what it needs. Answer in the task's thread, then
+unblock it, as yourself:
+
+```bash
+mu tasks cards/ --state blocked
+mu read 31
+mu reply 31 "Keep the old heading."
+mu tasks unblock 31
+```
+
+A worker takes it again: the run's own, if it is still waiting for work, or
+one the loop starts for that run.
+
+## Another round
+
+Once a card's run has ended, a reply on the card by someone trusted sends the
+work and its review back with that reply, and the work carries on from its
+branch: the same pull request gets another commit. Reply where the card is:
+in the Slack thread, on the Linear issue, on the GitHub issue, or on the
+board.
+
+- **One round at a time.** A reply made while a round runs waits for it to
+  end, and goes into the next.
+- **Several replies** made between rounds go into one round together.
+- **A review comment on the pull request** doesn't start one: reply on the
+  card.
+
+## When something stops
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| A card stays `triage`, with a summary that the triage failed | The agent found nothing to change in this repository, and said why | Edit the report to say more (it is triaged again), or cancel it: `mu tasks cancel 12` |
+| A card stays `approval` | Nobody trusted has approved it | Approve it, or cancel it |
+| A task held `push_conflict`, a `push` label on the work | Someone pushed to `mu/task-<id>` while the agent worked; the branch was left as they left it | Read the branch. Then reply on the card: the next round starts from the branch as it is now |
+| A task held `push_failed` | The push itself failed, often the GitHub App's permissions | Fix the App's Contents permission, then reply on the card |
+| Workers stop with `over_budget`, and nothing is claimed | The cards have spent their budget | Raise it (`mu budget cards 50`), or wait |
+| A card held `edited` for a moment | Its author changed the report | Nothing: it is triaged again |
+| No card for a report | The source isn't reaching the board | `mu daemon status` names the module's sync; check the platform's webhook deliveries |
+
+## Rotate and stop
+
+Replace an app's token by making a new one, giving it to the app, and
+revoking the old:
+
+```bash
+mu token list
+mu token revoke Xk3v9QmB2a1c
+```
+
+To stop the loop, stop `mu serve`. What the platforms send while it is down
+doesn't reach it, and the board catches up on Linear, Slack and GitHub when it
+starts again. To take a source out, remove its sync from `board.ts` and its
+webhook from the platform.

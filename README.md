@@ -26,7 +26,7 @@ mu demo
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
 
 To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.3.0/muster-0.3.0.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.3.1-alpha.1/muster-0.3.1-alpha.1.tgz`.
 muster is not published to npm: install it from the URL.
 
 To upgrade, run the install line again; `mu --version` says what you have, and
@@ -79,6 +79,7 @@ agent died goes back to the queue on its own.
   | `--push` opens a pull request | No | Yes | Yes |
   | A worker's tasks each get their own | Process | Sandbox | Container |
   | Registered workflows | Yes | Yes | Yes |
+| Another round on the same pull request, and `templates/loop` | Run live on 25 Nov 2026 against a scratch board through a tunnel, Claude Code in Vercel sandboxes, on a private repository with a GitHub App. A report posted with an app's token, held for triage, triaged by an agent into a title and a spec, worked by the `card` workflow (spec, work, review) as a pull request; a reply on the card sent the work and its review back, the second round started on `mu/task-<id>` and added a commit to the same pull request, and the review applied both rounds' changes in order. The same from a Linear issue: the spec and the run's summaries as comments on it, and a comment on the issue starting the second round on its pull request. An untrusted author's report held for approval: its own `approved=yes` did nothing, the owner's started the work. Not run live: Slack, GitHub issues, screenshots relayed to a card, a refused push (`push_conflict`), a Cloudflare runner on a branch |
   | Run for real with | Claude Code, Codex | Claude Code | Claude Code |
 
   The full comparison is in

@@ -7,6 +7,39 @@ versions are affected.
 
 ### Added
 
+- Another round on the same pull request: a `--push` task run again after it
+  pushed, reopened with `--round` or answered after it blocked, starts its
+  sandbox on `mu/task-<id>` and adds to it, so the pull request stays the
+  same one, and the agent's prompt says which round it is. Before, each run
+  started from the default branch and replaced what the last one pushed.
+  See [Another round on the same pull request](./packages/muster/docs/03-guides/06-sandboxed-agents.md#another-round-on-the-same-pull-request).
+  - The branch only moves forward from where the run found it: a branch
+    someone pushed to meanwhile, or a change that doesn't build on it, is
+    refused with `push_conflict` and left as it was.
+  - A change that wasn't pushed is said on the task (a `push` label and a
+    reply), and the tasks that wait on it are held, so a review never goes on
+    from a change that isn't on the branch.
+  - Pull requests open against the repository's default branch.
+  - Cloudflare: deploy the current `templates/cloudflare-runner`. A Worker
+    deployed before this clones the default branch, and a second round's
+    run is stopped with `runner_too_old` rather than replace the first.
+- `{on.text}` in a workflow step: the very message the run was asked on, a
+  reply as often as not, quoted and fenced as `{thread.text}` is. A message
+  deleted since, or edited after the request, starts no run
+  (`asked_message_changed`).
+- `workflowResult(team, id, owner)`: a workflow step's result for code that
+  goes on from it, only when the daemon made the task and the run's own
+  worker completed it.
+- `templates/loop`: feedback from Slack, Linear, GitHub, the inspector or
+  your own app becomes a card, triaged by an agent into a title and a spec;
+  work starts on a trusted author's report, or once someone trusted approves;
+  a trusted reply on the card starts another round on the same pull request,
+  and each round's screenshots reach the card. See
+  [A feedback loop](./packages/muster/docs/03-guides/20-a-feedback-loop.md).
+  - A task of a run answered and unblocked after the run's workers stopped
+    gets a worker of its own (`resume`).
+  - [Running the feedback loop](./packages/muster/docs/03-guides/21-running-the-loop.md),
+    the operator's day-to-day, and the `loop-card` skill for the agents.
 - Sync with Notion: `notion({ secret, token, databases })` maps a database to
   a channel. A page is a thread (its title and text, its Status the `state`
   label) and its comments are replies, both ways; edits and deletes follow,

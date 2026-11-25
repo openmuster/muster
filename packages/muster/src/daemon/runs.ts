@@ -159,11 +159,12 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
  * as a placeholder. `{steps.<key>.result}` is left for the worker that takes the task, so a value that
  * says `{steps.` is changed to say it with a lookalike brace: only the operator's own text names a result.
  */
-export function fillStep(text: string, values: { thread: number; threadText?: string; channel: string; run: string; args: Record<string, string> }): string {
+export function fillStep(text: string, values: { thread: number; threadText?: string; onText?: string; channel: string; run: string; args: Record<string, string> }): string {
   const fill = (part: string) =>
-    part.replace(/\{(thread\.text|thread|channel|run|args\.([a-z][a-z0-9_]*))\}/g, (whole, name: string, arg: string | undefined) => {
+    part.replace(/\{(thread\.text|on\.text|thread|channel|run|args\.([a-z][a-z0-9_]*))\}/g, (whole, name: string, arg: string | undefined) => {
       if (arg !== undefined) return Object.hasOwn(values.args, arg) ? values.args[arg]! : whole
       if (name === 'thread.text') return values.threadText ?? whole
+      if (name === 'on.text') return values.onText ?? whole
       return name === 'thread' ? String(values.thread) : name === 'channel' ? values.channel : values.run
     })
   // The operator's own `{steps.<key>.result}` are kept; the text between them is filled, and then made to name
@@ -205,7 +206,7 @@ export function runsIn(channels: string[], channel: string): boolean {
   })
 }
 
-type Request = { seq: number; channel: string; thread: number; by: By; args: Record<string, string>; private: boolean }
+type Request = { seq: number; at: string; channel: string; thread: number; on: number; by: By; args: Record<string, string>; private: boolean }
 
 /**
  * Reads the workflow requests made since it last looked and handles each in order: a refusal on the
@@ -239,7 +240,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   }
   let reached = page.cursor
   for (const event of page.events) {
-    const { name, args, profileHeld, narrowed, private: inPrivate } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean; narrowed?: boolean; private?: boolean }
+    const { name, args, profileHeld, narrowed, private: inPrivate, on: asked } = event.data as { name: string; args?: Record<string, string>; profileHeld?: boolean; narrowed?: boolean; private?: boolean; on?: unknown }
     const channel = event.channel!
     const thread = event.thread!
     const workflow = workflows.find((each) => each.name === name)
@@ -256,7 +257,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         await say(event.seq, thread, refusal!)
         out.refused.push(event.seq)
       } else {
-        const result = await start(team, writer, workflow, { seq: event.seq, channel, thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
+        const result = await start(team, writer, workflow, { seq: event.seq, at: event.at, channel, thread, on: typeof asked === 'number' ? asked : thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
         await say(event.seq, thread, result.text)
         if (result.failed === undefined) out.started.push(event.seq)
         else {
@@ -679,6 +680,21 @@ export function threadQuote(message: { text: string; by: By }): string {
   return fenced(`The thread's first message, by ${actorId(message.by)}`, message.text)
 }
 
+/** `{on.text}`: the message a run was asked on, under a line that says whose it is, as `{thread.text}` is. */
+export const askedQuote = (message: { id: number; text: string; by: By }): string => fenced(`The message #${message.id} this run was asked on, by ${actorId(message.by)}`, message.text)
+
+/**
+ * The message a run was asked on, as it was then. One deleted since, or edited after the request, makes no
+ * run: what its tasks would quote isn't what the person who asked saw, so they ask again.
+ */
+async function askedMessage(team: Board, on: Request): Promise<Message> {
+  const thread = await team.readThread({ id: on.on, after: on.on - 1 })
+  const message = thread.message.id === on.on ? thread.message : thread.replies.find((reply) => reply.id === on.on)
+  if (!message || message.deleted) throw new Failure('asked_message_changed', `#${on.on}, the message the run was asked on, was deleted, so nothing was started.`, { hint: 'Ask for the run again on the message you mean.' })
+  if (message.editedAt !== null && message.editedAt > on.at) throw new Failure('asked_message_changed', `#${on.on}, the message the run was asked on, was edited after it was asked, so nothing was started.`, { hint: 'Read it, then ask for the run again on it.' })
+  return message
+}
+
 /**
  * Text someone else wrote, set apart in a task under a line that says whose it is: defused, cut at
  * THREAD_TEXT characters, and in a fence longer than any run of backticks inside, so nothing in it can
@@ -737,12 +753,14 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
   const labels = { workflow: workflow.name, request: String(on.seq) }
   // A worker's token reaches the run's channel alone, so what it needs of the asking thread is copied in.
   const threadText = workflow.steps.some((step) => step.text.includes('{thread.text}')) ? threadQuote((await team.readThread({ id: on.thread })).message) : undefined
+  // The message the run was asked on, a reply as often as not: quoted as it was when it was asked on, or no run.
+  const onText = workflow.steps.some((step) => step.text.includes('{on.text}')) ? askedQuote(await askedMessage(team, on)) : undefined
   // Whether a step says its own `push`: then every task says whether it pushes, as the board's own record
   // of what the daemon made, which the worker reads from the task's first event and never from its labels now.
   const perStep = workflow.steps.some((step) => step.push !== undefined)
   const tasks: PlanTask[] = workflow.steps.map((step) => ({
     key: step.key,
-    text: fillStep(step.text, { thread: on.thread, ...(threadText !== undefined ? { threadText } : {}), channel: on.channel, run, args: on.args }),
+    text: fillStep(step.text, { thread: on.thread, ...(threadText !== undefined ? { threadText } : {}), ...(onText !== undefined ? { onText } : {}), channel: on.channel, run, args: on.args }),
     labels: { ...step.labels, ...labels, [STEP_LABEL]: step.key, [WORKERS_LABEL]: workflow.workers.as, ...(perStep ? { [PUSH_LABEL]: String(step.push ?? workflow.workers.push === true) } : {}) },
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),

@@ -118,10 +118,10 @@ describe('GitHub in a sandbox', () => {
     expect(existsSync(marker)).toBe(false)
     const bundle = readFileSync(file)
     // What reaches git here as an argument can't be an option, and the bundle is held to its size here too.
-    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base: '--upload-pack=touch /tmp/x', branch: 'mu/task-12', remote }).catch((error) => error.reason)).toBe('push_failed')
-    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'main', remote }).catch((error) => error.reason)).toBe('push_failed')
-    expect(await pushBundle({ repo, token: 'ghp_secret', bundle: Buffer.alloc(BUNDLE_MAX + 1), base, branch: 'mu/task-12', remote }).catch((error) => error.reason)).toBe('push_failed')
-    await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', remote })
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base: '--upload-pack=touch /tmp/x', branch: 'mu/task-12', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'main', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
+    expect(await pushBundle({ repo, token: 'ghp_secret', bundle: Buffer.alloc(BUNDLE_MAX + 1), base, branch: 'mu/task-12', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
+    await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', expect: null, remote })
     expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:a.txt'], { encoding: 'utf8' })).toBe('two\n')
     expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%an %s', 'refs/heads/mu/task-12'], { encoding: 'utf8' }).trim()).toBe('fixer the fix')
     // main is as it was: the push writes the branch this machine names, and no other.
@@ -130,6 +130,50 @@ describe('GitHub in a sandbox', () => {
     const clean = tempDir()
     execFileSync('git', ['clone', '-q', remote, clean])
     expect(execFileSync('sh', ['-c', BUNDLE], { cwd: clean, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: tempDir(), MU_OUT: join(tempDir(), 'x.bundle'), MU_BASE: base, MU_TITLE: 't', MU_BODY: 'b', MU_NAME: 'n', MU_EMAIL: 'n@e' } }).trim()).toBe('unchanged')
+  })
+
+  it('a second round adds to the branch the first one pushed, and a branch that moved meanwhile is left as it is', async () => {
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const origin = tempDir()
+    git(origin, 'init', '-q', '-b', 'main')
+    writeFileSync(join(origin, 'a.txt'), 'one\n')
+    git(origin, 'add', '-A')
+    git(origin, 'commit', '-q', '-m', 'base')
+    const remote = join(tempDir(), 'web.git')
+    execFileSync('git', ['clone', '-q', '--bare', origin, remote])
+    /** A sandbox's round: a checkout of `ref`, one file written, read out as a bundle. */
+    const round = (ref: string, file: string) => {
+      const checkout = tempDir()
+      execFileSync('git', ['clone', '-q', '--branch', ref, remote, checkout])
+      const start = git(checkout, 'rev-parse', 'HEAD')
+      writeFileSync(join(checkout, file), `${file}\n`)
+      const out = join(tempDir(), 'mu.bundle')
+      execFileSync('sh', ['-c', BUNDLE], { cwd: checkout, env: { PATH: process.env.PATH, HOME: tempDir(), MU_OUT: out, MU_BASE: start, MU_TITLE: file, MU_BODY: 'Task #12', MU_NAME: 'fixer', MU_EMAIL: 'f@e' } })
+      return { start, bundle: readFileSync(out) }
+    }
+    const push = (made: { start: string; bundle: Buffer }, expected: string | null) => pushBundle({ repo, token: 'ghp_secret', bundle: made.bundle, base: made.start, branch: 'mu/task-12', expect: expected, remote })
+    // Round one starts from main and makes the branch.
+    const first = round('main', 'one.txt')
+    await push(first, null)
+    const afterFirst = git(remote, 'rev-parse', 'refs/heads/mu/task-12')
+    // Round two starts from the branch and adds to it: the first round's file is still there.
+    const second = round('mu/task-12', 'two.txt')
+    expect(second.start).toBe(afterFirst)
+    await push(second, afterFirst)
+    const files = git(remote, 'ls-tree', '--name-only', 'refs/heads/mu/task-12').split('\n')
+    expect(files).toEqual(expect.arrayContaining(['a.txt', 'one.txt', 'two.txt']))
+    expect(git(remote, 'rev-list', '--count', 'main..refs/heads/mu/task-12')).toBe('2')
+    // Someone pushes to the branch while round three works: round three's push is refused, and theirs stays.
+    const third = round('mu/task-12', 'three.txt')
+    const theirs = round('mu/task-12', 'theirs.txt')
+    await push(theirs, third.start)
+    const moved = git(remote, 'rev-parse', 'refs/heads/mu/task-12')
+    expect(await push(third, third.start).catch((error) => error.reason)).toBe('push_conflict')
+    expect(git(remote, 'rev-parse', 'refs/heads/mu/task-12')).toBe(moved)
+    // A run that started from main while the branch already exists doesn't replace it either.
+    const stale = round('main', 'stale.txt')
+    expect(await push(stale, null).catch((error) => error.reason)).toBe('push_conflict')
+    expect(git(remote, 'rev-parse', 'refs/heads/mu/task-12')).toBe(moved)
   })
 
   it('vercel: what a sandbox prints or hands back is read no further than this side\'s limits, and a checkout it describes oddly is not taken', async () => {
