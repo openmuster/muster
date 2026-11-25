@@ -15,6 +15,14 @@ versions are affected.
   `answer.sh` replies, unblocks it and starts a worker on it. Covered by
   tests, not run live. See
   [A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md).
+- Watchers in code: `board({ watch: { name: { tail, run, as } } })`, beside
+  the board. Declaring them opens nothing; `team.start()` runs each in a loop
+  of its own, in the process you choose, and returns `{ stop, done }` at once.
+  Never await `done` where a server starts up. Each watcher is held by one
+  host at a time through a lease `watch:<name>` in the board's file, so two
+  hosts on one board never both run it, and one takes over when the other
+  stops. `await team.deliver()` runs them once, for tests. The watchers in
+  `watchers.json` work as before.
 
 ### Changed
 

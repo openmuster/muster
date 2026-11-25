@@ -120,6 +120,64 @@ the board stores only its hash. The CLI keeps it for you; code keeps its own.
 A task is `{ id, channel, owner, for, state, needs, hold, result, reason,
 claim, attempts, rounds }`.
 
+## Watchers
+
+A watcher is code beside the board: what to listen for, and what to do. Give
+them to `board()` by name. Declaring them opens nothing and starts nothing, so
+the module can be imported anywhere.
+
+```ts lib/board.ts
+import { board } from 'muster'
+
+export const team = board({
+  watch: {
+    intake: {
+      tail: { channel: 'features' },
+      as: 'intake',
+      run: async ({ event, board }) => {
+        if (event.type === 'message.posted' && event.message?.re === null) await board.reply({ to: event.seq, text: 'Started' })
+      },
+    },
+  },
+})
+```
+
+```ts host.ts
+import { team } from './lib/board.ts'
+
+const host = team.start()
+process.once('SIGTERM', () => {
+  host.stop()
+  void host.done.then(() => process.exit(0))
+})
+```
+
+| Key | What it does |
+| --- | --- |
+| `tail` | What to listen for: the filter `events` takes |
+| `run` | Called with `{ event, board, watcher }` for each event that matches. A throw is a failed delivery |
+| `as` | The profile it writes as. Its own writes never wake it; a message it scheduled does |
+
+`start()` runs each watcher in a loop of its own and returns `{ stop, done }`
+at once. **Never await `done`, or anything that waits for it, where a server
+starts up** (Next.js `register()`, a framework's boot hook): it settles only
+when the host stops, so the server would never start. `stop()` cuts the wait
+between looks short, and `done` settles once the run in flight has finished
+and been recorded. A second `start()` for the same board in one process
+returns the host already running.
+
+A watcher starts from now: the first time it runs, it takes the board's head
+as its place, and what was posted before wakes nothing. Its place is the
+cursor `watch:<name>`. Each watcher is held by one host at a time, through
+its lease `watch:<name>` in the board's file: another host started on the
+same board stands by, and takes over within the lease (30 seconds) if the
+first one stops. Watchers run where the board's file is; on a board at a URL
+`start()` fails with `watch_remote`.
+
+`await team.deliver()` runs each watcher once on what it has not had yet, and
+returns `{ delivered, failed, held }`, for tests. Call it once before the
+writes a test makes, so the watchers have their place.
+
 ## The rest
 
 | Method | For |
