@@ -134,12 +134,17 @@ claimed answers `task_ready`, with the claim to run first.
 | `exists` | A backup or a download won't write over a file |
 | `missing_path` | A command needs a path |
 | `no_skills` | This install doesn't carry the skills |
-| `invalid_config` | `watchers.json` or `sync.json` is wrong. The message says what |
+| `invalid_config` | `watchers.json` or `sync.json` is wrong, or a variable a module's sync names with `env()` isn't set. The message says what |
 | `missing_env` | `daemon install --env` named a variable that is not set |
+| `invalid_env` | `env()` was given something that isn't an environment variable's name |
+| `invalid_sync` | A sync given to `board({ sync })` is wrong: a key that isn't a sync name, a value that isn't `github()`, `linear()` or `slack()`, a missing `secret`, a bad `filter` or `filesPerDayMB`, or a `sync` beside a `backend` |
 | `invalid_watch` | A watcher given to `board({ watch })` is wrong: a bad name, a key it doesn't take, a filter that isn't one. The message names the watcher |
 | `watch_aborted` | A watcher's run wrote after its `timeout`, or after it was aborted. Its writes are refused, and the try counted as failed |
 | `watch_started` | This process already runs the watchers of that board from another `board()` handle with other watchers. Declare them all on one handle |
 | `watch_remote` | Watchers were started on a board reached over HTTP. They run where the board's file is |
+| `unhealthy` | `GET /health` on a board whose sync can't run, such as a secret named with `env()` that isn't set. Its owner's log says what |
+| `sync_twice` | A board module declares `sync` and `sync.json` is there too. A board's sync is in one place: move the file's entries into the module |
+| `sync_not_started` | A provider whose secrets are named with `env()` was used on its own. Give it to `board({ sync })`, which reads them when it starts |
 
 ## Serving and running
 

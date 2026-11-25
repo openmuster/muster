@@ -122,7 +122,16 @@ export function createHandler(options: ServeOptions) {
       if (name !== '127.0.0.1' && name !== 'localhost' && name !== '[::1]' && !extra.has(name) && !extra.has(host)) throw new Failure('forbidden', `This board doesn't answer for "${host}".`)
       const url = new URL(req.url ?? '/', 'http://board')
       // For a container's health check and a load balancer: no token, and nothing about the board.
-      if (url.pathname === MOUNT + '/health' && req.method === 'GET') return send(res, 200, { ok: { version: VERSION } })
+      if (url.pathname === MOUNT + '/health' && req.method === 'GET') {
+        // A sync that can't run is a board that isn't healthy: said without naming what it lacks, which is the owner's to read.
+        try {
+          options.backend.syncCheck?.()
+        } catch (error) {
+          options.log?.(`error  GET ${url.pathname}: ${error instanceof Error ? error.message : String(error)}`)
+          return send(res, 503, { error: { reason: 'unhealthy', message: "The board's sync isn't running. Whoever runs it can see why in its output." }, exit: 1 })
+        }
+        return send(res, 200, { ok: { version: VERSION } })
+      }
       if (!url.pathname.startsWith(MOUNT + '/')) throw new Failure('not_found', 'No such route.')
       if (url.pathname.startsWith(MOUNT + '/webhooks/') && req.method === 'POST') {
         // A platform can't hold a token of ours: its own signature, checked by the provider, is what proves it.
@@ -135,7 +144,15 @@ export function createHandler(options: ServeOptions) {
         }
         const headers: Record<string, string | undefined> = {}
         for (const [name, value] of Object.entries(req.headers)) headers[name] = Array.isArray(value) ? value[0] : value
-        const answer = await options.backend.syncReceive(url.pathname.slice((MOUNT + '/webhooks/').length), { headers, body: Buffer.concat(chunks).toString('utf8') })
+        let answer: Awaited<ReturnType<Backend['syncReceive']>>
+        try {
+          answer = await options.backend.syncReceive(url.pathname.slice((MOUNT + '/webhooks/').length), { headers, body: Buffer.concat(chunks).toString('utf8') })
+        } catch (error) {
+          // Whoever sent it is unauthenticated: they get a plain 503 and send it again later; why is the owner's to read.
+          options.log?.(`error  POST ${url.pathname}: ${error instanceof Error ? error.message : String(error)}`)
+          res.writeHead(503, { 'content-type': 'text/plain' })
+          return res.end('sync unavailable')
+        }
         for (const note of answer.skipped ?? []) options.log?.(`skipped sync ${note}`)
         res.writeHead(answer.status, { 'content-type': 'text/plain' })
         return res.end(answer.body)

@@ -153,7 +153,21 @@ export function mount(backend: Backend, options: MountOptions & { now?: () => Da
     const now = options.now
     return toFetch(createHandler({ backend, key, hosts, log, ...(now ? { now: () => now().getTime() } : {}) }), base, log)
   }
+  // The sync's secrets are read on the first request, and what is missing is said to the owner, once. The board
+  // is served meanwhile: only its webhooks wait (503), and its health says it isn't well.
+  let synced = !backend.syncCheck
+  let said = ''
   return async (request) => {
+    if (!synced) {
+      try {
+        backend.syncCheck!()
+        synced = true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message !== said) log(`error  sync: ${message}`)
+        said = message
+      }
+    }
     try {
       served ??= make()
     } catch (error) {

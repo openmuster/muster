@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
+import { commandFilter } from './declare.ts'
 import type { Sync } from './engine.ts'
 import { github, linear, slack } from './providers.ts'
 
@@ -27,16 +27,10 @@ export function loadSync(path = syncPath(), env: NodeJS.ProcessEnv = process.env
     if (!found && required) throw new Failure('invalid_config', `${value.slice(4)} isn't set, and "${key}" in ${path} needs it.`)
     return found || undefined
   }
-  /** The operator's own command as a filter: text in on stdin, text to keep on stdout, a non-zero exit drops it. */
   const filterOf = (key: string, command: unknown) => {
     if (command === undefined) return {}
     if (!Array.isArray(command) || command.length === 0 || !command.every((part) => typeof part === 'string')) throw new Failure('invalid_config', `"${key}.filter" in ${path} is a command, as an array of strings.`)
-    return {
-      filter: (text: string) => {
-        const ran = spawnSync(command[0] as string, command.slice(1) as string[], { input: text, encoding: 'utf8', env: { PATH: env.PATH ?? '', HOME: env.HOME ?? '' }, timeout: 10_000 })
-        return ran.status === 0 ? ran.stdout : null
-      },
-    }
+    return { filter: commandFilter(command as string[], env) }
   }
   const perDay = (key: string, value: unknown) => {
     if (value === undefined) return {}

@@ -18,6 +18,7 @@ import { sameProcess } from '../process.ts'
 import { ensureSchema } from '../store/schema.ts'
 import { openDb, ownerOnly, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, holdCatchUp, importPending, receive, type Sync } from '../sync/engine.ts'
+import { resolveSync } from '../sync/declare.ts'
 import { fetchFiles } from '../sync/files.ts'
 import { boardKey } from '../serve/token.ts'
 import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
@@ -38,7 +39,7 @@ export type FileOptions = {
   alive?: (pid: number, start: string) => boolean
   /** Who a caller with no token is. Default: this OS user. */
   principal?: string
-  /** The platforms this board syncs with, from the operator's config. */
+  /** The platforms this board syncs with: secrets named with `env()` are read on first use. */
   sync?: Sync
   fetch?: typeof fetch
 }
@@ -61,11 +62,15 @@ export function file(options: FileOptions = {}): Backend {
   let checkpointed = 0
   let ticked = 0
   let held = false
+  let synced: Sync | null = null
+  /** The sync with its env() secrets read, the first time it is needed. A variable that isn't set is refused each time, by name. */
+  const syncOf = () => (synced ??= resolveSync(options.sync ?? {}))
   /** Once per process, before the first webhook or catch-up: where catching up starts is what was received before. */
   const hold = () => {
     if (held) return
+    const sync = syncOf()
     held = true
-    holdCatchUp(ctx(), options.sync ?? {})
+    holdCatchUp(ctx(), sync)
   }
   const open = (): Db => {
     if (db) return db
@@ -246,12 +251,14 @@ export function file(options: FileOptions = {}): Backend {
       }
       return { path: target }
     },
+    syncs: Object.freeze(Object.keys(options.sync ?? {})),
+    syncCheck: () => void syncOf(),
     syncReceive: async (key, received) => {
       hold()
-      return receive(ctx(), options.sync ?? {}, key, received)
+      return receive(ctx(), syncOf(), key, received)
     },
     syncTick: async () => {
-      const sync = options.sync ?? {}
+      const sync = syncOf()
       if (Object.keys(sync).length === 0) return { imported: 0, delivered: 0, failed: 0 }
       // What the platforms sent while nothing here was listening: noted once per process, read on every tick until
       // a read gets to the end, so one that was refused or cut short, or noted by `mu serve`, is still read.

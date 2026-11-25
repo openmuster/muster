@@ -332,9 +332,24 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         advance()
         continue
       }
+      // Claimed before it goes, in one write: a sender on this board that got here first is sending it, or has
+      // sent it, and this one leaves it to them. A claim older than a send can take is from a sender that died.
+      const claim = ctx.db.write(() => {
+        const done = ctx.db.raw.prepare("select seq from cursors where name = ? and profile = ''").get(name) as { seq: number } | undefined
+        if (done && done.seq >= event.seq) return { done: done.seq }
+        const held = ctx.db.raw.prepare('select since from sending where key = ? and seq = ?').get(key, event.seq) as { since: string } | undefined
+        if (held && Date.parse(held.since) > ctx.now().getTime() - SENDING_STALE_MS) return { held: true }
+        ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString())
+        return {}
+      })
+      if ('done' in claim) {
+        cursor = claim.done!
+        continue
+      }
+      // Later messages in this platform's queue wait behind it, as they wait behind a failure.
+      if ('held' in claim) break
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
-        ctx.db.write(() => ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString()))
         const sent = await provider.deliver(message, { place, threadExternal }, fetcher, (id) => fileBytes(ctx, id))
         ctx.db.write(() => {
           // Recorded and released at once: a webhook for it, imported after this, finds the link.

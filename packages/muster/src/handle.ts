@@ -4,6 +4,8 @@ import type { Caller } from './model.ts'
 import { mount, type MountOptions } from './serve/fetch.ts'
 import { deliver, start, type Delivered, type Host, type StartOptions, type WatchState } from './watch/host.ts'
 import { checkWatchers, type Watch } from './watch/watch.ts'
+import { checkSync, envNames, resolveSync } from './sync/declare.ts'
+import { misuse } from './failure.ts'
 import type { Filter } from './core/reads.ts'
 import { VERSION } from './version.ts'
 
@@ -19,6 +21,9 @@ export const COPY: { readonly version: string; readonly url: string } = Object.f
 
 /** A watcher a handle declares, as anyone may read it: its name, what it listens for, and the profile it writes as. */
 export type DeclaredWatcher = { readonly name: string; readonly tail: Filter; readonly as: string | null }
+
+/** A platform a handle syncs with, as anyone may read it: its name, its type, and the variables it reads when it starts. */
+export type DeclaredSync = { readonly key: string; readonly type: string; readonly env: readonly string[] }
 
 export type BoardOptions = FileOptions & {
   /** Where the board lives. Default: `file()` with the options beside it. */
@@ -42,10 +47,15 @@ export type Board = { [K in keyof Methods]: Bound<Methods[K]> } & {
   backend: Backend
   /** The watchers this handle declares, in the order given. Declared, not running: `start()` runs them. */
   readonly watchers: readonly DeclaredWatcher[]
+  /** The platforms this handle syncs with, by name. Their secrets are read by `start()`, or `fetch`'s first request. */
+  readonly sync: readonly DeclaredSync[]
   /** The same board, writing as one of your profiles. */
   as(profile: string | null): Board
   whoami(): Promise<{ principal: string; profile: string | null; mode: 'file' | 'serve'; where: string }>
-  /** Runs the watchers in this process until stopped, and returns at once. Never await `done` in a server's startup. */
+  /**
+   * Runs the watchers, and the sync, in this process until stopped, and returns at once. Never await `done` in a
+   * server's startup. Throws, naming it, if a variable a sync names with `env()` isn't set.
+   */
   start(options?: StartOptions): Host
   /** Runs each watcher once on what it has not had yet, and says what happened. For tests. */
   deliver(): Promise<Delivered>
@@ -70,6 +80,11 @@ export function board(options: BoardOptions = {}): Board {
   const { backend: given, as: profile, watch, serve, ...fileOptions } = options
   // Checked now, so a bad watcher is the module's mistake, said once. Nothing is opened or started.
   const watchers = checkWatchers(watch)
+  const sync = checkSync(fileOptions.sync)
+  if (given && Object.keys(sync).length) throw misuse('invalid_sync', 'board() was given a backend and a sync: the sync would go nowhere.', 'Give the sync to the backend: file({ sync }).')
+  const syncs: readonly DeclaredSync[] = Object.freeze(Object.entries(sync).map(([key, provider]) => Object.freeze({ key, type: provider.type, env: Object.freeze([...envNames(provider)]) })))
+  // Read when the board starts or takes its first request, never on import: a module is read where its secrets aren't.
+  const ready = () => void resolveSync(sync)
   // Where each watcher's reading has got to, shared by start() and deliver() on this handle.
   const states = new Map<string, WatchState>()
   const declared: readonly DeclaredWatcher[] = Object.freeze(watchers.map((watcher) => Object.freeze({ name: watcher.name, tail: structuredClone(watcher.tail), as: watcher.as ?? null })))
@@ -83,12 +98,16 @@ export function board(options: BoardOptions = {}): Board {
     const handle = {
       backend,
       watchers: declared,
+      sync: syncs,
       as: (next: string | null) => make(next),
       async whoami() {
         const me = await who()
         return { principal: me.principal, profile: me.profile, mode: backend.kind === 'file' ? ('file' as const) : ('serve' as const), where: backend.where }
       },
-      start: (startOptions?: StartOptions) => start(root, watchers, states, startOptions),
+      start: (startOptions?: StartOptions) => {
+        if (syncs.length) ready()
+        return start(root, watchers, states, startOptions, syncs.length > 0)
+      },
       deliver: () => deliver(root, watchers, states),
       fetch: served,
       close: () => backend.close(),

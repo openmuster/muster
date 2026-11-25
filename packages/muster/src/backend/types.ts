@@ -122,7 +122,11 @@ export type Backend = {
    * `skipped` says what it carried that was late, and not applied.
    */
   syncReceive(key: string, received: { headers: Record<string, string | undefined>; body: string }): Promise<{ status: number; body: string; skipped?: string[] }>
-  /** Imports what is waiting and delivers what is owed. The ticker calls it. */
+  /** The names of the platforms this board syncs with, as configured: none means a tick has nothing to do. */
+  readonly syncs?: readonly string[]
+  /** Throws, saying why, when the sync can't run: a secret it names with `env()` isn't set. Said to the owner only. */
+  syncCheck?(): void
+  /** Imports what is waiting and delivers what is owed. Whoever holds the board's `sync` lease calls it. */
   syncTick(): Promise<{ imported: number; delivered: number; failed: number; skipped?: string[] }>
 
   /** Writes a consistent copy of the board to `path`, while others keep writing. File boards only. */

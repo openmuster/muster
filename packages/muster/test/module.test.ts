@@ -289,7 +289,7 @@ describe('a board module', () => {
     expect(running.stdout).toMatch(/^watch {5}intake {2}channel=features root=true {2}as intake {2}held by \S+:\d+:[0-9a-f]+ {2}lag \d+$/m)
     expect(running.stdout).not.toContain('declared but not started')
     const json = await status(dir)
-    expect(json.module).toEqual({ path: join(dir, 'config', 'board.ts'), watchers: [{ name: 'intake', tail: { channel: 'features', root: true }, as: 'intake', holder: expect.stringContaining(':'), lag: expect.any(Number) }] })
+    expect(json.module).toEqual({ path: join(dir, 'config', 'board.ts'), watchers: [{ name: 'intake', tail: { channel: 'features', root: true }, as: 'intake', holder: expect.stringContaining(':'), lag: expect.any(Number) }], sync: [] })
     daemon.child.kill('SIGTERM')
     expect((await daemon.done).code).toBe(0)
     expect(readFileSync(marker, 'utf8')).toBe(`${work}\n`)

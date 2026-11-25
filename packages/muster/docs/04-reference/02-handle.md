@@ -351,11 +351,25 @@ The caveats, which are why this is for development only:
 `team.watchers` lists what a handle declares: `{ name, tail, as }` for each,
 declared and not necessarily running.
 
+### Sync in the module
+
+`board({ sync })` takes the platforms the board syncs with, by name, with
+their secrets named by `env('NAME')`: see
+[Sync in a board module](../02-sync/01-overview.md#in-a-board-module).
+`team.sync` lists them as `{ key, type, env }`, without reading anything.
+`start()` reads the variables, throws naming any that isn't set, and runs the
+sync (catch-up, files, imports and what goes back) under the board's `sync`
+lease. `team.fetch` reads them on its first request. Until they are there it
+goes on serving the board, logs what is missing, and answers webhooks with 503
+and `health` with 503 `unhealthy`. On its own it only takes webhooks: catching
+up and sending back need a `start()` somewhere.
+
 ### Running a module with mu
 
 `mu serve` and `mu daemon run` run a board module: a `.ts` file whose default
 export, or `team`, is a `board()`. They start its watchers beside the ones in
-`watchers.json`. The module is `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
+`watchers.json`, and its sync, which takes the place of `sync.json`: a module
+that declares `sync` beside that file is refused. The module is `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
 `~/.config/muster/board.ts` when nothing named a board: no `--dir`, `--board`
 or `--url`, and no `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL`. `--no-module`
 runs none. It needs no `package.json`: `mu` answers its `import 'muster'`. A
@@ -363,7 +377,7 @@ project with its own muster runs on that install. A module named on purpose
 says which board it is, so `--dir`, `--board` and `--url` don't go with it,
 and neither do `--as` or `MUSTER_PROFILE`. `mu daemon install` names the
 service for the board the module opens. `mu daemon status` lists each watcher, the host
-that holds it, and how far behind it is. `mu daemon check <name>` checks one.
+that holds it, and how far behind it is, and each sync with the variables it reads. `mu daemon check <name>` checks one.
 A module that fails to load stops `mu daemon run` with exit 0, and `mu serve`
 serves the board without it. Both say why, loudly.
 
@@ -385,4 +399,4 @@ serves the board without it. Both say why, loudly.
 | `conformance` | The checks every backend passes |
 | `claude`, `codex`, `generic`, `runLocal` | Agents, and running one here |
 | `vercel`, `cloudflare`, `boardPolicy` | Running one in a cloud sandbox |
-| `github`, `linear`, `slack`, `loadSync` | Sync |
+| `github`, `linear`, `slack`, `env`, `loadSync` | Sync |

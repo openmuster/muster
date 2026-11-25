@@ -14,7 +14,7 @@ import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } f
 import { FAILING_PAUSE, clashWithCode, loadDaemonConfig, loadWatchers, runDaemon, watchersPath } from '../daemon/daemon.ts'
 import { DAEMON_SPEC, SERVE_SPEC, chooseModule, endLaunch, invokedAs, launchGuard, loadBoard, loadsModule, refusal, self as thisCopy, type ModulePath } from './module.ts'
 import { syncPath } from '../sync/config.ts'
-import { boardPath } from '../backend/file.ts'
+import { boardPath, file } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { FillRefused, fillResults, pushesTask } from '../daemon/steps.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
@@ -953,6 +953,9 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       const me = await run.team.whoami()
       if (me.mode !== 'file') throw new Failure('forbidden', 'mu serve serves a board on this machine.')
+      // A module's sync that can't run stops the server before it listens, as it stops mu daemon run: served
+      // without it, the module's watchers and sync would both be off, and only its log would say so.
+      if (run.module && !run.module.error) run.team.backend.syncCheck?.()
       const key = boardKey(me.where)
       const port = Number(str(parsed.flags, 'port') ?? run.io.env.MUSTER_PORT ?? 4100)
       const host = str(parsed.flags, 'host') ?? run.io.env.MUSTER_HOST ?? '127.0.0.1'
@@ -1111,10 +1114,21 @@ const commands: Record<string, Command> = {
         if (run.module) run.io.out(`module    ${run.module.path}  muster ${VERSION} ${thisCopy().root}`)
         run.io.out(`watchers  ${watchers.length}`)
         if (run.module) run.io.out(`watching  ${run.team.watchers.length ? run.team.watchers.map((watcher) => watcher.name).join(' ') : 'none'}`)
+        if (run.team.sync.length) run.io.out(`syncing   ${run.team.sync.map((each) => each.key).join(' ')}`)
         if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
         if (workflows.length) run.io.out(`workflows ${workflows.length}`)
         // The module's watchers, each on its own lease: another host running one leaves this one standing by.
-        const host = run.module ? run.team.start({ signal: run.io.stop, log: run.io.out }) : null
+        let host: Host | null = null
+        try {
+          host = run.module ? run.team.start({ signal: run.io.stop, log: run.io.out }) : null
+        } catch (error) {
+          // A sync secret that isn't set: a restart can't fix it, so a clean exit leaves the service stopped.
+          if (!(error instanceof Failure)) throw error
+          run.io.err(`error: ${error.message}`)
+          if (error.hint) run.io.err(`  ${error.hint}`)
+          run.io.err('  Fix it and start the daemon again.')
+          return 0
+        }
         try {
           // A run that stays up, and ticks, clears the restart guard's count: the starts before it were not a storm.
           const steady = { after: guard.STEADY_AFTER, then: () => guard.steady(guardAt) }
@@ -1124,7 +1138,7 @@ const commands: Record<string, Command> = {
             run.io.out('another process already ticks for this board')
             // With a module's watchers to run it stays up, and keeps asking for the tick: when the process
             // that has it stops, this one ticks, so schedules, hooks and workflows never go unrun.
-            if (run.team.watchers.length > 0) {
+            if (run.team.watchers.length > 0 || run.team.sync.length > 0) {
               run.io.out('standing by: its watchers run here, and it ticks when the other stops')
               while (ended === 'held' && !run.io.stop.aborted) ended = await tick()
             }
@@ -1155,7 +1169,7 @@ const commands: Record<string, Command> = {
         guard.reset(guardAt)
         const cwd = process.cwd()
         const path = launchd.install({ board: name, program, ...(run.io.env.MUSTER_DIR ? { dir: run.io.env.MUSTER_DIR } : {}), env, log, home: run.io.env.HOME ?? homedir(), ...(run.module ? { cwd } : {}) })
-        return print(run, { installed: path, log, ...(run.module ? { module: run.module.path, cwd } : {}) }, () => [`installed  ${path}`, `log        ${log}`, ...(run.module ? [`module     ${run.module.path}`, `cwd        ${cwd}`] : []), ...(run.module && existsSync(syncPath()) ? [`sync       ${syncPath()} is not read with a board module: move its sync into the module's board()`] : []), 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
+        return print(run, { installed: path, log, ...(run.module ? { module: run.module.path, cwd } : {}) }, () => [`installed  ${path}`, `log        ${log}`, ...(run.module ? [`module     ${run.module.path}`, `cwd        ${cwd}`] : []), ...(run.module && run.team.sync.length === 0 && existsSync(syncPath()) ? [`sync       ${syncPath()} is not read with a board module: move its sync into the module's board()`] : []), 'starts at login, restarts after a crash', list(parsed.flags, 'env').length ? `carries    ${list(parsed.flags, 'env').join(' ')}` : 'pass --env NAME for each secret your sync, watchers or outgoing webhooks need'].join('\n'))
       }
       if (verb === 'uninstall') {
         const removed = launchd.uninstall({ board: name, home: run.io.env.HOME ?? homedir() })
@@ -1182,7 +1196,10 @@ const commands: Record<string, Command> = {
         const { watchers, hooks } = loadDaemonConfig(run.io.env, loaded ? { path: loaded.path, names: run.team.watchers.map((watcher) => watcher.name) } : undefined)
         const running = launchd.loaded(name)
         const watching = loaded ? await moduleWatchers(run) : []
-        const module = run.module ? { path: run.module.path, ...(run.module.error ? { error: run.module.error.toJSON() } : {}), watchers: watching } : null
+        // The module's sync, by name, and which host holds its lease. Its secrets aren't read: status runs where they aren't.
+        const syncHolder = loaded && run.team.sync.length ? ((await run.team.backend.leases?.holder('sync'))?.holder ?? null) : null
+        const syncing = loaded ? run.team.sync.map((each) => ({ key: each.key, type: each.type, env: each.env, holder: syncHolder })) : []
+        const module = run.module ? { path: run.module.path, ...(run.module.error ? { error: run.module.error.toJSON() } : {}), watchers: watching, sync: syncing } : null
         // A module watcher nothing holds is declared and not running: the module may be fine, and nothing hosts it.
         const idle = watching.filter((watcher) => watcher.holder === null)
         return print(run, { installed: running, parked: kept.parked ? { ...kept.parked, retry: guard.retryAt(kept.parked) } : null, starts: recent, module, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
@@ -1191,6 +1208,7 @@ const commands: Record<string, Command> = {
             kept.parked ? `stopped   since ${kept.parked.at}: ${kept.parked.why} It tries again at ${guard.retryAt(kept.parked)}, or now with mu daemon reset.` : `restarts  ${recent} quick starts in ${guard.RESTART_WINDOW / 60_000} minutes; it stops at ${guard.RESTART_LIMIT}`,
             ...(run.module ? [`module    ${run.module.path}${run.module.error ? `  not loaded: ${run.module.error.message}` : ''}`] : []),
             ...watching.map((watcher) => `watch     ${watcher.name}  ${tailText(watcher.tail)}${watcher.as ? `  as ${watcher.as}` : ''}  ${watcher.holder ? `held by ${watcher.holder}` : 'not running'}  ${watcher.lag === null ? 'not started' : `lag ${watcher.lag}${watcher.lag >= LAG_PAGE ? '+' : ''}`}`),
+            ...syncing.map((each) => `sync      ${each.key}  ${each.type}${each.env.length ? `  reads ${each.env.join(' ')}` : ''}  ${each.holder ? `held by ${each.holder}` : 'not running'}`),
             ...(idle.length ? [`warning   declared but not started: ${idle.map((watcher) => watcher.name).join(' ')}. Run mu daemon run or mu serve with this module, or start() it in your own process.`] : []),
             `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
             `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
@@ -2337,7 +2355,20 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
       }
       // sync.json goes into the board() the CLI makes: a module's board is made by the module.
       if (team && existsSync(syncPath()) && (name === 'serve' || ['run', 'status', 'check', 'install'].includes(verb!))) {
-        io.err(`warning: ${syncPath()} isn't read with a board module: nothing it lists is synced. Give the module's board() its sync instead.`)
+        if (team.sync.length === 0) io.err(`warning: ${syncPath()} isn't read with a board module: nothing it lists is synced. Give the module's board() its sync instead.`)
+        else {
+          // Two places saying what a board syncs is the confusion a module is for: refused, never merged.
+          const twice = new Failure('sync_twice', `${found.path} declares sync (${team.sync.map((each) => each.key).join(', ')}), and ${syncPath()} is there too.`, { exit: 2, hint: `A board's sync is in one place: move what ${syncPath()} lists into the module's board({ sync }) and delete the file.` })
+          if (verb === 'run') {
+            io.err(`error: ${twice.message}`)
+            io.err(`  ${twice.hint}`)
+            io.err('  The daemon has stopped. Fix it and start it again (mu daemon reset, if it is installed).')
+            endLaunch()
+            return 0
+          }
+          if (name === 'serve' || verb === 'install') throw twice
+          io.err(`error: ${twice.message}`)
+        }
       }
     }
     if (team) {
@@ -2362,7 +2393,8 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
         io.err(`error: ${(error as Error).message}`)
         return 0
       }
-      team = board({ ...(dir ? { dir } : {}), ...(boardName ? { name: boardName } : {}), ...(sync ? { sync } : {}), as: as ?? null })
+      // Given to the backend, not declared on the handle: the daemon's tick runs sync.json's sync, as it always has.
+      team = board({ backend: file({ ...(dir ? { dir } : {}), ...(boardName ? { name: boardName } : {}), ...(sync ? { sync } : {}) }), as: as ?? null })
     }
     const go = async () => {
       const code = await command.run({ team: team!, json: on(parsed.flags, 'json'), io, now: () => Date.now(), ...(module ? { module } : {}) }, parsed)
