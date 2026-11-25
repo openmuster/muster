@@ -666,6 +666,8 @@ describe('the board modules the docs show', () => {
     await until(async () => (await replies(dir, feature)).includes('Started'))
     host.child.kill('SIGTERM')
     const ended = await host.done
-    expect([ended.code, ended.stderr]).toEqual([0, ''])
+    // Node 22 says, under plain node, that its SQLite is experimental: that is Node's line, not the host's.
+    const said = ended.stderr.replace(/^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature.*\n(\(Use `node --trace-warnings \.\.\.` .*\n)?/m, '')
+    expect([ended.code, said]).toEqual([0, ''])
   }, 60_000)
 })
