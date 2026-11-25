@@ -6,7 +6,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { GAVE_UP } from '../src/daemon/check.ts'
 import { DELIVERY_ATTEMPTS, SLOWEST } from '../src/daemon/watchers.ts'
 import { board, type Board, type Watch } from '../src/index.ts'
-import { clock, tempDir } from './helpers.ts'
+import { cliStart, clock, tempDir } from './helpers.ts'
 
 const HOST = fileURLToPath(new URL('./fixtures/host.ts', import.meta.url))
 
@@ -44,6 +44,10 @@ describe('watchers in code', () => {
       [{ lead: { tail: { for: 'lead+' }, run: () => {} } }, /Watcher "lead" has a "for"/],
       [{ lead: { tail: {}, run: () => {}, as: 'Not A Profile' } }, /Watcher "lead" has an "as"/],
       [{ lead: { run: () => {} } }, /Watcher "lead" needs a "tail"/],
+      [{ lead: { tail: {}, run: () => {}, timeout: '1 minute' } }, /Watcher "lead" has a "timeout"/],
+      [{ lead: { tail: {}, run: () => {}, timeout: 0 } }, /Watcher "lead" has a "timeout"/],
+      [{ lead: { tail: {}, run: () => {}, coalesce: -1 } }, /Watcher "lead" has a "coalesce"/],
+      [{ lead: { tail: { root: 'yes' }, run: () => {} } }, /Watcher "lead" has a "root"/],
     ]
     for (const [watch, message] of bad) {
       let thrown: unknown
@@ -354,4 +358,183 @@ describe('delivering, and failing', () => {
     expect(await team.deliver()).toEqual({ delivered: 0, failed: 0, held: ['lead'] })
     expect(seen).toEqual([])
   })
+})
+
+describe('runs that throw, hang, or come in bursts', () => {
+  it('a root watcher is woken by a new thread, never by a reply or by what is done to one', async () => {
+    const { seen, watch } = noting({ tail: { channel: 'work/', root: true } })
+    const { team } = watched({ lead: watch })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'new thread' })
+    const reply = await team.reply({ to: root.id, text: 'a reply' })
+    await team.react({ id: reply.id, emoji: 'eyes' })
+    await team.deliver()
+    expect(seen).toEqual([root.id])
+  })
+
+  it('a run that throws after its first write is tried again, and the write is not made twice', async () => {
+    const attempts: number[] = []
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/', root: true },
+        as: 'lead',
+        run: async ({ event, board: me, attempt }) => {
+          attempts.push(attempt)
+          await me.reply({ to: event.seq, text: `Started (try ${attempt})` })
+          await me.label({ id: event.seq, set: { step: 'started' } })
+          if (attempt === 1) throw new Error('lost the connection after replying')
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'a feature' })
+    expect(await team.deliver()).toEqual({ delivered: 0, failed: 1, held: [] })
+    time.advance(10 * SECOND)
+    expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
+    expect(attempts).toEqual([1, 2])
+    expect(await replies(team, root.id)).toEqual(['Started (try 1)'])
+  })
+
+  it('a try that writes somewhere else than the first did fails loudly, and writes nothing', async () => {
+    const refused: string[] = []
+    const roots: number[] = []
+    const time = clock()
+    const team = board({
+      memory: true,
+      principal: 'local:user:ada',
+      now: time.now,
+      watch: {
+        lead: {
+          tail: { channel: 'work/', root: true },
+          run: async ({ board: me, attempt }) => {
+            // The thread it answers is picked afresh each try: a bug, and the board says so.
+            await me.reply({ to: roots[attempt - 1]!, text: 'Started' }).catch((error) => {
+              refused.push((error as { reason: string }).reason)
+              throw error
+            })
+            if (attempt === 1) throw new Error('flaky')
+          },
+        },
+      },
+    })
+    await team.deliver()
+    roots.push((await team.post({ channel: 'work/api', text: 'one' })).id)
+    roots.push((await team.post({ channel: 'elsewhere', text: 'two' })).id)
+    await team.deliver()
+    time.advance(10 * SECOND)
+    expect((await team.deliver()).failed).toBe(1)
+    expect(refused).toEqual(['idempotency_mismatch'])
+    expect([await replies(team, roots[0]!), await replies(team, roots[1]!)]).toEqual([['Started'], []])
+  })
+
+  it('a hung run is aborted at its timeout and tried again; what it writes after that is refused', async () => {
+    const after: string[] = []
+    let hang = true
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        timeout: '50ms',
+        run: async ({ event, board: me, signal }) => {
+          if (!hang) return
+          hang = false
+          await new Promise((resolve) => setTimeout(resolve, 150))
+          after.push(String(signal.aborted))
+          await me.reply({ to: event.seq, text: 'too late' }).catch((error) => after.push((error as { reason: string }).reason))
+          await new Promise(() => {})
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'slow' })
+    const began = Date.now()
+    expect(await team.deliver()).toEqual({ delivered: 0, failed: 1, held: [] })
+    expect(Date.now() - began).toBeLessThan(1000)
+    time.advance(10 * SECOND)
+    expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
+    await vi.waitFor(() => expect(after).toEqual(['true', 'watch_aborted']))
+    expect(await replies(team, root.id)).toEqual([])
+  })
+
+  it('a hung watcher holds up no other: each runs in a loop of its own, and stop() waits for the run in flight', async () => {
+    const dir = tempDir()
+    const fine: number[] = []
+    let slow = 'not started'
+    const team = board({
+      dir,
+      principal: 'local:user:ada',
+      watch: {
+        stuck: { tail: { channel: 'work/' }, timeout: '30s', run: () => new Promise(() => {}) },
+        slow: {
+          tail: { channel: 'work/' },
+          run: async () => {
+            slow = 'running'
+            await new Promise((resolve) => setTimeout(resolve, 300))
+            slow = 'finished'
+          },
+        },
+        fine: { tail: { channel: 'work/' }, run: ({ event }) => void fine.push(event.seq) },
+      },
+    })
+    await team.deliver()
+    const host = team.start({ log: () => {} })
+    const posted = await team.post({ channel: 'work/api', text: 'wake' })
+    await vi.waitFor(() => expect([fine, slow]).toEqual([[posted.id], 'running']), { timeout: 5000 })
+    // Stopped mid-run, it waits for the slow run to finish and be recorded. The stuck one is never waited out here.
+    host.stop()
+    await Promise.race([host.done, new Promise((resolve) => setTimeout(resolve, 2000))])
+    expect(slow).toBe('finished')
+    // Recorded: a later pass doesn't run it again.
+    const again: string[] = []
+    const later = board({ dir, principal: 'local:user:ada', watch: { slow: { tail: { channel: 'work/' }, run: () => void again.push('again') } } })
+    await later.deliver()
+    expect(again).toEqual([])
+    team.close()
+    later.close()
+  })
+
+  it('coalesce gathers a thread\'s burst into one run, with the newest event standing for the rest', async () => {
+    const woke: [number | null, string][] = []
+    const { team, time } = watched({
+      lead: { tail: { channel: 'work/' }, coalesce: '30s', run: ({ event }) => void woke.push([event.thread, event.message?.text ?? event.type]) },
+    })
+    await team.deliver()
+    const a = await team.post({ channel: 'work/api', text: 'a' })
+    await team.reply({ to: a.id, text: 'more' })
+    time.advance(10 * SECOND)
+    await team.reply({ to: a.id, text: 'and more' })
+    const b = await team.post({ channel: 'work/web', text: 'b' })
+    expect(await team.deliver()).toEqual({ delivered: 0, failed: 0, held: [] })
+    time.advance(20 * SECOND)
+    // a's oldest event is 30 seconds old; b's only 20.
+    expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
+    time.advance(10 * SECOND)
+    expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
+    expect(woke).toEqual([[a.id, 'and more'], [b.id, 'b']])
+    expect(await team.deliver()).toEqual({ delivered: 0, failed: 0, held: [] })
+  })
+
+  it('the event a watcher gets is what mu tail --json prints, and mu tail --root leaves out the reply', async () => {
+    const dir = tempDir()
+    const got: unknown[] = []
+    const team = board({ dir: join(dir, 'board'), principal: 'local:user:ada', watch: { lead: { tail: { channel: 'work/' }, run: ({ event }) => void got.push(event) } } })
+    await team.post({ channel: 'general', text: 'board exists' })
+    await team.deliver()
+    const from = await team.head()
+    const root = await team.post({ channel: 'work/api', text: 'fix the @ada redirect', labels: { kind: 'bug' } })
+    await team.reply({ to: root.id, text: 'looking' })
+    await team.taskCreate({ thread: root.id })
+    await team.label({ id: root.id, set: { step: 'review' } })
+    await team.deliver()
+    const tail = async (extra: string[]) => {
+      const run = cliStart(dir, ['tail', 'work/', '--after', String(from), '--json', ...extra])
+      await vi.waitFor(() => expect(run.output().trim().split('\n').length).toBeGreaterThanOrEqual(extra.length ? 3 : 4), { timeout: 10_000 })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      run.child.kill('SIGTERM')
+      await run.done
+      return run.output().trim().split('\n').map((line) => JSON.parse(line) as { type: string })
+    }
+    expect(await tail([])).toEqual(JSON.parse(JSON.stringify(got)))
+    expect((await tail(['--root'])).map((event) => event.type)).toEqual(['message.posted', 'task.created', 'labels.changed'])
+    team.close()
+  }, 30_000)
 })

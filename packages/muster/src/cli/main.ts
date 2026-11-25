@@ -204,10 +204,11 @@ const filterOf = (parsed: Parsed, channelAt: number): Filter => {
   }
   const types = list(parsed.flags, 'type')
   if (types.length) filter.types = types
+  if (on(parsed.flags, 'root')) filter.root = true
   return filter
 }
 
-const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'for', 'after', 'timeout', 'last'], many: ['label', 'type'] }
+const FEED: Spec = { value: ['re', 'by', 'mentions', 'text', 'for', 'after', 'timeout', 'last'], many: ['label', 'type'], bool: ['root'] }
 
 type Command = { spec: Spec; run: (run: Run, parsed: Parsed) => Promise<number | void> }
 

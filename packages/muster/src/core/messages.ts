@@ -2,7 +2,7 @@ import { Failure, misuse } from '../failure.ts'
 import { actorId, channelPath, labelKey, labelValue, LIMITS, messageText, type Attachment, type Caller, type Message } from '../model.ts'
 import { checkBlocks } from './blocks.ts'
 import { fileKnown } from './files.ts'
-import { authorize, allowed, byOf, findMessage, messageFor, once, type Context } from './context.ts'
+import { authorize, allowed, byOf, findMessage, fingerprintBy, messageFor, once, type Context, type IdempotencyMatch } from './context.ts'
 
 export type PostRequest = {
   channel: string
@@ -11,6 +11,7 @@ export type PostRequest = {
   attachments?: Attachment[]
   noSync?: boolean
   idempotencyKey?: string
+  idempotencyMatch?: IdempotencyMatch
 }
 
 export type ReplyRequest = {
@@ -22,6 +23,7 @@ export type ReplyRequest = {
   attachments?: Attachment[]
   noSync?: boolean
   idempotencyKey?: string
+  idempotencyMatch?: IdempotencyMatch
 }
 
 const MENTION = /(^|[\s(])@([a-z0-9][a-z0-9_.-]*)/g
@@ -75,7 +77,7 @@ export function post(ctx: Context, caller: Caller, request: PostRequest): Messag
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'post', channel, text: request.text, labels, attachments, noSync: request.noSync === true },
+    fingerprintBy(request, { op: 'post', channel, text: request.text, labels, attachments, noSync: request.noSync === true }, { op: 'post', channel }),
     (emit) => {
       checkBlocks(ctx, text)
       knownFiles(ctx, attachments)
@@ -101,7 +103,7 @@ export function reply(ctx: Context, caller: Caller, request: ReplyRequest): Mess
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'reply', to: request.to, text: request.text, labels, attachments, after: request.after ?? null, noSync: request.noSync === true },
+    fingerprintBy(request, { op: 'reply', to: request.to, text: request.text, labels, attachments, after: request.after ?? null, noSync: request.noSync === true }, { op: 'reply', to: request.to }),
     (emit) => {
       const target = messageFor(ctx, caller, request.to)
       authorize(caller, target.channel, 'post')
@@ -167,13 +169,13 @@ export type EditHook = (ctx: Context, caller: Caller, message: Message, emit: Pa
 /** What else a write does once it lands: a task's own rules, set by `tasks.ts` so messages don't import them. */
 export const hooks: { edited?: EditHook; deleted?: EditHook } = {}
 
-export function edit(ctx: Context, caller: Caller, request: { id: number; text: string; ifRevision?: number; idempotencyKey?: string }): Message {
+export function edit(ctx: Context, caller: Caller, request: { id: number; text: string; ifRevision?: number; idempotencyKey?: string; idempotencyMatch?: IdempotencyMatch }): Message {
   const text = messageText(request.text)
   return once(
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'edit', id: request.id, text: request.text, ifRevision: request.ifRevision ?? null },
+    fingerprintBy(request, { op: 'edit', id: request.id, text: request.text, ifRevision: request.ifRevision ?? null }, { op: 'edit', id: request.id }),
     (emit) => {
       const message = messageFor(ctx, caller, request.id)
       if (message.deleted) throw new Failure('not_found', `No message ${request.id}.`)
@@ -198,12 +200,12 @@ export function edit(ctx: Context, caller: Caller, request: { id: number; text: 
   )
 }
 
-export function remove(ctx: Context, caller: Caller, request: { id: number; ifRevision?: number; idempotencyKey?: string }): Message {
+export function remove(ctx: Context, caller: Caller, request: { id: number; ifRevision?: number; idempotencyKey?: string; idempotencyMatch?: IdempotencyMatch }): Message {
   return once(
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'delete', id: request.id, ifRevision: request.ifRevision ?? null },
+    fingerprintBy(request, { op: 'delete', id: request.id, ifRevision: request.ifRevision ?? null }, { op: 'delete', id: request.id }),
     (emit) => {
       const message = messageFor(ctx, caller, request.id)
       // Deleting is a write: a token that may only read a channel deletes nothing in it, not even its own profile's words.
@@ -228,6 +230,7 @@ export type LabelRequest = {
   /** Change only if these keys are unset now. */
   ifUnset?: string[]
   idempotencyKey?: string
+  idempotencyMatch?: IdempotencyMatch
 }
 
 export function label(ctx: Context, caller: Caller, request: LabelRequest): Message {
@@ -239,7 +242,7 @@ export function label(ctx: Context, caller: Caller, request: LabelRequest): Mess
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'label', id: request.id, set, unset, if: request.if ?? null, ifUnset: request.ifUnset ?? null },
+    fingerprintBy(request, { op: 'label', id: request.id, set, unset, if: request.if ?? null, ifUnset: request.ifUnset ?? null }, { op: 'label', id: request.id }),
     (emit) => {
       const message = messageFor(ctx, caller, request.id)
       if (message.deleted) throw new Failure('not_found', `No message ${request.id}.`)
@@ -273,14 +276,14 @@ export function label(ctx: Context, caller: Caller, request: LabelRequest): Mess
   )
 }
 
-export function react(ctx: Context, caller: Caller, request: { id: number; emoji: string; remove?: boolean; idempotencyKey?: string }): Message {
+export function react(ctx: Context, caller: Caller, request: { id: number; emoji: string; remove?: boolean; idempotencyKey?: string; idempotencyMatch?: IdempotencyMatch }): Message {
   const emoji = request.emoji.replace(/^:|:$/g, '')
   if (emoji.length === 0 || emoji.length > LIMITS.emoji || /\s/.test(emoji)) throw misuse('invalid_emoji', `"${request.emoji}" isn't an emoji name.`)
   return once(
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'react', id: request.id, emoji, remove: request.remove === true },
+    fingerprintBy(request, { op: 'react', id: request.id, emoji, remove: request.remove === true }, { op: 'react', id: request.id, emoji, remove: request.remove === true }),
     (emit) => {
       const message = messageFor(ctx, caller, request.id)
       if (message.deleted) throw new Failure('not_found', `No message ${request.id}.`)

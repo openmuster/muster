@@ -4,7 +4,7 @@ import type { Board } from '../handle.ts'
 import type { Fence } from '../core/deliveries.ts'
 import { holderId, holdLease, LEASE_TTL, type Held, type Leases } from '../daemon/lease.ts'
 import { DELIVERY_ATTEMPTS, SLOWEST } from '../daemon/watchers.ts'
-import type { Watcher } from './watch.ts'
+import type { Watcher, WatchEvent } from './watch.ts'
 
 /** A host running a board's watchers: stop it, and `done` settles once each run in flight has been recorded. */
 export type Host = { stop(): void; done: Promise<void> }
@@ -104,38 +104,40 @@ async function pass(team: Board, watcher: Watcher, fence: Fence, state: WatchSta
     return out
   }
   lanes: for (const [lane, events] of lanes) {
-    for (const event of events) {
-      const row = known.get(event.seq)
+    for (const unit of unitsOf(watcher, events)) {
+      const row = known.get(unit.key.seq)
       // Waiting for its next try: the rest of its thread waits behind it.
       if (row && row.retryAt > now) continue lanes
+      // Gathering: the thread's oldest event isn't old enough yet.
+      if (watcher.coalesce !== undefined && Date.parse(unit.key.at) + watcher.coalesce > now) continue lanes
       // Its last try ended with its host: counted, and there are no more.
       if (row && row.attempts >= DELIVERY_ATTEMPTS) {
-        if (!(await giveUp(me, store, watcher, event, 'its host stopped during the last try', fence, log))) return lost()
-        settled.add(event.seq)
+        if (!(await giveUp(me, store, watcher, unit, 'its host stopped during the last try', fence, log))) return lost()
+        for (const seq of unit.seqs) settled.add(seq)
         continue
       }
-      const begun = await store.begin({ watcher: watcher.name, seq: event.seq, lane, fence })
+      const begun = await store.begin({ watcher: watcher.name, seq: unit.key.seq, lane, fence })
       if (!begun.held) return lost()
-      const failure = await runOnce(me, watcher, event)
+      const failure = await runOnce(me, watcher, unit, begun.attempts)
       await yieldNow()
       if (failure === null) {
-        if (!(await store.finish({ watcher: watcher.name, seqs: [event.seq], fence })).held) return lost()
-        settled.add(event.seq)
+        if (!(await store.finish({ watcher: watcher.name, seqs: unit.seqs, fence })).held) return lost()
+        for (const seq of unit.seqs) settled.add(seq)
         state.failures = 0
         out.delivered += 1
         continue
       }
       out.failed += 1
       state.failures += 1
-      log(`failed    ${watcher.name}  at ${event.seq}  try ${begun.attempts} of ${DELIVERY_ATTEMPTS}  ${failure.message}`)
+      log(`failed    ${watcher.name}  at ${unit.key.seq}  try ${begun.attempts} of ${DELIVERY_ATTEMPTS}  ${failure.message}`)
       if (begun.attempts >= DELIVERY_ATTEMPTS) {
-        if (!(await giveUp(me, store, watcher, event, failure.why, fence, log))) return lost()
-        settled.add(event.seq)
+        if (!(await giveUp(me, store, watcher, unit, failure.why, fence, log))) return lost()
+        for (const seq of unit.seqs) settled.add(seq)
       }
       // Its code is failing, not this event: stop here, and come back slower.
       if (slowedFor(state.failures) > 0) break lanes
       // The rest of this thread waits for this event's next try.
-      if (!settled.has(event.seq)) continue lanes
+      if (!settled.has(unit.key.seq)) continue lanes
     }
   }
   // Everything at or below the cursor is delivered: it stops below the oldest event that isn't.
@@ -150,29 +152,97 @@ async function pass(team: Board, watcher: Watcher, fence: Fence, state: WatchSta
   return out
 }
 
-/** Runs the watcher on one event. Null when it worked; otherwise what to say about it. */
-async function runOnce(me: Board, watcher: Watcher, event: FeedEvent): Promise<{ message: string; why: string } | null> {
+/**
+ * One delivery: the event the run is handed, the event its tries are counted on (and its writes keyed
+ * by), and every event it settles. One per event; with `coalesce`, one per thread, the newest event
+ * standing for the rest and the oldest keeping count, so new events don't reset its tries.
+ */
+type Unit = { event: FeedEvent; key: FeedEvent; seqs: number[] }
+
+const unitsOf = (watcher: Watcher, events: FeedEvent[]): Unit[] =>
+  watcher.coalesce !== undefined ? [{ event: events.at(-1)!, key: events[0]!, seqs: events.map((event) => event.seq) }] : events.map((event) => ({ event, key: event, seqs: [event.seq] }))
+
+const spanOf = (ms: number) => (ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`)
+
+/**
+ * Runs the watcher once, for at most its `timeout`. A run still going then is aborted and left behind:
+ * its `signal` fires, the board it was given refuses its writes, and the try counts as failed. Null when
+ * it worked; otherwise what to log, and what its note would say.
+ */
+async function runOnce(me: Board, watcher: Watcher, unit: Unit, attempt: number): Promise<{ message: string; why: string } | null> {
+  const controller = new AbortController()
+  const board = keyed(me, watcher.name, `watch:${watcher.name}:${unit.key.seq}`, controller.signal)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new Failure('watch_aborted', `Watcher "${watcher.name}" ran past its timeout of ${spanOf(watcher.timeout)}.`))
+      resolve('timeout')
+    }, watcher.timeout)
+  })
+  const running = Promise.resolve().then(() => watcher.run({ event: unit.event as WatchEvent, board, signal: controller.signal, watcher: { name: watcher.name, as: watcher.as ?? null }, attempt }))
+  // A run left behind may still fail later: that is not this host's to report again.
+  running.catch(() => {})
   try {
-    await watcher.run({ event, board: me, watcher: { name: watcher.name, as: watcher.as ?? null } })
+    if ((await Promise.race([running.then(() => 'ok' as const), timedOut])) === 'timeout') {
+      const why = `timed out after ${spanOf(watcher.timeout)}`
+      return { message: why, why }
+    }
     return null
   } catch (error) {
     const why = (error as { why?: unknown }).why
     return { message: (error as Error)?.message ?? String(error), why: typeof why === 'string' ? why : 'it threw' }
+  } finally {
+    clearTimeout(timer)
   }
+}
+
+/** The writes a retry must not make twice. Each gets a key from the event and its place in the run, unless it brought its own. */
+const KEYED = new Set(['post', 'reply', 'edit', 'remove', 'label', 'react', 'taskCreate', 'taskPlan'])
+
+/**
+ * The board a run writes through. Each keyed write without a key of its own gets one: the event, the
+ * kind of write, and how many of that kind this run has made, matched by shape. So a try after a throw
+ * gets the first try's answers instead of writing again, and a try that writes somewhere else fails
+ * loudly. Once the run is aborted, every call is refused.
+ */
+function keyed(me: Board, watcher: string, prefix: string, signal: AbortSignal, counts = new Map<string, number>()): Board {
+  return new Proxy(me, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver) as unknown
+      if (prop === 'as') return (profile: string | null) => keyed(target.as(profile), watcher, prefix, signal, counts)
+      if (typeof prop !== 'string' || typeof value !== 'function' || prop === 'close' || prop === 'start' || prop === 'deliver') return value
+      return async (request?: unknown, ...rest: unknown[]) => {
+        if (signal.aborted) throw signal.reason instanceof Failure ? signal.reason : new Failure('watch_aborted', `Watcher "${watcher}"'s run was aborted: it may not write now.`)
+        if (!KEYED.has(prop) || request === null || typeof request !== 'object' || (request as { idempotencyKey?: unknown }).idempotencyKey !== undefined) {
+          return (value as (...args: unknown[]) => unknown).call(target, request, ...rest)
+        }
+        const n = (counts.get(prop) ?? 0) + 1
+        counts.set(prop, n)
+        try {
+          return await (value as (...args: unknown[]) => unknown).call(target, { ...request, idempotencyKey: `${prefix}:${prop}:${n}`, idempotencyMatch: 'shape' }, ...rest)
+        } catch (error) {
+          if ((error as { reason?: unknown }).reason !== 'idempotency_mismatch') throw error
+          throw new Failure('idempotency_mismatch', `Watcher "${watcher}" made its ${prop} number ${n} somewhere else than on an earlier try at this event: a try after a throw has to write to the same places.`, {
+            hint: 'Pass your own idempotencyKey to a write whose place can change between tries.',
+          })
+        }
+      }
+    },
+  })
 }
 
 /**
  * Stops trying an event, and says so on its thread, once: the note's key makes a second one the first.
  * The note is marked delivered with it, so it never wakes the watcher that wrote it.
  */
-async function giveUp(me: Board, store: ReturnType<typeof deliveriesOf>, watcher: Watcher, event: FeedEvent, why: string, fence: Fence, log: (line: string) => void): Promise<boolean> {
-  const seqs = [event.seq]
-  if (event.thread !== null) {
+async function giveUp(me: Board, store: ReturnType<typeof deliveriesOf>, watcher: Watcher, unit: Unit, why: string, fence: Fence, log: (line: string) => void): Promise<boolean> {
+  const seqs = [...unit.seqs]
+  if (unit.key.thread !== null) {
     const text = `watcher "${watcher.name}" couldn't deliver a wake-up after ${DELIVERY_ATTEMPTS} tries (${why}).`
-    const note = await me.reply({ to: event.thread, text, noSync: true, idempotencyKey: `watch:${watcher.name}:${event.seq}:gave-up` }).catch(() => null)
+    const note = await me.reply({ to: unit.key.thread, text, noSync: true, idempotencyKey: `watch:${watcher.name}:${unit.key.seq}:gave-up` }).catch(() => null)
     if (note) seqs.push(note.id)
   }
-  log(`gave up   ${watcher.name}  at ${event.seq}  after ${DELIVERY_ATTEMPTS} tries (${why})`)
+  log(`gave up   ${watcher.name}  at ${unit.key.seq}  after ${DELIVERY_ATTEMPTS} tries (${why})`)
   return (await store.finish({ watcher: watcher.name, seqs, fence })).held
 }
 

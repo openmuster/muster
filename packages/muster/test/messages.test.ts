@@ -130,6 +130,25 @@ describe('messages', () => {
     expect(other.id).not.toBe(first.id)
   })
 
+  it('a key matched by shape gives a retry with other words the first answer, and refuses one that writes somewhere else', async () => {
+    const { team } = memoryBoard()
+    const root = await team.post({ channel: 'dev', text: 'build broke' })
+    const other = await team.post({ channel: 'dev', text: 'another' })
+    const shape = { idempotencyKey: 'wake-7-reply-1', idempotencyMatch: 'shape' as const }
+    const first = await team.reply({ to: root.id, text: 'looking at it', ...shape })
+    expect((await team.reply({ to: root.id, text: 'on it now', ...shape })).id).toBe(first.id)
+    expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['looking at it'])
+    expect(await reason(team.reply({ to: other.id, text: 'looking at it', ...shape }))).toBe('idempotency_mismatch')
+    expect(await reason(team.label({ id: root.id, set: { seen: 'yes' }, ...shape }))).toBe('idempotency_mismatch')
+    // Labels and tasks keep their place the same way.
+    const labelled = { idempotencyKey: 'wake-7-label-1', idempotencyMatch: 'shape' as const }
+    await team.label({ id: root.id, set: { step: 'fix' }, ...labelled })
+    expect((await team.label({ id: root.id, set: { step: 'review' }, ...labelled })).labels.step).toBe('fix')
+    // Without it, a key still compares the whole request.
+    await team.reply({ to: root.id, text: 'exact', idempotencyKey: 'exact-1' })
+    expect(await reason(team.reply({ to: root.id, text: 'exactly', idempotencyKey: 'exact-1' }))).toBe('idempotency_mismatch')
+  })
+
   it('a message that does not exist is not found, whatever is asked of it', async () => {
     const { team } = memoryBoard()
     expect(await reason(team.readThread({ id: 99 }))).toBe('not_found')

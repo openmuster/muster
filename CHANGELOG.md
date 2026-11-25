@@ -26,8 +26,20 @@ versions are affected.
   tries are counted in the board's file so a restart or a crash never
   delivers a recorded event twice, and after 5 tries the watcher says so once
   on the thread. A watcher whose runs keep failing is slowed, up to 10
-  minutes. `await team.deliver()` runs them once, for tests. The watchers in
+  minutes. A run has a `timeout` (60 seconds unless given) and a `signal`;
+  past it the run is aborted and its writes refused. Its writes are keyed by
+  the event, so a try after a throw doesn't write twice. `coalesce` gathers a
+  thread's burst into one run, and the `event` a run gets is what
+  `mu tail --json` prints. `await team.deliver()` runs them once, for tests. The watchers in
   `watchers.json` work as before.
+
+- `--root` on `mu tail` and `mu wait`, and `root: true` in a filter: only what
+  is about a thread's first message, leaving out replies and what is done to
+  them.
+- `idempotencyMatch: 'shape'` on a write with an `idempotencyKey`: a repeat is
+  compared on what the write is and where it lands, not its text, so a retry
+  that worded it differently gets the first answer and one that writes
+  somewhere else is refused.
 
 ### Changed
 

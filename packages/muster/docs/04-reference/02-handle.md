@@ -78,8 +78,11 @@ const feed = await team.events({ after: page.cursor, filter: { channel: 'dev/', 
 | `head` | The newest cursor |
 | `cursorGet`, `cursorSet` | A reader's stored place, by name |
 
-A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types? }`. To
-wait, call `events` with the cursor you hold until it returns something.
+A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types?,
+root? }`. To wait, call `events` with the cursor you hold until it returns
+something. `root: true` (`--root` on `mu tail` and `mu wait`) keeps only what is
+about a thread's first message: a reply, and an edit, label or reaction on one,
+is left out.
 
 `for` is what is for one actor: a message posted that mentions it, a task
 assigned to it, and a reply in a thread it wrote in, never its own writes
@@ -132,10 +135,10 @@ import { board } from 'muster'
 export const team = board({
   watch: {
     intake: {
-      tail: { channel: 'features' },
+      tail: { channel: 'features', root: true },
       as: 'intake',
       run: async ({ event, board }) => {
-        if (event.type === 'message.posted' && event.message?.re === null) await board.reply({ to: event.seq, text: 'Started' })
+        if (event.type === 'message.posted') await board.reply({ to: event.message.id, text: 'Started' })
       },
     },
   },
@@ -155,8 +158,30 @@ process.once('SIGTERM', () => {
 | Key | What it does |
 | --- | --- |
 | `tail` | What to listen for: the filter `events` takes |
-| `run` | Called with `{ event, board, watcher }` for each event that matches. A throw is a failed delivery |
+| `run` | Called with `{ event, board, signal, watcher, attempt }` for each event that matches. A throw is a failed delivery |
 | `as` | The profile it writes as. Its own writes never wake it; a message it scheduled does |
+| `timeout` | How long one run may take: `'60s'` unless given. Then `signal` aborts, the run counts as failed, and the `board` it was given refuses to write |
+| `coalesce` | Gathers a thread's events: once its oldest undelivered one is this old (`'30s'`), one run gets the newest, standing for the rest |
+
+A length of time is milliseconds, or text such as `'500ms'`, `'30s'`, `'5m'`,
+`'1h'`. `event` is exactly what `mu tail --json` prints for it, typed by
+`type`: a `message.*` event has its `message`, a `task.*` event its `task`.
+
+A watcher without `as` writes as the handle does, and is woken by its own
+writes like anyone's. Give it `as`, or listen with `root: true`, so a reply
+it makes doesn't wake it again.
+
+The `board` a run is given keys its writes by the event: each `post`,
+`reply`, `edit`, `remove`, `label`, `react`, `taskCreate` and `taskPlan`
+without an `idempotencyKey` of its own gets one from the event and how many
+of that kind the run has made, compared by shape (what the write is, and
+where) rather than by every field. So a try after a throw gets the first
+try's answers back instead of writing again, even if its text came out
+differently, and a try that writes somewhere else fails with
+`idempotency_mismatch`. Two things are not covered: a different write at the
+same place is taken for the first, and schedules and task claims, renewals
+and settles carry no key. Any write takes `idempotencyMatch: 'shape'` with its
+own key to be compared the same way.
 
 `start()` runs each watcher in a loop of its own and returns `{ stop, done }`
 at once. **Never await `done`, or anything that waits for it, where a server

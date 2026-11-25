@@ -24,8 +24,8 @@ read
                                  what is for you since last asked: mentions,
                                  tasks assigned to you, replies to you
   wait [<channel>] [--re <id>] [--label k=v]... [--by <who>] [--mentions <who>]
-       [--for <profile>] [--text <words>] [--type <event>]... [--after <cursor>]
-       [--timeout 30m]
+       [--for <profile>] [--text <words>] [--type <event>]... [--root]
+       [--after <cursor>] [--timeout 30m]
   tail [<channel>] [same filters] [--last n]
 
 write
