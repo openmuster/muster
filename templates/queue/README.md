@@ -16,7 +16,7 @@ guide is [A card queue](../../packages/muster/docs/03-guides/19-a-card-queue.md)
 | `workflows.json` | The `card` workflow: spec, work and review, one Vercel worker, `--push` |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow, once |
 | `notify.sh` | Tells you a task is blocked: `NOTIFY_CMD`, or a macOS notification |
-| `answer.sh` | Replies to a blocked task, unblocks it, and starts a worker on it |
+| `answer.sh` | Unblocks a blocked task, posts your answer, and starts a worker on the rest of its run |
 
 ```bash
 cp sync.json watchers.json workflows.json ~/.config/muster/
@@ -37,6 +37,12 @@ Answer a blocked task as yourself, with no `--as` and no `MUSTER_PROFILE`:
 ```bash
 ./answer.sh 14 "SSO first."
 ```
+
+What a card can reach: anyone who can label an issue in the team, or post in
+`cards`, starts a run, as `intake`, whatever `who` says. Each step's sandbox
+may push a branch and open a pull request in the repository (`push` is per
+workflow, not per step), that pull request runs your CI on the agent's code,
+and task results go back to the issue as a comment. The guide has the rest.
 
 Covered by tests, with Linear's API and the sandboxes as stand-ins. It has
 not been run live.

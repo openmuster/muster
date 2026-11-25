@@ -28,7 +28,7 @@ scripts:
 | `workflows.json` | The `card` workflow: spec, work and review tasks, one Vercel worker, `--push` |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow on it, once |
 | `notify.sh` | Tells you a task is blocked, with its ID only |
-| `answer.sh` | Replies to a blocked task, unblocks it and starts a worker on it |
+| `answer.sh` | Unblocks a blocked task, posts your answer, and starts a worker on the rest of its run |
 
 ```mermaid
 flowchart LR
@@ -130,26 +130,58 @@ mu read 14
 ./answer.sh 14 "SSO first."
 ```
 
-`answer.sh` replies with your answer, unblocks the task, and starts a worker on
-it with the workflow's settings, since the run's own worker stops after ten
-idle minutes. If a worker of the run takes the task first, that is fine too.
+`answer.sh` unblocks the task, then posts your answer on it. The unblock is
+the gate: of two answers to one task, only the one whose unblock changed it
+goes on, and an answer the board refuses posts nothing. Then, since the run's
+own worker stops after ten idle minutes, it starts a worker that takes the
+run's ready tasks one after another, the answered one first, held to that
+run's tasks as the daemon's workers are: same runner, agent, repository and
+`--push` as `workflows.json`. It starts none while a worker of the run is
+still going on this machine; that one takes the task.
+
 Run it as yourself, with no `--as` and no `MUSTER_PROFILE`: the run's tasks
 are the daemon's, and only the board's owner with no profile may unblock
 them. Run it where `mu serve` runs, with the same `MUSTER_SANDBOX_URL`,
 Vercel, GitHub App and model settings in your shell: it starts the worker
-itself. It stays until the sandbox's run ends, as `mu run --push` does. If
-the worker can't start, the task is answered and ready, and the script
-prints the `mu run` line to retry with.
+itself, and stays until the worker ends, since a `--push` run's change is
+pushed from here. If the worker ends badly, the script prints the `mu run`
+line that runs what is left.
 
 ## When not to
 
 - For work that needs a back-and-forth: the steps are fixed, spec, work and
   review, and the review only comments. Nothing is sent back for a second
   round.
-- For a card whose text you wouldn't hand a stranger's agent. Anyone who can
-  label an issue in the team can start a run.
+- For a card whose text you wouldn't hand a stranger's agent: see below.
 - For a board other people's agents reach with tokens: the watchers run on
   the board's own machine, as its owner.
+
+## What a card can reach
+
+A card's text is written by whoever filed it, and it steers agents that can
+push. Know what a run reaches before you map a team:
+
+- **Who starts one.** Anyone who can label an issue in the mapped team, or
+  post or label a thread in `cards`, starts a run. The run is asked for by
+  `intake`, the watcher's profile, so the workflow's `who` doesn't check the
+  card's author.
+- **The repository.** Every step's sandbox may push: a step's change goes to
+  `mu/task-<id>` in the workflow's repository, with a pull request. The
+  workflow format sets `push` for all of a workflow's workers, not per step,
+  so the spec and review steps can push too, though they are told to change
+  nothing.
+- **CI.** That pull request runs your CI on the agent's code, with whatever
+  secrets CI gives a branch of the same repository. Keep secrets away from
+  pull-request jobs, or require approval before they run.
+- **Linear.** The run's summary quotes each task's result, which an agent
+  wrote from the card, as a comment on the issue, where its author reads it.
+- **What it can't reach.** The sandbox holds no board credential of yours, no
+  GitHub token and no model key; its token reaches the run's channel only.
+
+The spec task quotes the card as content, defused. Later steps read the spec
+task's result, which an agent wrote from the card; their text tells them it
+is a description of a change, not instructions, but nothing fences it the
+way the card's text is fenced.
 
 ## What goes wrong
 
@@ -172,6 +204,15 @@ prints the `mu run` line to retry with.
 - **A long card.** The spec task quotes the first 2,000 characters.
 - **Files on a card** don't reach the sandbox: the worker's token reaches
   the run's channel only.
+- **The review sees no checkout of the change.** Its sandbox clones the
+  default branch, and the pushed branch isn't there. The work step attaches
+  its diff to a reply on its task, and the review reads that; if the work
+  step didn't, the review says so and reviews nothing.
+- **A label write whose answer was lost.** Over HTTP, `start.sh`'s label is
+  keyed by the event that woke it, so the daemon's retry gets the same
+  answer and the card still starts. If new activity lands on the card before
+  that retry, the retry has another key and finds `started` set: start it
+  with `mu label <id> --unset started`.
 - **A usage limit.** The worker stops and the task fails; the summary says so.
 - **`answer.sh` says `isn't yours to change`.** It ran with a profile: unset
   `MUSTER_PROFILE`.
