@@ -311,6 +311,21 @@ describe('templates/loop', () => {
       expect(shots.attachments.map((file) => file.name)).toEqual(['real.png'])
     })
 
+    it("a task answered after the run's workers stopped gets a worker of its own once it is unblocked", async () => {
+      const { team, tick, run, spawned } = await worked()
+      // The review's agent asks a person, and the run's workers have long stopped when the answer comes.
+      const held = await team.as('agent-1').taskClaim({ id: run.review!.id })
+      await team.as('agent-1').taskBlock({ id: run.review!.id, token: held.token, kind: 'needs_input', reason: 'keep the old heading? -> I would' })
+      await tick()
+      expect(existsSync(spawned)).toBe(false)
+      await team.reply({ to: run.review!.id, text: 'Keep it.' })
+      await team.taskUnblock({ id: run.review!.id })
+      await tick()
+      const [line] = await spawnedArgs(spawned)
+      expect(line).toContain(`run --ready ${run.review!.channel} --loop`)
+      expect(line).toContain('--label workflow=card --label request=')
+    })
+
     it("an untrusted comment, or the daemon's own summary, starts no round", async () => {
       const { team, as, tick, complete, report, run, spawned } = await worked()
       await complete(run.review!.id, 'approve')

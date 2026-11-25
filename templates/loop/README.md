@@ -8,11 +8,15 @@ your approval, when a task blocks on a decision of yours, and when a round
 is done.
 
 It is a board module for muster's own daemon and a workflow file. The guide
-is [A feedback loop](../../packages/muster/docs/03-guides/20-a-feedback-loop.md).
+is [A feedback loop](../../packages/muster/docs/03-guides/20-a-feedback-loop.md),
+and [Running the feedback loop](../../packages/muster/docs/03-guides/21-running-the-loop.md)
+is the day-to-day: going live, approving, answering, and what to do when
+something stops. The `loop-card` skill (`mu skills install`) teaches an agent
+each step.
 
 | File | What it is |
 | --- | --- |
-| `board.ts` | Sync from Slack, Linear and GitHub, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `round`, `settled`, `needs-me` |
+| `board.ts` | Sync from Slack, Linear and GitHub, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `round`, `settled`, `resume`, `needs-me` |
 | `workflows.json` | `triage`, one step that turns a report into a card, and `card`, spec, work and review, with `--push` for the work step only |
 
 ```bash

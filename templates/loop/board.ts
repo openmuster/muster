@@ -204,13 +204,13 @@ const going = new Set<string>()
  * `--push` from workflows.json, taking only that run's tasks. They stop after ten idle minutes, so a round
  * that starts later has none: this starts one, in the background, and the watcher goes on.
  */
-function startWorker(run: { channel: string; request: number }, owner: string): void {
+function startWorker(run: { channel: string; request: number }, owner: string, name = 'card'): void {
   // One of the run's own workers may still be waiting for work: it takes the round, and a second would race it.
   if (going.has(run.channel) || spawnSync('pgrep', ['-f', `run --ready ${run.channel} --loop`], { stdio: 'ignore' }).status === 0) return
-  const workflow = loadWorkflows(workflowsPath()).find((each) => each.name === 'card')
-  if (!workflow) throw new Error('no card workflow in workflows.json')
+  const workflow = loadWorkflows(workflowsPath()).find((each) => each.name === name)
+  if (!workflow) throw new Error(`no ${name} workflow in workflows.json`)
   const k = workflow.workers
-  const args = ['run', '--ready', run.channel, '--loop', '--wait', '2m', ...(k.runner ? ['--runner', k.runner] : ['--cwd', k.cwd!]), '--agent', k.agent, '--as', `${k.as}-round`, ...(k.repo ? ['--repo', k.repo] : []), ...(k.push || workflow.steps.some((step) => step.push === true) ? ['--push'] : []), ...(k.timeout ? ['--timeout', k.timeout] : []), '--by', `${owner}+workflows`, '--label', 'workflow=card', '--label', `request=${run.request}`]
+  const args = ['run', '--ready', run.channel, '--loop', '--wait', '2m', ...(k.runner ? ['--runner', k.runner] : ['--cwd', k.cwd!]), '--agent', k.agent, '--as', `${k.as}-round`, ...(k.repo ? ['--repo', k.repo] : []), ...(k.push || workflow.steps.some((step) => step.push === true) ? ['--push'] : []), ...(k.timeout ? ['--timeout', k.timeout] : []), '--by', `${owner}+workflows`, '--label', `workflow=${name}`, '--label', `request=${run.request}`]
   going.add(run.channel)
   const child = spawn(process.env.LOOP_MU ?? 'mu', args, { stdio: 'ignore', detached: true, env: process.env })
   child.on('exit', () => going.delete(run.channel))
@@ -352,6 +352,25 @@ export const watch = {
       await shareScreenshots(team, card, run.work?.id, owner)
       notify(`card #${card.id}'s change is done for now: mu read ${card.id}`)
       await nextRound(team, card.id)
+    },
+  },
+
+  // A task of a run that waited for a person was answered and unblocked: a worker takes it, unless one of the run's is
+  // still going. The run's own stopped after ten idle minutes, so an answer that came later would otherwise wait.
+  resume: {
+    tail: { channel: 'cards/', types: ['task.ready'] },
+    as: 'intake',
+    run: async ({ event, board: team }) => {
+      if ((event.data as { from?: unknown }).from !== 'blocked') return
+      const task = event.task!
+      const run = /^(cards\/[a-z0-9][a-z0-9_.-]*)\/(triage|card)-(\d+)$/.exec(task.channel)
+      if (!run) return
+      // Only a run this module asked for: the request it names is checked against the board's own record.
+      const request = Number(run[3])
+      const owner = await ownerOf(team)
+      const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
+      if (asked?.seq !== request || asked.channel !== run[1] || (asked.data as { name?: unknown }).name !== run[2] || asked.by.principal !== owner || asked.by.profile !== 'intake') return
+      startWorker({ channel: task.channel, request }, owner, run[2])
     },
   },
 

@@ -113,3 +113,12 @@ the card says which comments it took.
 - **The triage agent fails** a report that isn't a change to make here, with
   why, in the triage run's summary on the card. The card stays held `triage`:
   cancel it, or reply and edit the report to try again.
+
+## Next
+
+- [Running the feedback loop](./21-running-the-loop.md): going live,
+  approving, answering a blocked task, another round, and what to do when
+  something stops.
+- The `loop-card` skill teaches an agent each step (triage, spec, work,
+  review): `mu skills install --to ~/.claude/skills` installs it with the
+  others.
