@@ -38,6 +38,11 @@ It also answers only requests that came for this machine's own name
 under a name of its own. Behind something that asks who is there, list the
 name it is reached by in `ALLOW_HOSTS`, comma-separated.
 
+The app also serves the board itself at `/api/board`
+(`app/api/board/[...path]/route.ts`, through `team.fetch`): what `mu serve`
+serves, for the same names, and every request needs a token from
+`mu token create`.
+
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass
 something on, list its name under `"env"` in the watcher.

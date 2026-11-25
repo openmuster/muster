@@ -19,6 +19,16 @@ versions are affected.
 - The board skill tells an agent to read a task's thread after claiming it,
   and to reply what is done and what is next before releasing it. Run
   `mu skills install` again to get it.
+- `team.fetch`: a board served from your own web app, as a web
+  `Request → Response` handler (`export const GET = team.fetch, POST =
+  team.fetch`). It answers what `mu serve` answers, from the same code: the
+  routes, the live feed, `health`, and webhooks for the handle's `sync`, with
+  every request held to a token signed with the key `mu serve` uses. It is
+  mounted at `/api/board` unless `board({ serve: { base } })` says otherwise,
+  and answers only for this machine and the names in `serve.hosts` (default
+  `MUSTER_ALLOW_HOSTS`). MCP, `tokenExchange` and requests to join stay with
+  `mu serve`. The factory template serves its board at `/api/board` this way.
+  See [Mounting it in a web app](./packages/muster/docs/04-reference/02-handle.md#mounting-it-in-a-web-app).
 - A card queue template, `templates/queue`. A Linear issue labelled `agent`,
   or a card posted with `--label tag.agent=agent --no-sync`, starts the
   `card` workflow once: a spec, the change as a pull request, and a review,

@@ -8,6 +8,8 @@ let handle: Board | null = null
 export function team(): Board {
   if (handle) return handle
   const url = process.env.MUSTER_URL
-  handle = url ? board({ backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) }) : board()
+  // `/api/board` answers for the names the page does (`proxy.ts`), and for no other.
+  const hosts = (process.env.ALLOW_HOSTS ?? '').split(',').map((name) => name.trim()).filter(Boolean)
+  handle = url ? board({ backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) }) : board({ serve: { hosts } })
   return handle
 }
