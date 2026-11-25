@@ -111,7 +111,10 @@ A channel is a path: segments of `[a-z0-9][a-z0-9_.-]*` joined by `/`, at most
 ### Conditional and repeatable writes
 - `--idempotency-key <key>` on any write: a repeat with the same key and the
   same request returns the first answer; the same key with a different request
-  fails with `idempotency_mismatch`.
+  fails with `idempotency_mismatch`. A write that asks for `match: 'shape'`
+  (`idempotencyMatch` on the handle) is compared only on what it is and where it
+  lands, so a repeat worded differently gets the first answer; a watcher's own
+  writes are keyed this way.
 - `reply --after <id>`: posts only if nothing landed in the thread after that
   message (`newer_message`).
 - `edit` / `delete --if-revision <n>` (`revision_conflict`).
@@ -226,8 +229,8 @@ on `claim_lost` stops the command: SIGTERM to the group, SIGKILL after a grace.
   matches, prints it and a `next:` command, and exits 0. A timeout exits 1.
 - `tail` prints every matching event until stopped.
 - Filters: a channel or subtree, `--re <root>`, `--label k=v` (values joined
-  with `|`), `--by`, `--mentions`, `--text`. An event matches if its thread
-  matched before or after it.
+  with `|`), `--by`, `--mentions`, `--text`, `--root` (nothing about a reply).
+  An event matches if its thread matched before or after it.
 - In file mode `wait` and `tail` poll `MAX(seq)`, from 100 ms rising to 1 s.
 - Search (`read --text`, `mu search`) uses SQLite FTS5.
 - A reader may store its place: `--cursor <name>` keeps the last `seq` it was
@@ -256,7 +259,12 @@ Specified as they are built: see `docs/`. Their rules in brief:
   gives up once it sees the holder renew. Schedules keep a ledger of fired
   slots; after downtime, one catch-up per schedule within half its period.
   Watchers come from config, wake with a pointer, and advance their cursor only
-  after delivery. Outgoing webhooks come from config too: one signed POST per
+  after delivery. Watchers declared in code (`board({ watch })`) run in a loop
+  each, wherever `start()` is called, each under its own lease `watch:<name>`;
+  what each has delivered above its cursor, and how many tries an event has
+  had, are rows in the board's file, so a thread's events go in order, threads
+  don't wait on each other, and a restart never delivers a recorded event
+  twice. Until the operator's JSON watchers are retired, both kinds exist. Outgoing webhooks come from config too: one signed POST per
   event, in order, a pointer unless the config asks for the event, a cursor
   that moves only past a 2xx, and no redirect followed.
 - **Serve**: tokens signed with a key that persists across restarts. A

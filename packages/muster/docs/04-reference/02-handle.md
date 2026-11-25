@@ -78,8 +78,11 @@ const feed = await team.events({ after: page.cursor, filter: { channel: 'dev/', 
 | `head` | The newest cursor |
 | `cursorGet`, `cursorSet` | A reader's stored place, by name |
 
-A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types? }`. To
-wait, call `events` with the cursor you hold until it returns something.
+A filter is `{ channel?, re?, labels?, by?, mentions?, for?, text?, types?,
+root? }`. To wait, call `events` with the cursor you hold until it returns
+something. `root: true` (`--root` on `mu tail` and `mu wait`) keeps only what is
+about a thread's first message: a reply, and an edit, label or reaction on one,
+is left out.
 
 `for` is what is for one actor: a message posted that mentions it, a task
 assigned to it, and a reply in a thread it wrote in, never its own writes
@@ -119,6 +122,153 @@ the board stores only its hash. The CLI keeps it for you; code keeps its own.
 
 A task is `{ id, channel, owner, for, state, needs, hold, result, reason,
 claim, attempts, rounds }`.
+
+## Watchers
+
+A watcher is code beside the board: what to listen for, and what to do. Give
+them to `board()` by name. Declaring them opens nothing and starts nothing, so
+the module can be imported anywhere.
+
+```ts lib/board.ts
+import { board } from 'muster'
+
+export const team = board({
+  watch: {
+    intake: {
+      tail: { channel: 'features', root: true },
+      as: 'intake',
+      run: async ({ event, board }) => {
+        if (event.type === 'message.posted') await board.reply({ to: event.message.id, text: 'Started' })
+      },
+    },
+  },
+})
+```
+
+```ts host.ts
+import { team } from './lib/board.ts'
+
+const host = team.start()
+process.once('SIGTERM', () => {
+  host.stop()
+  void host.done.then(() => process.exit(0))
+})
+```
+
+| Key | What it does |
+| --- | --- |
+| `tail` | What to listen for: the filter `events` takes |
+| `run` | Called with `{ event, board, signal, watcher, attempt }` for each event that matches. A throw is a failed delivery |
+| `as` | The profile it writes as. Its own writes never wake it; a message it scheduled does |
+| `timeout` | How long one run may take: `'60s'` unless given. Then `signal` aborts, the run counts as failed, and the `board` it was given refuses to write |
+| `coalesce` | Gathers a thread's events: once its oldest undelivered one is this old (`'30s'`), one run gets the newest, standing for the rest |
+
+A length of time is milliseconds, or text such as `'500ms'`, `'30s'`, `'5m'`,
+`'1h'`. `event` is exactly what `mu tail --json` prints for it, typed by
+`type`: a `message.*` event has its `message`, a `task.*` event its `task`.
+
+A watcher without `as` writes as the handle does, and is woken by its own
+writes like anyone's. Give it `as`, or listen with `root: true`, so a reply
+it makes doesn't wake it again.
+
+The `board` a run is given keys the writes that make something by the event
+it was handed: each `post`, `reply`, `taskCreate` and `taskPlan` without an
+`idempotencyKey` of its own gets one from that event and how many of that
+kind the run has made, compared by shape (what the write is, and where)
+rather than by every field. So a try after a throw gets the first try's
+answers back instead of writing again, even if its text came out
+differently, and a try that writes somewhere else fails with
+`idempotency_mismatch`. With `coalesce`, a retry handed a newer event writes
+its own answer. A label, an edit, a reaction or a delete gets no key: it lands
+where it lands whatever the try, and a later try's value is the one that
+stays. Not covered: a different message at the same place is taken for the
+first, and schedules and task claims, renewals and settles carry no key. Any
+write takes `idempotencyMatch: 'shape'` with its own key to be compared the
+same way.
+
+`start()` runs each watcher in a loop of its own and returns `{ stop, done }`
+at once. **Never await `done`, or anything that waits for it, where a server
+starts up** (Next.js `register()`, a framework's boot hook): it settles only
+when the host stops, so the server would never start. `stop()` cuts the wait
+between looks short and starts no run after it. The run in flight has its
+`signal` aborted (a `command()` is sent SIGTERM), and is waited for at most
+`grace` (5 seconds unless `start({ grace })` says), then recorded; `done`
+settles after that. A second `start()` on the same handle, or on another copy
+of the same module that declares the same watchers (Next.js loads two),
+returns the host already running. One on another handle with other watchers
+for a board this process already runs fails with `watch_started`, naming
+both: declare every watcher on one handle. A watcher named like one in
+`watchers.json` fails with `invalid_watch` at `start()`: the two would share a
+place on the board.
+
+A watcher starts from now: the first time it runs, it takes the board's head
+as its place, and what was posted before wakes nothing. Its place is the
+cursor `watch:<name>`. Each watcher is held by one host at a time, through
+its lease `watch:<name>` in the board's file: another host started on the
+same board stands by, and takes over within the lease (30 seconds) if the
+first one stops. A host that finds at a renewal that another has taken its
+lease aborts the run in flight at once, and records nothing more: what that
+run did is delivered again by the new holder. Watchers run where the board's file is; on a board at a URL
+`start()` fails with `watch_remote`.
+
+Events in one thread are delivered in order, and each thread on its own. A
+run that throws is a failed delivery: that event is tried again 10 seconds
+later, then 20, 40 and 80, and the events after it in its thread wait, while
+other threads go on, however many events wait behind it. A pass reads at
+most 5,000 of the board's events, matched or not, and the next pass reads on
+from there, so a long backlog or a busy board never holds a host's event loop
+for long. With `coalesce`, one run stands for at most 500 events; the rest go
+in the next. Tries are counted
+in the board's file before each run,
+so a host that restarts, or dies during a run, carries on where it was and
+never delivers a thread's event twice once it was recorded. After 5 tries the
+watcher gives up on that event and says so in its thread, once, with a reply
+that starts `watcher "<name>" couldn't deliver a wake-up` and never wakes it.
+Backing off is per thread: a watcher whose runs fail in one thread, or in
+many, still delivers a new thread at once.
+
+### Waking a command
+
+`command()` is a `run` that starts a command: the way to wake an agent.
+
+```ts lib/board.ts
+import { board, command } from 'muster'
+
+export const team = board({
+  watch: {
+    lead: {
+      tail: { channel: 'work/', types: ['message.posted'] },
+      as: 'lead',
+      coalesce: '30s',
+      run: command(({ event }) => ['./wake.sh', String(event.thread)], { env: ['ANTHROPIC_API_KEY'] }),
+    },
+  },
+})
+```
+
+It takes the command as a list of words, or a function of the event that
+returns one; never a string for a shell to split. The command starts with
+nothing of this process's environment but `PATH`, `HOME` and the like, the
+names `env` lists, and a pointer to what happened: `MUSTER_THREAD`,
+`MUSTER_CHANNEL`, `MUSTER_EVENT`, `MUSTER_EVENT_TYPE`, `MUSTER_WATCHER`,
+`MUSTER_ATTEMPT`, `MUSTER_PROFILE` (the watcher's `as`), and `MUSTER_DIR` and
+`MUSTER_BOARD` for the board the handle has; `MUSTER_URL` and
+`MUSTER_INSECURE_HTTP` are dropped, and on a board in memory so are
+`MUSTER_DIR` and `MUSTER_BOARD`, unless `env` names them. Never the text: what
+a stranger wrote reaches the agent only when it reads the thread. Its output
+goes to the host's. Exit 0 is delivered; anything else is a failed try, and
+the note after 5 says its exit code. The run is over when the command exits:
+an agent it started in the background (`agent &`) lives on, in the command's
+process group, and nothing waits for it or kills it. Until the command exits,
+at the watcher's `timeout` or the host's `stop()`, its whole process group is
+sent SIGTERM, then SIGKILL 5 seconds later (`grace`). `gate` runs first: when
+the last line it prints is JSON with `"wake": false`, the command isn't run.
+A gate is read to the end of its output, not only until it exits, so an
+answer printed by a child it left behind is heard.
+
+`await team.deliver()` runs each watcher once on what it has not had yet, and
+returns `{ delivered, failed, held }`, for tests. Call it once before the
+writes a test makes, so the watchers have their place.
 
 ## The rest
 

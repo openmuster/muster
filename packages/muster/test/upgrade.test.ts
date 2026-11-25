@@ -1,5 +1,6 @@
 import { cpSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { board, verify } from '../src/index.ts'
@@ -49,6 +50,24 @@ describe('a board made by an older release', () => {
     const { team } = opened()
     expect(await team.backend.leases!.take({ name: 'tick', holder: 'a', ttl: 30_000 })).toMatchObject({ held: true, epoch: 1 })
     expect(await team.backend.leases!.holder('tick')).toMatchObject({ holder: 'a', epoch: 1 })
+  })
+
+  it('a board made at store version 8 (with leases, before watchers in code) gets their table, and they deliver', async () => {
+    const dir = tempDir()
+    const made = board({ dir, principal: 'local:user:ada' })
+    await made.post({ channel: 'general', text: 'made before' })
+    made.close()
+    // Back to what the release with leases wrote: the same tables, without this one.
+    const raw = new DatabaseSync(join(dir, 'main.db'))
+    raw.exec('drop table deliveries; pragma user_version = 8')
+    raw.close()
+    const seen: number[] = []
+    const team = board({ dir, principal: 'local:user:ada', watch: { lead: { tail: { channel: 'work/' }, run: ({ event }) => void seen.push(event.seq) } } })
+    await team.deliver()
+    const posted = await team.post({ channel: 'work/api', text: 'after the upgrade' })
+    expect(await team.deliver()).toEqual({ delivered: 1, failed: 0, held: [] })
+    expect(seen).toEqual([posted.id])
+    team.close()
   })
 
   it('a token that release minted still verifies', () => {

@@ -1,4 +1,7 @@
 export { board, type Board, type BoardOptions } from './handle.ts'
+export type { Duration, Watch, WatchContext, WatchEvent } from './watch/watch.ts'
+export { command, type Argv, type CommandOptions } from './watch/command.ts'
+export type { Host, StartOptions, Delivered } from './watch/host.ts'
 export { conformance, type Check } from './conformance.ts'
 export { file, boardPath, type FileOptions } from './backend/file.ts'
 export type { Backend } from './backend/types.ts'

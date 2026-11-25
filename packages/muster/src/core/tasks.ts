@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { Failure, misuse } from '../failure.ts'
 import { actorId, channelScope, inScope, labelFilter, matchesLabels, profileName, type By, type Caller, type Message } from '../model.ts'
 import { append, type Draft } from '../store/log.ts'
-import { allowed, authorize, byOf, findMessage, limitOf, messageFor, once, type Context } from './context.ts'
+import { allowed, authorize, byOf, findMessage, fingerprintBy, limitOf, messageFor, once, type Context, type IdempotencyMatch } from './context.ts'
 import { hooks, post, type PostRequest } from './messages.ts'
 
 export const LEASE_MIN_S = 30
@@ -321,7 +321,7 @@ export function budgets(ctx: Context, caller: Caller): { budgets: { channel: str
   return { budgets: rows.filter((row) => allowed(caller, row.channel, 'read')).map((row) => ({ ...row, spent: spent(ctx, row.channel) })) }
 }
 
-export type CreateRequest = (PostRequest | { thread: number; idempotencyKey?: string }) & {
+export type CreateRequest = (PostRequest | { thread: number; idempotencyKey?: string; idempotencyMatch?: IdempotencyMatch }) & {
   needs?: number[]
   for?: string
   claim?: { lease?: number; pid?: number; pidStart?: string; token?: string }
@@ -378,7 +378,7 @@ export function create(ctx: Context, caller: Caller, request: CreateRequest): { 
       ctx,
       caller,
       request.idempotencyKey,
-      { op: 'tasks.create', thread: request.thread, needs: request.needs ?? [], for: request.for ?? null },
+      fingerprintBy(request, { op: 'tasks.create', thread: request.thread, needs: request.needs ?? [], for: request.for ?? null }, { op: 'tasks.create', thread: request.thread }),
       (emit) => {
         const root = messageFor(ctx, caller, request.thread)
         if (root.re !== null) throw new Failure('not_a_root', `${request.thread} is a reply; a task is a thread's first message.`, { next: [`mu tasks create ${root.thread}`] })
@@ -390,12 +390,12 @@ export function create(ctx: Context, caller: Caller, request: CreateRequest): { 
       (id: number) => ({ task: view(ctx, id), message: findMessage(ctx.db, id)! }),
     )
   }
-  const { needs, for: assignee, claim, idempotencyKey, ...message } = request
+  const { needs, for: assignee, claim, idempotencyKey, idempotencyMatch, ...message } = request
   return once(
     ctx,
     caller,
     idempotencyKey,
-    { op: 'tasks.create', message, needs: needs ?? [], for: assignee ?? null },
+    fingerprintBy({ idempotencyMatch }, { op: 'tasks.create', message, needs: needs ?? [], for: assignee ?? null }, { op: 'tasks.create', channel: message.channel }),
     (emit) => {
       // The transaction is already open: post() joins it through the same write.
       const root = postInside(ctx, caller, message, emit)
@@ -472,7 +472,7 @@ function planNeeds(tasks: readonly PlanTask[]): ({ key: string } | { id: number 
 }
 
 /** Queues a whole plan in one write: each task after the ones it waits for, by its key. */
-export function plan(ctx: Context, caller: Caller, request: { channel: string; tasks: PlanTask[]; idempotencyKey?: string }): { tasks: (Task & { key: string })[] } {
+export function plan(ctx: Context, caller: Caller, request: { channel: string; tasks: PlanTask[]; idempotencyKey?: string; idempotencyMatch?: IdempotencyMatch }): { tasks: (Task & { key: string })[] } {
   if (!Array.isArray(request.tasks) || request.tasks.length === 0) throw misuse('empty_plan', 'A plan is a JSON array of tasks, with at least one.')
   if (request.tasks.length > PLAN_MAX) throw new Failure('plan_too_large', `A plan holds at most ${PLAN_MAX} tasks.`, { hint: 'Queue it in several writes.' })
   const needed = planNeeds(request.tasks)
@@ -480,7 +480,7 @@ export function plan(ctx: Context, caller: Caller, request: { channel: string; t
     ctx,
     caller,
     request.idempotencyKey,
-    { op: 'tasks.plan', channel: request.channel, tasks: request.tasks },
+    fingerprintBy(request, { op: 'tasks.plan', channel: request.channel, tasks: request.tasks }, { op: 'tasks.plan', channel: request.channel }),
     (emit) => {
       const made = new Map<string, number>()
       request.tasks.forEach((task, at) => {

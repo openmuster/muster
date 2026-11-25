@@ -152,6 +152,31 @@ describe('reading', () => {
     expect(await types({ types: ['reaction.'] })).toEqual(['reaction.added'])
   })
 
+  it('the feed with root keeps what is about a thread\'s first message and leaves out replies and what is done to them', async () => {
+    const { team } = memoryBoard()
+    const root = await team.post({ channel: 'dev', text: 'ship it?' })
+    const reply = await team.reply({ to: root.id, text: 'tests pass' })
+    await team.react({ id: reply.id, emoji: 'eyes' })
+    await team.label({ id: reply.id, set: { seen: 'yes' } })
+    await team.edit({ id: reply.id, text: 'tests pass, all of them' })
+    await team.react({ id: root.id, emoji: 'rocket' })
+    await team.label({ id: root.id, set: { step: 'review' } })
+    await team.edit({ id: root.id, text: 'ship it now?' })
+    await team.taskCreate({ thread: root.id })
+    const other = await team.post({ channel: 'dev', text: 'another' })
+    const all = await team.events({ after: 0, filter: { root: true } })
+    expect(all.events.map((event) => [event.type, event.thread])).toEqual([
+      ['message.posted', root.id],
+      ['reaction.added', root.id],
+      ['labels.changed', root.id],
+      ['message.edited', root.id],
+      ['task.created', root.id],
+      ['message.posted', other.id],
+    ])
+    // Without it, the replies are there.
+    expect((await team.events({ after: 0, filter: { re: root.id } })).events).toHaveLength(9)
+  })
+
   it('a label filter matches an event if its thread matched before or after it', async () => {
     const { team } = memoryBoard()
     const root = await team.post({ channel: 'dev', text: 'x', labels: { step: 'fix' } })

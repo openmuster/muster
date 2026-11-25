@@ -96,6 +96,18 @@ export function messageFor(ctx: Context, caller: Caller, id: number): Message {
 export const fingerprintOf = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 /**
+ * How a repeat with the same idempotency key is compared with the first. `exact` (the default): the
+ * whole request, so a key used for something else is refused. `shape`: only what the write is and
+ * where it lands (a reply and its thread, a label and its message), so a retry whose text came out
+ * differently gets the first answer, and one that writes somewhere else is still refused. A watcher's
+ * own writes are keyed this way.
+ */
+export type IdempotencyMatch = 'exact' | 'shape'
+
+/** What a write's key is compared on: the whole request, or its shape when it asked for that. */
+export const fingerprintBy = (request: { idempotencyMatch?: IdempotencyMatch }, whole: unknown, shape: Record<string, unknown>): unknown => (request.idempotencyMatch === 'shape' ? { shape } : whole)
+
+/**
  * Runs a write once per idempotency key. A repeat with the same request gets the first answer, read
  * again; the same key on a different request is refused.
  */

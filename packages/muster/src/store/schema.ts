@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 8
+export const STORE_VERSION = 9
 
 const DDL = `
 create table if not exists events (
@@ -196,6 +196,19 @@ create table if not exists leases (
   holder text,
   epoch integer not null,
   expires integer not null
+) without rowid;
+
+-- Where each watcher declared in code stands with the events above its cursor: delivered (done), or
+-- tried so many times with the next try due at retry_at (ms). Bookkeeping like cursors: not in the
+-- log, a fold doesn't rebuild it, and rows are deleted once the watcher's cursor passes them.
+create table if not exists deliveries (
+  watcher text not null,
+  seq integer not null,
+  lane text not null,
+  attempts integer not null,
+  retry_at integer not null,
+  done integer not null,
+  primary key (watcher, seq)
 ) without rowid;
 
 -- The tokens this board has made: enough to list one and to stop it, never the token itself.

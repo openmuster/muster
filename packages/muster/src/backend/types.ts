@@ -1,6 +1,7 @@
 import type * as blocks from '../core/blocks.ts'
 import type { MintRequest, Registry, TokenRecord } from '../serve/tokens.ts'
 import type { JoinRecord, Joins } from '../serve/joins.ts'
+import type * as deliveries from '../core/deliveries.ts'
 import type * as files from '../core/files.ts'
 import type * as leases from '../core/leases.ts'
 import type * as messages from '../core/messages.ts'
@@ -42,6 +43,16 @@ export type Backend = {
     renew(request: { name: string; holder: string; epoch: number; ttl: number }): Promise<{ held: boolean; expires: number }>
     release(request: { name: string; holder: string; epoch: number }): Promise<void>
     holder(name: string): Promise<ReturnType<typeof leases.holder>>
+  }
+  /**
+   * Where each watcher declared in code stands: what it delivered above its cursor and what it is
+   * trying. Only a backend that has the board's file: watchers run where it is.
+   */
+  deliveries?: {
+    read(request: { watcher: string; after: number }): Promise<ReturnType<typeof deliveries.read>>
+    begin(request: Parameters<typeof deliveries.begin>[1]): Promise<ReturnType<typeof deliveries.begin>>
+    finish(request: Parameters<typeof deliveries.finish>[1]): Promise<ReturnType<typeof deliveries.finish>>
+    advance(caller: Caller, request: Parameters<typeof deliveries.advance>[2]): Promise<ReturnType<typeof deliveries.advance>>
   }
   /** The board's own requests to join, where it keeps them: what `mu serve` answers them from. */
   joinStore?: () => Joins

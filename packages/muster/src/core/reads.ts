@@ -22,6 +22,8 @@ export type Filter = {
    * value with `:` or `+` is a whole actor ID, with no `+profile` the principal alone.
    */
   for?: string
+  /** Only what is about a thread's first message: a reply, and anything done to one, is left out. */
+  root?: boolean
 }
 
 export const head = (ctx: Context): number => (ctx.db.raw.prepare('select coalesce(max(seq), 0) as s from events').get() as { s: number }).s
@@ -116,6 +118,7 @@ type Compiled = {
   text: string | null
   types: string[] | null
   for: { id: string; principal: string; profile: string | null } | null
+  root: boolean
 }
 
 /** Who a `for` filter is for. A bare name is one of the caller's profiles; anything else is a whole actor ID, with or without a profile. */
@@ -137,6 +140,7 @@ function compile(filter: Filter, caller: Caller): Compiled {
     text: filter.text?.toLowerCase() ?? null,
     types: filter.types ?? null,
     for: filter.for === undefined ? null : forTarget(filter.for, caller),
+    root: filter.root === true,
   }
 }
 
@@ -162,12 +166,21 @@ function names(reference: string, event: BoardEvent): boolean {
   return reference === (event.by.profile ?? event.by.principal.slice(event.by.principal.lastIndexOf(':') + 1))
 }
 
+/** Whether an event is about a reply: posting one, or editing, deleting, labelling or reacting to one. */
+function aboutReply(event: BoardEvent): boolean {
+  const data = event.data as Record<string, unknown>
+  if (event.type === 'message.posted') return data.re !== null && data.re !== undefined
+  const message = event.type.startsWith('message.') || event.type.startsWith('reaction.') || event.type === 'labels.changed'
+  return message && typeof data.id === 'number' && data.id !== event.thread
+}
+
 function matches(ctx: Context, caller: Caller, event: BoardEvent, filter: Compiled, roots: Map<number, Message | null>): boolean {
   if (event.type === 'idem.recorded') return false
   if (event.channel === null) return false
   if (!allowed(caller, event.channel, 'read')) return false
   if (filter.scope && !inScope(event.channel, filter.scope)) return false
   if (filter.re !== null && event.thread !== filter.re) return false
+  if (filter.root && aboutReply(event)) return false
   if (filter.types && !filter.types.some((type) => (type.endsWith('.') ? event.type.startsWith(type) : event.type === type))) return false
   if (filter.by !== null && !names(filter.by, event)) return false
   const data = event.data as Record<string, any>
@@ -199,8 +212,12 @@ export type FeedEvent = BoardEvent & {
   for?: 'mention' | 'assigned' | 'reply'
 }
 
-/** What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on from. */
-export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number }): { events: FeedEvent[]; cursor: number } {
+/**
+ * What `tail` and `wait` read: the events after a cursor that match, oldest first, and where to read on
+ * from. `through` reads no further than that seq, so one call looks at a bounded stretch of the log
+ * however few events match.
+ */
+export function events(ctx: Context, caller: Caller, request: { after?: number; filter?: Filter; limit?: number; through?: number }): { events: FeedEvent[]; cursor: number } {
   const filter = compile(request.filter ?? {}, caller)
   if (filter.re !== null) messageFor(ctx, caller, filter.re)
   const limit = limitOf(request.limit, 200, 1000)
@@ -216,7 +233,7 @@ export function events(ctx: Context, caller: Caller, request: { after?: number; 
   let cursor = after
   // Read in pages so a quiet filter on a busy board still moves its cursor forward.
   for (;;) {
-    const rows = ctx.db.raw.prepare('select * from events where seq > ? order by seq limit 500').all(cursor) as Parameters<typeof toEvent>[0][]
+    const rows = ctx.db.raw.prepare('select * from events where seq > ? and seq <= ? order by seq limit 500').all(cursor, request.through ?? Number.MAX_SAFE_INTEGER) as Parameters<typeof toEvent>[0][]
     if (rows.length === 0) break
     for (const row of rows) {
       // What a reader sees of the event is also what a filter is matched against: a filter on text can't
@@ -325,7 +342,7 @@ export function cursorSet(ctx: Context, caller: Caller, name: string, seq: numbe
 /** The names the daemon keeps its own places under: `watch:<watcher>`, `hook:<webhook>`, `sync:<platform>`, `workflow:requests`. */
 const RESERVED_CURSOR = /^(watch|hook|sync|workflow):/
 
-const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
+export const cursorOwner = (caller: Caller) => `${caller.principal}+${caller.profile === null ? '' : profileName(caller.profile)}`
 
 export function search(ctx: Context, caller: Caller, request: { text: string; channel?: string; limit?: number }): { messages: Message[] } {
   if (request.text.trim().length === 0) throw misuse('empty_text', 'Say what to search for.')
