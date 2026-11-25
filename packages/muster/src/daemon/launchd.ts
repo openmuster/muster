@@ -12,7 +12,7 @@ const xml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt
  * The LaunchAgent that keeps a board's daemon running. It restarts after a crash but not after a clean
  * exit, so a daemon that stops on a config error stays stopped instead of respawning forever.
  */
-export function plist(options: { board: string; program: string[]; dir?: string; log: string; env?: Record<string, string> }): string {
+export function plist(options: { board: string; program: string[]; dir?: string; log: string; env?: Record<string, string>; cwd?: string }): string {
   const env = { ...(options.dir ? { MUSTER_DIR: options.dir } : {}), ...options.env }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -28,7 +28,7 @@ ${options.program.map((part) => `    <string>${xml(part)}</string>`).join('\n')}
   <dict>
 ${Object.entries(env).map(([key, value]) => `    <key>${xml(key)}</key>\n    <string>${xml(value)}</string>`).join('\n')}
   </dict>
-  <key>RunAtLoad</key>
+${options.cwd ? `  <key>WorkingDirectory</key>\n  <string>${xml(options.cwd)}</string>\n` : ''}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <dict>
@@ -52,7 +52,7 @@ ${Object.entries(env).map(([key, value]) => `    <key>${xml(key)}</key>\n    <st
 
 const launchctl = (args: string[]) => execFileSync(process.env.MUSTER_LAUNCHCTL ?? 'launchctl', args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
 
-export function install(options: { board: string; program: string[]; dir?: string; log: string; home?: string; uid?: number; env?: Record<string, string> }): string {
+export function install(options: { board: string; program: string[]; dir?: string; log: string; home?: string; uid?: number; env?: Record<string, string>; cwd?: string }): string {
   const path = plistPath(options.board, options.home)
   mkdirSync(dirname(path), { recursive: true })
   mkdirSync(dirname(options.log), { recursive: true, mode: 0o700 })

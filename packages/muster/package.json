@@ -15,6 +15,7 @@
     "README.md",
     "LICENSE"
   ],
+  "musterModule": 1,
   "bin": {
     "muster": "./dist/cli.js",
     "mu": "./dist/cli.js"

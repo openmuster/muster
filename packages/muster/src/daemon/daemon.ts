@@ -52,7 +52,7 @@ export function loadWatchers(path = watchersPath()): Watcher[] {
  * workflows. `mu daemon check` takes a watcher or a hook by name, so one name can't be both, and a
  * workflow keeps its name to itself too.
  */
-export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): { watchers: Watcher[]; hooks: Hook[]; workflows: Workflow[]; arm: () => ArmedHook[] } {
+export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env, code?: InCode): { watchers: Watcher[]; hooks: Hook[]; workflows: Workflow[]; arm: () => ArmedHook[] } {
   const watchers = loadWatchers()
   const hooks = loadHooks()
   const both = hooks.find((hook) => watchers.some((watcher) => watcher.name === hook.name))
@@ -62,7 +62,34 @@ export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env): { watche
     if (watchers.some((watcher) => watcher.name === workflow.name)) throw new Failure('invalid_config', `A workflow in ${workflowsPath()} and a watcher in ${watchersPath()} are both named "${workflow.name}".`)
     if (hooks.some((hook) => hook.name === workflow.name)) throw new Failure('invalid_config', `A workflow in ${workflowsPath()} and a hook in ${hooksPath()} are both named "${workflow.name}".`)
   }
+  if (code) {
+    const clash = clashWithCode(code, { watchers, hooks, workflows })
+    if (clash) throw clash
+  }
   return { watchers, hooks, workflows, arm: () => armHooks(hooks, env) }
+}
+
+/** The watchers a board module declares: where it is, and their names. */
+export type InCode = { path: string; names: readonly string[] }
+
+/**
+ * A module's watcher named like a watcher, a hook or a workflow in the config files. A watcher's name is
+ * its cursor and its lease, and `mu daemon check` takes any of them by name: one name is one thing.
+ */
+export function clashWithCode(code: InCode, config: { watchers?: readonly { name: string }[]; hooks?: readonly { name: string }[]; workflows?: readonly { name: string }[] }): Failure | null {
+  const kinds = [
+    ['watcher', watchersPath(), config.watchers ?? []],
+    ['hook', hooksPath(), config.hooks ?? []],
+    ['workflow', workflowsPath(), config.workflows ?? []],
+  ] as const
+  for (const name of code.names) {
+    for (const [kind, path, list] of kinds) {
+      if (list.some((entry) => entry.name === name)) {
+        return new Failure('invalid_config', `A watcher in ${code.path} and a ${kind} in ${path} are both named "${name}".`, { hint: `Rename one: a name is one watcher, hook or workflow, whichever file it is in.` })
+      }
+    }
+  }
+  return null
 }
 
 const WATCHER_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_URL', 'MUSTER_INSECURE_HTTP']

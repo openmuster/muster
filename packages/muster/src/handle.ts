@@ -4,6 +4,21 @@ import type { Caller } from './model.ts'
 import { mount, type MountOptions } from './serve/fetch.ts'
 import { deliver, start, type Delivered, type Host, type StartOptions, type WatchState } from './watch/host.ts'
 import { checkWatchers, type Watch } from './watch/watch.ts'
+import type { Filter } from './core/reads.ts'
+import { VERSION } from './version.ts'
+
+/**
+ * This copy of muster, on every handle it makes under `Symbol.for('muster.copy')`. A process should hold
+ * one copy: a board from another throws another `Failure` class, and `instanceof` checks (a 404 for
+ * `not_found`) stop holding. `mu` refuses a board module whose board carries another.
+ */
+/** The handle `board()` returned, from any handle made from it with `as()`: what `start()` runs on. For `mu`, not public. */
+export const ROOT = Symbol.for('muster.root')
+
+export const COPY: { readonly version: string; readonly url: string } = Object.freeze({ version: VERSION, url: import.meta.url })
+
+/** A watcher a handle declares, as anyone may read it: its name, what it listens for, and the profile it writes as. */
+export type DeclaredWatcher = { readonly name: string; readonly tail: Filter; readonly as: string | null }
 
 export type BoardOptions = FileOptions & {
   /** Where the board lives. Default: `file()` with the options beside it. */
@@ -25,6 +40,8 @@ type Methods = Omit<Backend, 'kind' | 'where' | 'self' | 'close'>
 /** A board, as one caller: every read and write the CLI, a UI, or your code makes. */
 export type Board = { [K in keyof Methods]: Bound<Methods[K]> } & {
   backend: Backend
+  /** The watchers this handle declares, in the order given. Declared, not running: `start()` runs them. */
+  readonly watchers: readonly DeclaredWatcher[]
   /** The same board, writing as one of your profiles. */
   as(profile: string | null): Board
   whoami(): Promise<{ principal: string; profile: string | null; mode: 'file' | 'serve'; where: string }>
@@ -55,6 +72,7 @@ export function board(options: BoardOptions = {}): Board {
   const watchers = checkWatchers(watch)
   // Where each watcher's reading has got to, shared by start() and deliver() on this handle.
   const states = new Map<string, WatchState>()
+  const declared: readonly DeclaredWatcher[] = Object.freeze(watchers.map((watcher) => Object.freeze({ name: watcher.name, tail: structuredClone(watcher.tail), as: watcher.as ?? null })))
   const backend = given ?? file(fileOptions)
   // Opens nothing until its first request.
   const served = mount(backend, { ...serve, ...(fileOptions.now ? { now: fileOptions.now } : {}) })
@@ -64,6 +82,7 @@ export function board(options: BoardOptions = {}): Board {
     const who = () => (caller ??= backend.self(as))
     const handle = {
       backend,
+      watchers: declared,
       as: (next: string | null) => make(next),
       async whoami() {
         const me = await who()
@@ -73,7 +92,9 @@ export function board(options: BoardOptions = {}): Board {
       deliver: () => deliver(root, watchers, states),
       fetch: served,
       close: () => backend.close(),
-    } as Record<string, unknown>
+      [Symbol.for('muster.copy')]: COPY,
+      [ROOT]: () => root,
+    } as Record<string | symbol, unknown>
     for (const name of METHODS) {
       handle[name] = async (...args: unknown[]) => (backend[name] as (caller: Caller, ...rest: unknown[]) => unknown)(await who(), ...args)
     }

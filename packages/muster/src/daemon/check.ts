@@ -1,6 +1,9 @@
 import { Failure } from '../failure.ts'
 import { labelFilter } from '../model.ts'
-import type { Watcher } from './watchers.ts'
+import type { Filter } from '../core/reads.ts'
+
+/** A watcher as a check needs it, from `watchers.json` or declared in a board module: its name, filter and profile. */
+export type Checkable = { name: string; tail: Filter; as?: string | null }
 
 /** What `mu daemon check` writes so a watcher's filter matches it: a new thread, or a reply in the one it watches. */
 export type CheckWrite =
@@ -10,7 +13,7 @@ export type CheckWrite =
 /** How the daemon marks a wake it gave up on, so a check doesn't take it for an answer. */
 export const GAVE_UP = /^watcher ".*" couldn't deliver a wake-up/
 
-const notCheckable = (watcher: Watcher, why: string) =>
+const notCheckable = (watcher: Checkable, why: string) =>
   new Failure('watcher_not_checkable', `Watcher "${watcher.name}" can't be checked with a message: ${why}`, { hint: 'Check it by hand: write what it listens for, and watch the thread.' })
 
 const inScope = (channel: string, scope: string) => (scope.endsWith('/') ? channel.startsWith(scope) : channel === scope)
@@ -19,7 +22,7 @@ const inScope = (channel: string, scope: string) => (scope.endsWith('/') ? chann
  * Works out a write the watcher's own filter would match, or says why there is none. It is built from
  * the filter, so a check exercises the same path a real wake takes: the filter, the gate, the command.
  */
-export function checkWrite(watcher: Watcher, options: { in?: string; principal?: string } = {}): CheckWrite {
+export function checkWrite(watcher: Checkable, options: { in?: string; principal?: string } = {}): CheckWrite {
   const tail = watcher.tail
   if (tail.types && !tail.types.some((type) => type === 'message.posted' || (type.endsWith('.') && 'message.posted'.startsWith(type)))) {
     throw notCheckable(watcher, `it listens for ${tail.types.join(', ')}, not for messages.`)
