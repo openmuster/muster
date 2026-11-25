@@ -26,7 +26,7 @@ sequenceDiagram
     end
     A->>B: complete, fail or block the task
     A-->>R: exits
-    R->>B: label what it cost; fail the task if the agent left it open
+    R->>B: label what it cost, and fail the task if the agent left it open
 ```
 
 - **It claims the task** and renews the claim, so a long piece of work isn't
