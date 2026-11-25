@@ -2,33 +2,14 @@
 // `env('NAME')`, read from the environment when the board starts, never when the module is imported. A
 // module can be imported anywhere (a test, `mu daemon status`, a build) without the secrets being there.
 import { spawnSync } from 'node:child_process'
+import { env, isEnv, looksNamed, nameOf, type Env } from '../config/env.ts'
 import { Failure, misuse } from '../failure.ts'
 import type { Provider } from './types.ts'
-
-const ENV = Symbol.for('muster.env')
-
-/** A secret named, not written: `env('GITHUB_WEBHOOK_SECRET')`. The board reads it when it starts. */
-export type Env = { readonly [ENV]: string }
 
 /** A secret as a module gives it: named with `env()`, or written out (which puts it in the module's file). */
 export type Secret = string | Env
 
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-
-/**
- * Names an environment variable for a sync's `secret` or `token`. Nothing is read now: the board reads it
- * when it starts (`team.start()`, `mu serve`, `mu daemon run`) or takes its first request (`team.fetch`), and
- * refuses to sync, naming the variable, if it isn't set.
- */
-export function env(name: string): Env {
-  if (typeof name !== 'string' || !ENV_NAME.test(name)) {
-    throw misuse('invalid_env', `env(${JSON.stringify(name)}) doesn't name an environment variable.`, 'A name is letters, numbers and "_", and doesn\'t start with a number: env(\'GITHUB_WEBHOOK_SECRET\').')
-  }
-  return Object.freeze({ [ENV]: name, toString: () => `env('${name}')`, toJSON: () => `env('${name}')` })
-}
-
-export const isEnv = (value: unknown): value is Env => typeof value === 'object' && value !== null && typeof (value as Record<symbol, unknown>)[ENV] === 'string'
-const nameOf = (value: Env) => value[ENV]
+export { env, isEnv, type Env }
 
 /** What every platform's sync takes, as a `sync.json` entry has it. */
 export type SyncOptions = {
@@ -69,6 +50,11 @@ export function declared<O extends SyncOptions>(type: string, options: O, make: 
   const secretOk = (value: unknown, required: boolean) => (value === undefined && !required) || (typeof value === 'string' && value.length > 0) || isEnv(value)
   if (!secretOk(options.secret, true)) throw misuse('invalid_sync', `${what} needs a "secret": env('NAME'), the variable that holds its webhook signing secret.`)
   if (!secretOk(options.token, false)) throw misuse('invalid_sync', `${what} has a "token" that is neither env('NAME') nor a string.`)
+  // "env:NAME" or env('NAME') written as text is a key anyone reading the module could sign with.
+  for (const field of ['secret', 'token'] as const) {
+    const value = options[field]
+    if (typeof value === 'string' && looksNamed(value)) throw misuse('invalid_sync', `${what} has a "${field}" written as the text "${value}": that would be the key itself.`, "Name the variable with env('NAME'), not as a string.")
+  }
   const { filter, filesPerDayMB } = options
   let filtered: { filter?: (text: string) => string | null } = {}
   if (typeof filter === 'function') filtered = { filter }
@@ -81,7 +67,7 @@ export function declared<O extends SyncOptions>(type: string, options: O, make: 
   const { filter: _filter, filesPerDayMB: _mb, ...rest } = options
   const fields = (['secret', 'token'] as const).filter((field) => isEnv(options[field]))
   if (fields.length === 0) return { ...make(rest as unknown as Resolved<O>), ...extras }
-  const names = fields.map((field) => nameOf(options[field] as Env))
+  const names = [...new Set(fields.map((field) => nameOf(options[field] as Env)))]
   const notYet = () => {
     throw new Failure('sync_not_started', `${what} names ${names.join(' and ')} with env(), and nothing has read them yet.`, { hint: 'Give it to board({ sync }): the board reads them when it starts, or takes its first request.' })
   }
@@ -91,7 +77,8 @@ export function declared<O extends SyncOptions>(type: string, options: O, make: 
     for (const field of fields) {
       const name = nameOf(options[field] as Env)
       const value = from[name]
-      if (!value) throw new Failure('invalid_config', `${name} isn't set, and sync "${key}" needs it.`, { hint: `Set ${name} where the board runs. A service installed with mu daemon install gets it with --env ${name}.` })
+      // Empty is refused like unset: a webhook signed with an empty key is one anybody can sign.
+      if (!value) throw new Failure('invalid_config', `${name} ${value === undefined ? "isn't set" : 'is empty'}, and sync "${key}" needs it.`, { hint: `Set ${name} where the board runs. A service installed with mu daemon install gets it with --env ${name}.` })
       read[field] = value
     }
     return { ...make({ ...rest, ...read } as unknown as Resolved<O>), ...extras }

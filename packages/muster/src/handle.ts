@@ -90,7 +90,7 @@ export function board(options: BoardOptions = {}): Board {
   const declared: readonly DeclaredWatcher[] = Object.freeze(watchers.map((watcher) => Object.freeze({ name: watcher.name, tail: structuredClone(watcher.tail), as: watcher.as ?? null })))
   const backend = given ?? file(fileOptions)
   // Opens nothing until its first request.
-  const served = mount(backend, { ...serve, ...(fileOptions.now ? { now: fileOptions.now } : {}), ...(syncs.length ? { ready } : {}) })
+  const served = mount(backend, { ...serve, ...(fileOptions.now ? { now: fileOptions.now } : {}) })
   let root: Board
   const make = (as: string | null): Board => {
     let caller: Promise<Caller> | null = null

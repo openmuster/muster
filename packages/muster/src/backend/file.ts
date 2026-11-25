@@ -251,6 +251,8 @@ export function file(options: FileOptions = {}): Backend {
       }
       return { path: target }
     },
+    syncs: Object.freeze(Object.keys(options.sync ?? {})),
+    syncCheck: () => void syncOf(),
     syncReceive: async (key, received) => {
       hold()
       return receive(ctx(), syncOf(), key, received)

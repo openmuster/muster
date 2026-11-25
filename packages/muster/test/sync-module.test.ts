@@ -4,8 +4,9 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { board, env, Failure, github, linear, slack, type Board } from '../src/index.ts'
-import { tickOnce } from '../src/daemon/daemon.ts'
+import { board, env, Failure, file, github, linear, slack, type Board } from '../src/index.ts'
+import { runDaemon } from '../src/daemon/daemon.ts'
+import { syncLoop } from '../src/sync/host.ts'
 import { cli, cliStart, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -56,8 +57,35 @@ describe('sync in a board module', () => {
       { key: 'gh', type: 'github', env: [GH] },
       { key: 'lin', type: 'linear', env: [LIN] },
     ])
-    expect(String(env(GH))).toBe(`env('${GH}')`)
     expect(() => env('not a name')).toThrow(/doesn't name an environment variable/)
+  })
+
+  it('a marker is never text: turned into a string it throws, and a secret written as "env(...)" or "env:..." is refused', () => {
+    expect(() => String(env(GH))).toThrow(/was used as text/)
+    expect(() => `${env(GH)}`).toThrow(/was used as text/)
+    expect(() => github({ secret: `env('${GH}')`, repos: {} })).toThrow(/that would be the key itself/)
+    expect(() => linear({ secret: 's', token: 'env:LINEAR_API_KEY', teams: {} })).toThrow(/that would be the key itself/)
+  })
+
+  it('a variable named for both secret and token is listed once', () => {
+    const team = board({ memory: true, sync: { gh: github({ secret: env(GH), token: env(GH), repos: {} }) } })
+    closers.push(() => team.close())
+    expect(team.sync).toEqual([{ key: 'gh', type: 'github', env: [GH] }])
+  })
+
+  it('an empty variable is refused like an unset one: by start(), by team.fetch and by a webhook to the backend', async () => {
+    process.env[GH] = ''
+    process.env[LIN] = 'lin-secret'
+    const logged: string[] = []
+    const team = declared(tempDir(), { serve: { log: (line: string) => logged.push(line) } })
+    closers.push(() => team.close())
+    expect(() => team.start()).toThrow(`${GH} is empty, and sync "gh" needs it.`)
+    // Signed with the empty key, as anybody could sign it.
+    const forged = githubHook('', 1, 'signed with nothing')
+    const answer = await team.fetch(new Request('http://127.0.0.1/api/board/webhooks/gh', { method: 'POST', headers: { ...forged.headers, host: '127.0.0.1' }, body: forged.body }))
+    expect(answer.status).toBe(503)
+    await expect(team.backend.syncReceive('gh', forged)).rejects.toThrow(`${GH} is empty`)
+    expect(await texts(team, 'web')).toEqual([])
   })
 
   it('start() refuses, naming the variable and the sync that needs it, and starts nothing', () => {
@@ -80,12 +108,20 @@ describe('sync in a board module', () => {
     const team = declared(dir, { serve: { log: (line: string) => logged.push(line) } })
     closers.push(() => team.close())
     const post = (key: string, hook: { headers: Record<string, string>; body: string }) => team.fetch(new Request(`http://127.0.0.1/api/board/webhooks/${key}`, { method: 'POST', headers: { ...hook.headers, host: '127.0.0.1' }, body: hook.body }))
-    // Unset: every request is the owner's 500, and the log says what is missing.
+    const health = () => team.fetch(new Request('http://127.0.0.1/api/board/health', { headers: { host: '127.0.0.1' } }))
+    // Unset: the board still answers. Its health says it isn't well, and a webhook gets a plain 503: neither
+    // names what is missing to a caller nobody authenticated. The owner's log does.
+    const sick = await health()
+    const sickText = await sick.text()
+    expect([sick.status, JSON.parse(sickText).error.reason]).toEqual([503, 'unhealthy'])
     const early = await post('gh', githubHook('gh-secret', 1, 'too early'))
-    expect(early.status).toBe(500)
+    const earlyText = await early.text()
+    expect([early.status, earlyText]).toEqual([503, 'sync unavailable'])
+    for (const said of [sickText, earlyText]) expect(said).not.toMatch(/MUSTER_TEST|isn't set|hint/)
     expect(logged.join('\n')).toContain(`${GH} isn't set, and sync "gh" needs it.`)
     process.env[GH] = 'gh-secret'
     process.env[LIN] = 'lin-secret'
+    expect((await health()).status).toBe(200)
     expect((await post('gh', githubHook('wrong-secret', 2, 'forged'))).status).toBe(401)
     expect((await post('gh', githubHook('gh-secret', 3, 'through team.fetch'))).status).toBe(200)
     expect((await post('lin', linearHook('lin-secret', 'iss-1', 'from Linear'))).status).toBe(200)
@@ -121,24 +157,98 @@ describe('sync in a board module', () => {
     expect((await team.backend.leases!.holder('sync'))?.holder).toBeTruthy()
   })
 
-  it("the daemon's tick leaves a module's sync to the host that holds its lease: nothing goes out twice", async () => {
+  it('an app host and a daemon without a module, on one board, send a board message once', async () => {
     process.env[GH] = 'gh-secret'
+    const dir = tempDir()
+    const posts: string[] = []
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(String(input))
+      await sleep(800)
+      return Response.json({ id: posts.length, number: posts.length }, { status: 201 })
+    }) as typeof fetch
+    const repos = { 'acme/web': { issues: 'web', mirror: true } }
+    // As a board that already syncs: what goes out is what is posted after the sync first looked.
+    const first = file({ dir, sync: { gh: github({ secret: 'gh-secret', token: 't', repos }) }, fetch: slow })
+    await first.syncTick()
+    first.close()
+    // The app's module, started in its own process; and mu daemon run with sync.json, as the CLI makes it.
+    const app = board({ dir, sync: { gh: github({ secret: env(GH), token: env(GH), repos }) }, fetch: slow })
+    const daemon = board({ backend: file({ dir, sync: { gh: github({ secret: 'gh-secret', token: 't', repos }) }, fetch: slow }) })
+    closers.push(() => app.close(), () => daemon.close())
+    await app.post({ channel: 'web', text: 'from the board' })
+    const stop = new AbortController()
+    const host = app.start({ log: () => {} })
+    const ticking = runDaemon({ team: daemon, watchers: [], stop: stop.signal, log: () => {} })
+    closers.unshift(async () => {
+      host.stop()
+      stop.abort()
+      await host.done
+      await ticking
+    })
+    await until(() => posts.length > 0)
+    await sleep(3000)
+    expect(posts).toEqual(['https://api.github.com/repos/acme/web/issues'])
+  }, 20_000)
+
+  it('a daemon ticking sync.json leaves the sync to whoever holds the sync lease', async () => {
+    const dir = tempDir()
     const sent: string[] = []
     const fetcher = (async (input: string | URL | Request) => {
       sent.push(String(input))
       return Response.json({ id: 1, number: 1 }, { status: 201 })
     }) as typeof fetch
-    const team = board({ memory: true, fetch: fetcher, sync: { gh: github({ secret: env(GH), token: env(GH), repos: { 'acme/web': { issues: 'web', mirror: true } } }) } })
-    closers.push(() => team.close())
-    // What goes out is what is posted after the sync first looked: as a board that already syncs.
-    await team.backend.syncTick()
-    await team.post({ channel: 'web', text: 'from the board' })
-    const did = await tickOnce(team, [], new Map(), { now: () => Date.now(), spawn: async () => ({ code: 0, stdout: '' }) })
-    expect(did.synced).toEqual({ imported: 0, delivered: 0, failed: 0 })
+    const daemon = board({ backend: file({ dir, sync: { gh: github({ secret: 's', token: 't', repos: { 'acme/web': { issues: 'web', mirror: true } } }) }, fetch: fetcher }) })
+    closers.push(() => daemon.close())
+    await daemon.backend.syncTick()
+    // Another host syncs this board: an app that start()ed its module.
+    expect((await daemon.backend.leases!.take({ name: 'sync', holder: 'app:1:abc', ttl: 60_000 })).held).toBe(true)
+    await daemon.post({ channel: 'web', text: 'from the board' })
+    const stop = new AbortController()
+    const ticking = runDaemon({ team: daemon, watchers: [], stop: stop.signal, log: () => {} })
+    await sleep(2500)
+    stop.abort()
+    expect(await ticking).toBe('stopped')
     expect(sent).toEqual([])
-    // The same board, its sync declared on the backend instead (as sync.json's is): the tick runs it.
-    expect(await team.backend.syncTick()).toMatchObject({ delivered: 1 })
+  }, 20_000)
+
+  it('two senders on one board, with no lease between them, claim each message: it goes out once', async () => {
+    const dir = tempDir()
+    const posts: string[] = []
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(String(input))
+      await sleep(300)
+      return Response.json({ id: 1, number: 1 }, { status: 201 })
+    }) as typeof fetch
+    const sync = { gh: github({ secret: 's', token: 't', repos: { 'acme/web': { issues: 'web', mirror: true } } }) }
+    const one = file({ dir, sync, fetch: slow })
+    const two = file({ dir, sync, fetch: slow })
+    closers.push(() => one.close(), () => two.close())
+    await one.syncTick()
+    await board({ backend: one }).post({ channel: 'web', text: 'from the board' })
+    const ticked = await Promise.all([one.syncTick(), two.syncTick()])
+    expect(posts).toHaveLength(1)
+    expect(ticked.map((tick) => tick.delivered).sort()).toEqual([0, 1])
   })
+
+  it('a second host stands by while the first holds the sync lease, and takes over when it stops', async () => {
+    const dir = tempDir()
+    const leases = file({ dir }).leases!
+    const ticks = { a: 0, b: 0 }
+    const host = (name: 'a' | 'b') => ({ backend: { syncTick: async () => (ticks[name]++, { imported: 0, delivered: 0, failed: 0 }) } }) as unknown as Board
+    const lease = { lease: { ttl: 400, every: 100, wait: 50 } }
+    const stopA = new AbortController()
+    const stopB = new AbortController()
+    const a = syncLoop(host('a'), leases, stopA.signal, lease, () => {})
+    await until(() => ticks.a > 0)
+    const b = syncLoop(host('b'), leases, stopB.signal, lease, () => {})
+    await sleep(1500)
+    expect(ticks.b).toBe(0)
+    stopA.abort()
+    await a
+    await until(() => ticks.b > 0, 5000)
+    stopB.abort()
+    await b
+  }, 20_000)
 
   it('the shapes port from sync.json: a filter command, filesPerDayMB, and literal secrets', () => {
     const made = slack({ secret: 'literal', channels: { C1: 'general' }, filter: ['tr', 'a-z', 'A-Z'], filesPerDayMB: 1 })
@@ -213,6 +323,20 @@ describe('mu with a module that declares sync', () => {
     expect(ran.stderr).toContain('declares sync (gh, lin)')
     expect(ran.stdout).not.toContain('board ')
   })
+
+  it('mu serve with a variable unset says which and exits 1, before it serves anything', async () => {
+    const { dir, path } = moduleFolder()
+    const serving = cliStart(dir, ['serve', '--module', path, '--port', '0', '--print-token'], { [LIN]: 'lin-secret' })
+    closers.push(async () => {
+      serving.child.kill('SIGTERM')
+      await serving.done
+    })
+    const ran = await Promise.race([serving.done, sleep(15_000).then(() => null)])
+    expect(ran).not.toBeNull()
+    expect(ran!.code).toBe(1)
+    expect(ran!.stderr).toContain(`${GH} isn't set, and sync "gh" needs it.`)
+    expect(ran!.stdout).not.toContain('url ')
+  }, 20_000)
 
   it('mu daemon run with a variable unset says which, and exits 0 so the service stays stopped', async () => {
     const { dir, path } = moduleFolder()

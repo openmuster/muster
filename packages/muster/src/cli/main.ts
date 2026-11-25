@@ -953,6 +953,9 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       const me = await run.team.whoami()
       if (me.mode !== 'file') throw new Failure('forbidden', 'mu serve serves a board on this machine.')
+      // A module's sync that can't run stops the server before it listens, as it stops mu daemon run: served
+      // without it, the module's watchers and sync would both be off, and only its log would say so.
+      if (run.module && !run.module.error) run.team.backend.syncCheck?.()
       const key = boardKey(me.where)
       const port = Number(str(parsed.flags, 'port') ?? run.io.env.MUSTER_PORT ?? 4100)
       const host = str(parsed.flags, 'host') ?? run.io.env.MUSTER_HOST ?? '127.0.0.1'

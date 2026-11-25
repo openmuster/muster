@@ -1,6 +1,19 @@
 import type { Board } from '../handle.ts'
 import { holdLease, LEASE_TTL, type Held, type Leases } from '../daemon/lease.ts'
 
+/** A sleep that a stop cuts short. */
+const sleeper = (stop: AbortSignal) => (ms: number) =>
+  new Promise<void>((resolve) => {
+    if (stop.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      stop.removeEventListener('abort', done)
+      resolve()
+    }
+    stop.addEventListener('abort', done)
+  })
+
 /** How often a host that holds the `sync` lease ticks: as often as the daemon ticks. */
 const EVERY = 1000
 /** The longest pause between ticks that keep failing, as the daemon's (`FAILING_PAUSE`). */
@@ -11,7 +24,8 @@ const FAILING_PAUSE = 30_000
  * platforms, under the board's `sync` lease, so two hosts never send one message twice. Stands by while
  * another host holds it, and takes over once that host stops renewing. Nothing it meets ends it but a stop.
  */
-export async function syncLoop(team: Board, leases: Leases, stop: AbortSignal, sleep: (ms: number) => Promise<void>, options: { lease?: { ttl?: number; every?: number; wait?: number } }, log: (line: string) => void): Promise<void> {
+export async function syncLoop(team: Board, leases: Leases, stop: AbortSignal, options: { lease?: { ttl?: number; every?: number; wait?: number } }, log: (line: string) => void): Promise<void> {
+  const sleep = sleeper(stop)
   const ttl = options.lease?.ttl ?? LEASE_TTL
   let said = ''
   let failing = 0

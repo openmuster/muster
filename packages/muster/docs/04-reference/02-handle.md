@@ -359,8 +359,10 @@ their secrets named by `env('NAME')`: see
 `team.sync` lists them as `{ key, type, env }`, without reading anything.
 `start()` reads the variables, throws naming any that isn't set, and runs the
 sync (catch-up, files, imports and what goes back) under the board's `sync`
-lease. `team.fetch` reads them on its first request, and answers 500 until
-they are there.
+lease. `team.fetch` reads them on its first request. Until they are there it
+goes on serving the board, logs what is missing, and answers webhooks with 503
+and `health` with 503 `unhealthy`. On its own it only takes webhooks: catching
+up and sending back need a `start()` somewhere.
 
 ### Running a module with mu
 

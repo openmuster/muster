@@ -504,7 +504,7 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
     loop(team, watcher, controller.signal, options, stateOf(states, watcher.name), log).catch((error) => log(`stopped   ${watcher.name}  ${(error as Error).message}`)),
   )
   // The board's sync, under its own `sync` lease: one host sends to the platforms, whichever runs the watchers.
-  if (sync) loops.push(syncLoop(team, leasesOf(team), controller.signal, sleeper(controller.signal), options, log).catch((error) => log(`stopped   sync  ${(error as Error).message}`)))
+  if (sync) loops.push(syncLoop(team, leasesOf(team), controller.signal, options, log).catch((error) => log(`stopped   sync  ${(error as Error).message}`)))
   const done = Promise.all(loops).then(() => {
     options.signal?.removeEventListener('abort', stopNow)
     if (hosts().get(key)?.host === host) hosts().delete(key)

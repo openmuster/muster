@@ -142,6 +142,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `watch_aborted` | A watcher's run wrote after its `timeout`, or after it was aborted. Its writes are refused, and the try counted as failed |
 | `watch_started` | This process already runs the watchers of that board from another `board()` handle with other watchers. Declare them all on one handle |
 | `watch_remote` | Watchers were started on a board reached over HTTP. They run where the board's file is |
+| `unhealthy` | `GET /health` on a board whose sync can't run, such as a secret named with `env()` that isn't set. Its owner's log says what |
 | `sync_twice` | A board module declares `sync` and `sync.json` is there too. A board's sync is in one place: move the file's entries into the module |
 | `sync_not_started` | A provider whose secrets are named with `env()` was used on its own. Give it to `board({ sync })`, which reads them when it starts |
 

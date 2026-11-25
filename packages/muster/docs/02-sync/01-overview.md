@@ -104,14 +104,24 @@ export default board({
 })
 ```
 
-- **A variable that isn't set stops the sync, by name.** `start()` throws
-  `GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.`; `mu daemon run`
-  says so and exits 0, so the service stays stopped; `team.fetch` answers 500
-  and says it in its log.
+- **A variable that isn't set, or is empty, stops the sync, by name.**
+  `start()` throws `GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.`
+  `mu serve` says so and exits 1 before it serves anything. `mu daemon run`
+  says so and exits 0, so the service stays stopped. `team.fetch` goes on
+  serving the board, says it in its log, and answers a webhook with a plain
+  503 and `health` with 503 `unhealthy`. Neither answer names the variable.
 - **The module's sync runs where the module is started**, under the board's
-  `sync` lease: one host at a time catches up and sends to the platforms,
-  whichever runs the watchers. `mu daemon status` lists each sync, the
-  variables it reads, and who holds the lease.
+  `sync` lease. `mu daemon run` and `mu serve` take the same lease for
+  `sync.json`'s sync, so one process at a time catches up and sends to the
+  platforms, whichever runs the watchers. Each message is also claimed on the
+  board before it goes, so it is sent once. `mu daemon status` lists each
+  sync, the variables it reads, and who holds the lease.
+- **`team.fetch` alone takes webhooks and imports them.** It never catches
+  up, fetches files or sends anything back: something has to `start()` the
+  module (your `host.ts`, `mu serve` or `mu daemon run`).
+- **`env()` is never text.** Turned into a string it throws, and a secret
+  written as `"env:NAME"` or `"env('NAME')"` is refused: either would be a key
+  anyone reading the module could sign with.
 - **One place.** A module that declares `sync` beside a `sync.json` is
   refused: `mu serve` exits 2, `mu daemon run` says so and exits 0. Move the
   entries into the module and delete the file. A module with no `sync` runs

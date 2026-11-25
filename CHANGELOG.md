@@ -3,6 +3,35 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Added
+
+- Sync in a board module: `board({ sync: { gh: github({ secret:
+  env('GITHUB_WEBHOOK_SECRET'), repos }) } })`, in the shape of a `sync.json`
+  entry, with a porting table in
+  [Sync](./packages/muster/docs/02-sync/01-overview.md#in-a-board-module).
+  `env('NAME')` reads nothing when the module is imported: the board reads
+  it when it starts (`team.start()`, `mu serve`, `mu daemon run`) or takes its
+  first request (`team.fetch`), and a variable that isn't set stops it, by
+  name: `GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.`
+  - `mu serve` and `mu daemon run` run the module's sync: its webhooks,
+    catch-up, files and what goes back, under the board's `sync` lease.
+    `sync.json`'s sync now takes the same lease, and each message is claimed
+    on the board before it goes, so an app host and a daemon on one board
+    never send a reply twice.
+  - A variable that isn't set, or is empty, stops `mu serve` (exit 1) and
+    `mu daemon run` (exit 0). `team.fetch` keeps serving, answers webhooks
+    with a plain 503 and `health` with 503, and says why only in its log.
+  - `env()` is never text: turned into a string it throws, and a secret
+    written as `"env:NAME"` is refused.
+  - A module that declares `sync` beside a `sync.json` is refused: two places
+    saying what a board syncs is one too many.
+  - `mu daemon status` lists each sync, the variables it reads and the host
+    that holds its lease. `team.sync` lists what a handle declares.
+  - `filter` and `filesPerDayMB` are options of `github()`, `linear()` and
+    `slack()`, as in `sync.json`.
+
 ## 0.3.0
 
 ### Added
@@ -79,23 +108,6 @@ versions are affected.
   - `team.watchers` lists what a handle declares.
   - With a module, `sync.json` isn't read: `mu` says so, and
     `mu daemon install` says to move its sync into the module.
-- Sync in a board module: `board({ sync: { gh: github({ secret:
-  env('GITHUB_WEBHOOK_SECRET'), repos }) } })`, in the shape of a `sync.json`
-  entry, with a porting table in
-  [Sync](./packages/muster/docs/02-sync/01-overview.md#in-a-board-module).
-  `env('NAME')` reads nothing when the module is imported: the board reads
-  it when it starts (`team.start()`, `mu serve`, `mu daemon run`) or takes its
-  first request (`team.fetch`), and a variable that isn't set stops it, by
-  name: `GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.`
-  - `mu serve` and `mu daemon run` run the module's sync: its webhooks,
-    catch-up, files and what goes back, under the board's `sync` lease, so one
-    host at a time sends to the platforms.
-  - A module that declares `sync` beside a `sync.json` is refused: two places
-    saying what a board syncs is one too many.
-  - `mu daemon status` lists each sync, the variables it reads and the host
-    that holds its lease. `team.sync` lists what a handle declares.
-  - `filter` and `filesPerDayMB` are options of `github()`, `linear()` and
-    `slack()`, as in `sync.json`.
 - A card queue template, `templates/queue`. A Linear issue labelled `agent`,
   or a card posted with `--label tag.agent=agent --no-sync`, starts the
   `card` workflow once: a spec, the change as a pull request, and a review,

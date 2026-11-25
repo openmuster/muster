@@ -106,9 +106,10 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
   // As the guide says to install them: each script named by its full path. As shipped, they are `./start.sh`.
   const watchers = loadWatchers(join(queue, 'watchers.json')).map((watcher) => ({ ...watcher, run: watcher.run.map((part, at) => (at === 0 && part.startsWith('./') ? join(queue, part.slice(2)) : part)) }))
   const workflows = loadWorkflows(join(queue, 'workflows.json'))
-  /** One daemon tick, a minute after the last, so every watcher is due. */
-  const tick = () => {
+  /** One daemon tick, a minute after the last, so every watcher is due, after a pass of its sync loop (run beside the tick, under the `sync` lease). */
+  const tick = async () => {
     now += 60_000
+    await team.backend.syncTick()
     return tickOnce(team, watchers, states, { now: () => now, spawn: run }, undefined, { list: workflows, deps: runs })
   }
   const requests = async () => (await team.events({ after: 0, filter: { types: ['workflow.requested'] }, limit: 1000 })).events

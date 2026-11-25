@@ -138,13 +138,11 @@ export function toFetch(handler: Handler, base: string, log: (line: string) => v
  * `team.fetch`: what `mu serve` serves for this board, as a web `Request → Response` handler. Inert until its
  * first request: the board's file and its key are opened then, as `mu serve` opens them.
  */
-export function mount(backend: Backend, options: MountOptions & { now?: () => Date; ready?: () => void } = {}): (request: Request) => Promise<Response> {
+export function mount(backend: Backend, options: MountOptions & { now?: () => Date } = {}): (request: Request) => Promise<Response> {
   const base = checkBase(options.base)
   const log = options.log ?? ((line: string) => console.error(line))
   let served: ((request: Request) => Promise<Response>) | null = null
   const make = () => {
-    // What the board needs before it can answer as declared, such as its sync's secrets: a 500 until it is there.
-    options.ready?.()
     const key = backend.signingKey?.()
     if (!key) {
       // A handle on a board at a URL has no key to check a token with: serving it would be serving someone else's board.
@@ -155,7 +153,21 @@ export function mount(backend: Backend, options: MountOptions & { now?: () => Da
     const now = options.now
     return toFetch(createHandler({ backend, key, hosts, log, ...(now ? { now: () => now().getTime() } : {}) }), base, log)
   }
+  // The sync's secrets are read on the first request, and what is missing is said to the owner, once. The board
+  // is served meanwhile: only its webhooks wait (503), and its health says it isn't well.
+  let synced = !backend.syncCheck
+  let said = ''
   return async (request) => {
+    if (!synced) {
+      try {
+        backend.syncCheck!()
+        synced = true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message !== said) log(`error  sync: ${message}`)
+        said = message
+      }
+    }
     try {
       served ??= make()
     } catch (error) {
