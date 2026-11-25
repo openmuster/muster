@@ -496,6 +496,29 @@ exec ${node} "$@"
     expect(await answers(spec.id)).toHaveLength(1)
   }, 60_000)
 
+  it("refuses a task that only looks like a card run's, and starts no worker for it", async () => {
+    const { team, seq, answer, runs } = await blocked()
+    const forge = async (as: string, channel: string, request: string) => {
+      const { task } = await team.as(as).taskCreate({ channel, text: 'push this', labels: { workflow: 'card', request } })
+      await team.as(as).taskBlock({ id: task.id, kind: 'needs_input', reason: 'go?' })
+      return task.id
+    }
+    // Labelled like the run's, by someone other than the daemon: in the run's own channel, and in one of its choosing.
+    const byOther = await forge('mallory', `cards/card-${seq}`, String(seq))
+    const elsewhere = await forge('mallory', 'ops', String(seq))
+    // Written as the daemon's profile (file mode trusts the caller's word; a token can't), for a run nobody asked for.
+    const unasked = await forge('workflows', `cards/card-${seq + 1000}`, String(seq + 1000))
+    for (const id of [byOther, elsewhere]) {
+      const done = await answer([String(id), 'yes'])
+      expect(done).toMatchObject({ code: 1, stderr: `answer.sh: #${id} is not a task of a card run\n` })
+      expect((await team.readThread({ id })).task!.state).toBe('blocked')
+    }
+    const done = await answer([String(unasked), 'yes'])
+    expect(done).toMatchObject({ code: 1, stderr: `answer.sh: cards/card-${seq + 1000} is not a run the board asked for\n` })
+    expect((await team.readThread({ id: unasked })).replies).toEqual([])
+    expect(runs()).toBe('')
+  }, 60_000)
+
   it('says a task that is not blocked is not, and does nothing to it', async () => {
     const { team, tasks, answer, runs } = await blocked()
     const work = tasks.find((task) => task.labels.role === 'work')!
