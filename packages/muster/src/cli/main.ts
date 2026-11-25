@@ -141,6 +141,9 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: str
   // role to this command for a moment.
   if (mode === 'file') {
     if (inCode && !(await run.team.backend.leases?.holder(`watch:${inCode.name}`))) {
+      // A daemon the restart guard stopped is the reason, when there is one.
+      const { parked } = guard.readGuard(guardAt)
+      if (parked) throw new Failure('daemon_stopped', parked.why, { hint: `Stopped since ${parked.at}; it tries again at ${guard.retryAt(parked)}. Its log says what failed: ${join(configDir(), 'logs')}.`, next: ['mu daemon reset'] })
       throw new Failure('watcher_not_running', `Watcher "${inCode.name}" is declared in ${module!.path}, and nothing runs it: it is declared but not started.`, {
         hint: 'Run the module with mu daemon run or mu serve, or call team.start() in your own process.',
         next: ['mu daemon run', 'mu daemon install'],

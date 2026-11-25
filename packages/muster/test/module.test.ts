@@ -5,8 +5,10 @@ import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync,
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { board } from '../src/index.ts'
+import { basename } from 'node:path'
+import { board, file } from '../src/index.ts'
 import { COPY } from '../src/handle.ts'
+import { RESTART_LIMIT, begin, guardPath } from '../src/daemon/guard.ts'
 import { cli, cliStart, tempDir, type Ran } from './helpers.ts'
 
 const PACKAGE = realpathSync(fileURLToPath(new URL('..', import.meta.url)))
@@ -266,6 +268,66 @@ describe('a board module', () => {
     await daemon.done
     expect([checked.code, checked.stdout]).toEqual([0, expect.stringMatching(/^answered {2}#\d+ {2}by .*intake.* {2}in /)])
   }, 60_000)
+
+  it("mu daemon check on a module watcher says a daemon the restart guard stopped is why nothing runs it", async () => {
+    const dir = folder(INTAKE)
+    await post(dir, 'general', 'board exists')
+    const record = join(dir, 'config', 'daemon', basename(guardPath('main', join(dir, 'board', 'main.db'))))
+    for (let i = 0; i < RESTART_LIMIT; i++) begin(record, Date.now() + i)
+    const checked = await cli(dir, ['daemon', 'check', 'intake', '--json'])
+    expect([checked.code, JSON.parse(checked.stderr).error.reason, JSON.parse(checked.stderr).error.next]).toEqual([1, 'daemon_stopped', ['mu daemon reset']])
+  }, 30_000)
+
+  it('mu daemon status on a module that fails to load still says how the daemon is, and what is wrong with the module', async () => {
+    const dir = folder(`export default 1\n`)
+    const shown = await cli(dir, ['daemon', 'status'])
+    expect(shown.code).toBe(0)
+    expect(shown.stdout).toMatch(/^service {3}not installed$/m)
+    expect(shown.stdout).toContain(`module    ${join(dir, 'config', 'board.ts')}  not loaded: ${join(dir, 'config', 'board.ts')} exports no board.\n`)
+    const json = await cli(dir, ['daemon', 'status', '--json'])
+    expect(JSON.parse(json.stdout).module).toMatchObject({ path: join(dir, 'config', 'board.ts'), error: { reason: 'module_not_a_board' }, watchers: [] })
+  }, 30_000)
+
+  it('--module wins over MUSTER_MODULE, which wins over the default file', async () => {
+    const dir = folder(`export default 1\n`)
+    writeFileSync(join(dir, 'intake.ts'), INTAKE)
+    const flagged = JSON.parse((await cli(dir, ['daemon', 'status', '--json', '--module', join(dir, 'intake.ts')], { env: { MUSTER_MODULE: join(dir, 'gone.ts') } })).stdout) as Status
+    expect([flagged.module?.path, flagged.module?.error]).toEqual([join(dir, 'intake.ts'), undefined])
+    const set = JSON.parse((await cli(dir, ['daemon', 'status', '--json'], { env: { MUSTER_MODULE: join(dir, 'intake.ts') } })).stdout) as Status
+    expect([set.module?.path, set.module?.error]).toEqual([join(dir, 'intake.ts'), undefined])
+  }, 30_000)
+
+  it("with a module, sync.json isn't read, and mu says so", async () => {
+    const dir = folder(INTAKE)
+    writeFileSync(join(dir, 'config', 'sync.json'), '{}')
+    const shown = await cli(dir, ['daemon', 'status'])
+    expect(shown.stderr).toBe(`warning: ${join(dir, 'config', 'sync.json')} isn't read with a board module: nothing it lists is synced. Give the module's board() its sync instead.\n`)
+  }, 30_000)
+
+  it("mu serve on a module whose watcher clashes with watchers.json serves the board, and doesn't run the module's watchers", async () => {
+    const dir = folder(INTAKE)
+    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'intake', tail: {}, run: ['true'] }] }))
+    const served = await serve(dir)
+    expect(served.stderr).toContain(`error: A watcher in ${join(dir, 'config', 'board.ts')} and a watcher in ${join(dir, 'config', 'watchers.json')} are both named "intake".\n  The module's watchers don't run`)
+    expect([served.status, served.code]).toEqual([404, 0])
+  }, 30_000)
+
+  it("mu daemon run stays up for the module's watchers when another process ticks", async () => {
+    const dir = folder(INTAKE)
+    await post(dir, 'general', 'board exists')
+    const other = file({ dir: join(dir, 'board') })
+    await other.leases!.take({ name: 'tick', holder: 'other-host', ttl: 600_000 })
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    // A holder that doesn't renew is waited out for as long as a lease lasts, before it counts as alive.
+    await until(() => daemon.output().includes('another process already ticks for this board'), 60_000)
+    await until(async () => (await status(dir)).module?.watchers[0]?.lag === 0)
+    const feature = await post(dir, 'features', 'dark mode')
+    await until(async () => (await replies(dir, feature)).includes('Started'))
+    expect(daemon.child.exitCode).toBeNull()
+    daemon.child.kill('SIGTERM')
+    expect((await daemon.done).code).toBe(0)
+    other.close()
+  }, 120_000)
 
   it.each([
     ['watcher', 'watchers.json', { watchers: [{ name: 'intake', tail: {}, run: ['true'] }] }],
