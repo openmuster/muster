@@ -23,11 +23,13 @@ type Ended = { code: number | null; signal: NodeJS.Signals | null; stdout: strin
 const KEPT = 64 * 1024
 
 /**
- * Runs a command to its end, in a process group of its own. Settled once the process has exited and
- * its output has closed, so a gate whose answer comes from a child it left behind is read whole. On
- * `signal`, the group is told to stop, and killed after `grace`.
+ * Runs a command in a process group of its own. A gate (`answer`) is read whole: settled once it has
+ * exited and its output has closed, so an answer printed by a child it left behind is heard. A command
+ * that wakes something (`wake`) writes to this process's output and is settled when it exits: what it
+ * started in the background (an agent) lives on, and nothing here waits for it or kills it. Until it is
+ * settled, `signal` tells the group to stop, and kills it after `grace`.
  */
-function run(argv: string[], env: Record<string, string>, signal: AbortSignal, grace: number): Promise<Ended> {
+function run(argv: string[], env: Record<string, string>, signal: AbortSignal, grace: number, mode: 'answer' | 'wake'): Promise<Ended> {
   return new Promise((resolve) => {
     let stdout = ''
     let settled = false
@@ -38,7 +40,7 @@ function run(argv: string[], env: Record<string, string>, signal: AbortSignal, g
       // A kill already on its way stays on its way: a child that ignored SIGTERM and let go of the output is still killed.
       resolve({ ...ended, stdout })
     }
-    const child = spawn(argv[0]!, argv.slice(1), { env, stdio: ['ignore', 'pipe', 'inherit'], detached: true })
+    const child = spawn(argv[0]!, argv.slice(1), { env, stdio: ['ignore', mode === 'answer' ? 'pipe' : 'inherit', 'inherit'], detached: true })
     const group = (name: NodeJS.Signals) => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, name)
@@ -50,13 +52,13 @@ function run(argv: string[], env: Record<string, string>, signal: AbortSignal, g
       group('SIGTERM')
       setTimeout(() => group('SIGKILL'), grace).unref()
     }
-    child.stdout.on('data', (chunk: Buffer) => {
+    child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()
       if (stdout.length > KEPT) stdout = stdout.slice(-KEPT)
     })
     // A command that can't start is one that failed, as a shell says it: 127.
     child.on('error', () => settle({ code: 127, signal: null }))
-    child.on('close', (code, killed) => settle({ code, signal: killed }))
+    child.on(mode === 'answer' ? 'close' : 'exit', (code: number | null, killed: NodeJS.Signals | null) => settle({ code, signal: killed }))
     if (signal.aborted) stop()
     else signal.addEventListener('abort', stop, { once: true })
   })
@@ -104,12 +106,16 @@ export function command(argv: Argv, options: CommandOptions = {}): (context: Wat
   const grace = options.grace ?? 5000
   return async (context) => {
     const env = watcherEnv(pointer(context), options.env ?? [])
+    // The board is the one the pointer names: nothing from this process's environment may point elsewhere.
+    const named = new Set(options.env ?? [])
+    const elsewhere = ['MUSTER_URL', 'MUSTER_INSECURE_HTTP', ...(pointer(context).MUSTER_DIR === undefined ? ['MUSTER_DIR', 'MUSTER_BOARD'] : [])]
+    for (const name of elsewhere) if (!named.has(name)) delete env[name]
     if (options.gate !== undefined) {
-      const gate = await run(wordsOf(options.gate, context), env, context.signal, grace)
+      const gate = await run(wordsOf(options.gate, context), env, context.signal, grace, 'answer')
       if (gateSaysNo(gate.stdout)) return
     }
     const words = wordsOf(argv, context)
-    const ended = await run(words, env, context.signal, grace)
+    const ended = await run(words, env, context.signal, grace, 'wake')
     if (ended.code === 0) return
     const why = ended.code === null ? `killed by ${ended.signal ?? 'a signal'}` : `exit ${ended.code}`
     throw Object.assign(new Error(`${words[0]} ended with ${why}`), { why })

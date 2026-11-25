@@ -215,3 +215,89 @@ describe("a command's environment", () => {
     }
   })
 })
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+describe('a command and what it starts', () => {
+  it('an agent the command starts in the background lives on: the run is delivered when the command exits', async () => {
+    const { team, marker } = harness({ timeout: '2s', script: 'sleep 30 & echo $! > "$MARKER"; exit 0' })
+    await team.deliver()
+    await team.post({ channel: 'work/api', text: 'wake' })
+    const began = Date.now()
+    expect(await team.deliver()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(Date.now() - began).toBeLessThan(1500)
+    const pid = Number(readFileSync(marker, 'utf8'))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(alive(pid)).toBe(true)
+    process.kill(pid, 'SIGKILL')
+  })
+
+  it('a command that ignores SIGTERM is killed once its grace is up', async () => {
+    const dir = tempDir()
+    const marker = join(dir, 'pid')
+    const team = board({
+      dir,
+      principal: 'local:user:ada',
+      watch: { lead: { tail: { channel: 'work/' }, timeout: '200ms', run: command(['sh', '-c', `trap '' TERM; echo $$ > ${marker}; while :; do sleep 0.05; done`], { grace: 300 }) } },
+    })
+    await team.deliver()
+    await team.post({ channel: 'work/api', text: 'wake' })
+    expect(await team.deliver()).toMatchObject({ failed: 1 })
+    const pid = Number(readFileSync(marker, 'utf8'))
+    // Told to stop, it doesn't: still there before the grace is up, gone after.
+    expect(alive(pid)).toBe(true)
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 3000 })
+    team.close()
+  })
+
+  it("a host's stop() stops the command in flight, and is done within its grace", async () => {
+    const dir = tempDir()
+    const marker = join(dir, 'pid')
+    const team = board({ dir, principal: 'local:user:ada', watch: { lead: { tail: { channel: 'work/' }, timeout: '30s', run: command(['sh', '-c', `echo $$ > ${marker}; sleep 30`], { grace: 200 }) } } })
+    await team.deliver()
+    const host = team.start({ log: () => {}, grace: 1000 })
+    await team.post({ channel: 'work/api', text: 'wake' })
+    await vi.waitFor(() => expect(existsSync(marker) && readFileSync(marker, 'utf8').trim() !== '').toBe(true), { timeout: 5000 })
+    const pid = Number(readFileSync(marker, 'utf8'))
+    const began = Date.now()
+    host.stop()
+    await host.done
+    expect(Date.now() - began).toBeLessThan(2000)
+    expect(alive(pid)).toBe(false)
+    team.close()
+  })
+
+  it('names only the board the handle has: nothing in this process points it at another', async () => {
+    const was = { MUSTER_URL: process.env.MUSTER_URL, MUSTER_INSECURE_HTTP: process.env.MUSTER_INSECURE_HTTP, MUSTER_DIR: process.env.MUSTER_DIR, MUSTER_BOARD: process.env.MUSTER_BOARD }
+    Object.assign(process.env, { MUSTER_URL: 'http://elsewhere.example', MUSTER_INSECURE_HTTP: '1', MUSTER_DIR: '/somewhere/else', MUSTER_BOARD: 'other' })
+    try {
+      const { dir, team, marker } = harness({ script: 'env > "$MARKER"' })
+      await team.deliver()
+      await team.post({ channel: 'work/api', text: 'x' })
+      await team.deliver()
+      const env = readFileSync(marker, 'utf8')
+      expect(env).not.toMatch(/^MUSTER_URL=|^MUSTER_INSECURE_HTTP=/m)
+      expect(env).toMatch(new RegExp(`^MUSTER_DIR=${dir}$`, 'm'))
+      // A board in memory can't be reached from another process: the command is told of none.
+      const memory = tempDir()
+      const markerOf = join(memory, 'env')
+      const kept = board({ memory: true, principal: 'local:user:ada', watch: { lead: { tail: { channel: 'work/' }, run: command(['sh', '-c', `env > ${markerOf}`]) } } })
+      await kept.deliver()
+      await kept.post({ channel: 'work/api', text: 'x' })
+      await kept.deliver()
+      expect(readFileSync(markerOf, 'utf8')).not.toMatch(/^MUSTER_(DIR|BOARD|URL)=/m)
+    } finally {
+      for (const [name, value] of Object.entries(was)) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
+})

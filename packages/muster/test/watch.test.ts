@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -355,49 +355,34 @@ describe('delivering, and failing', () => {
     team.close()
   }, 30_000)
 
-  it('a watcher whose runs keep failing is slowed, each failure doubling the wait up to ten minutes, and one success puts it back', async () => {
-    const time = clock()
-    let failing = true
-    const ranAt: number[] = []
-    const team = board({
-      memory: true,
-      principal: 'local:user:ada',
-      now: time.now,
-      watch: {
-        lead: {
-          tail: { channel: 'work/' },
-          run: () => {
-            ranAt.push(time.now().getTime())
-            if (failing) throw new Error('broken')
-          },
+  it('a thread that keeps failing backs off on its own, and a thread that comes while it does is delivered at once', async () => {
+    const tries: number[] = []
+    const woke: number[] = []
+    let poison = 0
+    let second = 0
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: ({ event }) => {
+          if (event.thread === poison) {
+            tries.push(second)
+            throw new Error('broken for this thread')
+          }
+          woke.push(second)
         },
       },
     })
     await team.deliver()
-    for (let i = 0; i < 40; i++) await team.post({ channel: `work/t${i}`, text: `event ${i}` })
-    // Five failures in a row are five events' bad luck; the sixth means its code is broken, and the pass stops.
-    expect(await team.deliver()).toEqual({ delivered: 0, failed: DELIVERY_ATTEMPTS + 1, held: [] })
-    const passes: number[] = []
-    for (let i = 0; i < 3600 && passes.length < 12; i++) {
-      time.advance(SECOND)
-      const before = ranAt.length
+    poison = (await team.post({ channel: 'work/a', text: 'poison' })).id
+    for (; second < 200; second++) {
+      // Healthy threads come after the failures began, one of them in each long wait.
+      if ([15, 45, 100].includes(second)) await team.post({ channel: `work/b${second}`, text: 'healthy' })
       await team.deliver()
-      if (ranAt.length > before) {
-        expect(ranAt.length - before).toBe(1)
-        passes.push(time.now().getTime())
-      }
+      time.advance(SECOND)
     }
-    const gaps = [passes[0]! - ranAt[DELIVERY_ATTEMPTS]!, ...passes.slice(1).map((at, i) => at - passes[i]!)]
-    expect(gaps.slice(0, 4)).toEqual([4 * SECOND, 8 * SECOND, 16 * SECOND, 32 * SECOND])
-    expect(Math.max(...gaps)).toBe(SLOWEST)
-    expect(gaps.at(-1)).toBe(SLOWEST)
-    failing = false
-    time.advance(SLOWEST)
-    expect((await team.deliver()).delivered).toBeGreaterThan(0)
-    // Working again, it is no longer held back.
-    await team.post({ channel: 'work/new', text: 'fresh' })
-    time.advance(SECOND)
-    expect((await team.deliver()).delivered).toBe(1)
+    expect(tries).toEqual([0, 10, 30, 70, 150])
+    expect(woke).toEqual([15, 45, 100])
+    expect(await replies(team, poison)).toHaveLength(1)
   })
 
   it('a watcher another host holds is left alone: nothing delivered, and it says which', async () => {
@@ -588,4 +573,333 @@ describe('runs that throw, hang, or come in bursts', () => {
     expect((await tail(['--root'])).map((event) => event.type)).toEqual(['message.posted', 'task.created', 'labels.changed'])
     team.close()
   }, 30_000)
+})
+
+describe('one thread never holds up another, and a stopped host stops', () => {
+  it('a failing thread with a long backlog behind it never keeps another thread from being read', async () => {
+    let poison = 0
+    const woke: number[] = []
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: ({ event }) => {
+          if (event.thread === poison) throw new Error('bad thread')
+          woke.push(event.seq)
+        },
+      },
+    })
+    await team.deliver()
+    poison = (await team.post({ channel: 'work/a', text: 'a' })).id
+    // More behind its head than one pass keeps.
+    for (let i = 0; i < 2100; i++) await team.reply({ to: poison, text: `r${i}` })
+    const b = await team.post({ channel: 'work/b', text: 'b' })
+    await team.deliver()
+    time.advance(SECOND)
+    await team.deliver()
+    expect(woke).toEqual([b.id])
+  }, 60_000)
+
+  it('reads past its first page: one pass delivers every event it can', async () => {
+    const { seen, watch } = noting()
+    const { team } = watched({ lead: watch })
+    await team.deliver()
+    const roots = [0, 1, 2].map(() => 0)
+    for (let t = 0; t < 3; t++) roots[t] = (await team.post({ channel: `work/t${t}`, text: 'root' })).id
+    for (let i = 0; i < 600; i++) await team.reply({ to: roots[i % 3]!, text: `r${i}` })
+    expect(await team.deliver()).toEqual({ delivered: 603, failed: 0, held: [] })
+    expect(seen).toHaveLength(603)
+  }, 60_000)
+
+  it('stop() starts no run after it, signals the one in flight, and waits for it at most its grace', async () => {
+    const started: number[] = []
+    let stopped = false
+    let afterStop = 0
+    let sawAbort = false
+    const { team } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        timeout: '30s',
+        run: async ({ signal }) => {
+          if (stopped) afterStop += 1
+          started.push(1)
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+          sawAbort = true
+          // A run that ignores its signal is waited for only the grace.
+          await new Promise(() => {})
+        },
+      },
+    })
+    await team.deliver()
+    for (let i = 0; i < 20; i++) await team.post({ channel: `work/t${i}`, text: `t${i}` })
+    const host = team.start({ log: () => {}, grace: 200 })
+    await vi.waitFor(() => expect(started.length).toBe(1))
+    const began = Date.now()
+    host.stop()
+    stopped = true
+    await host.done
+    expect([afterStop, sawAbort, started.length]).toEqual([0, true, 1])
+    expect(Date.now() - began).toBeLessThan(2000)
+  })
+
+  it('stop() then start() again, before the first host is done, is a new host', async () => {
+    let release = () => {}
+    const { team } = watched({ lead: { tail: { channel: 'work/' }, run: () => new Promise<void>((resolve) => (release = resolve)) } })
+    await team.deliver()
+    await team.post({ channel: 'work/a', text: 'a' })
+    const first = team.start({ log: () => {} })
+    first.stop()
+    const second = team.start({ log: () => {} })
+    expect(second).not.toBe(first)
+    release()
+    second.stop()
+    await Promise.all([first.done, second.done])
+  })
+
+  it('a second start() for the same board with other watchers is refused, naming both; the same watchers share the host', async () => {
+    const dir = tempDir()
+    const one = board({ dir, principal: 'local:user:ada', watch: { a: noting().watch } })
+    const two = board({ dir, principal: 'local:user:ada', watch: { b: noting().watch } })
+    const copy = board({ dir, principal: 'local:user:ada', watch: { a: noting().watch } })
+    const host = one.start({ log: () => {} })
+    expect(one.start()).toBe(host)
+    expect(copy.start()).toBe(host)
+    let thrown: unknown
+    try {
+      two.start()
+    } catch (error) {
+      thrown = error
+    }
+    expect([(thrown as { reason?: string })?.reason, (thrown as Error)?.message]).toEqual(['watch_started', expect.stringMatching(/\(a\); this one declares b/)])
+    host.stop()
+    await host.done
+    for (const team of [one, two, copy]) team.close()
+  })
+
+  it('a watcher with the name of one in watchers.json is refused at start(): they would share a place', async () => {
+    const config = tempDir()
+    writeFileSync(join(config, 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', run: ['true'] }] }))
+    const was = process.env.MUSTER_CONFIG
+    process.env.MUSTER_CONFIG = config
+    try {
+      const { team } = watched({ lead: noting().watch })
+      expect(await reason((async () => team.start({ log: () => {} }))())).toBe('invalid_watch')
+      const other = watched({ other: noting().watch }).team.start({ log: () => {} })
+      other.stop()
+      await other.done
+    } finally {
+      if (was === undefined) delete process.env.MUSTER_CONFIG
+      else process.env.MUSTER_CONFIG = was
+    }
+  })
+})
+
+describe('writes a retry makes', () => {
+  it('a label a retry sets is the one that stays: only writes that make something are keyed', async () => {
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/', root: true },
+        as: 'bot',
+        run: async ({ event, board: me, attempt }) => {
+          await me.label({ id: event.seq, set: { status: attempt === 1 ? 'working' : 'done' } })
+          if (attempt === 1) throw new Error('boom')
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'x' })
+    await team.deliver()
+    time.advance(10 * SECOND)
+    expect((await team.deliver()).delivered).toBe(1)
+    expect((await team.readThread({ id: root.id })).message.labels.status).toBe('done')
+  })
+
+  it('with coalesce, a retry handed a newer event writes its own answer', async () => {
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        as: 'bot',
+        coalesce: '1s',
+        run: async ({ event, board: me, attempt }) => {
+          await me.reply({ to: event.thread!, text: `answering ${event.message?.text}` })
+          if (attempt === 1) throw new Error('boom')
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'q1' })
+    time.advance(2 * SECOND)
+    await team.deliver()
+    await team.reply({ to: root.id, text: 'q2' })
+    time.advance(10 * SECOND)
+    expect((await team.deliver()).delivered).toBe(1)
+    expect(await replies(team, root.id)).toEqual(['answering q1', 'q2', 'answering q2'])
+  })
+
+  it('a write through board.as() inside a run is keyed too: a retry doesn\'t make it twice', async () => {
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/', root: true },
+        as: 'bot',
+        run: async ({ event, board: me, attempt }) => {
+          await me.as('helper').reply({ to: event.seq, text: `from the helper, try ${attempt}` })
+          if (attempt === 1) throw new Error('boom')
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'x' })
+    await team.deliver()
+    time.advance(10 * SECOND)
+    await team.deliver()
+    expect(await replies(team, root.id)).toEqual(['from the helper, try 1'])
+  })
+
+  it("a run can't get round its abort through the backend, nor close the board", async () => {
+    const said: string[] = []
+    const { team } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        timeout: '50ms',
+        run: async ({ event, board: me }) => {
+          await new Promise((resolve) => setTimeout(resolve, 150))
+          await me.backend.post({ principal: 'local:user:ada', profile: null }, { channel: 'work/x', text: 'sneaked' }).catch((error) => said.push((error as { reason: string }).reason))
+          try {
+            me.close()
+          } catch (error) {
+            said.push((error as { reason: string }).reason)
+          }
+          void event
+        },
+      },
+    })
+    await team.deliver()
+    await team.post({ channel: 'work/api', text: 'slow' })
+    await team.deliver()
+    await vi.waitFor(() => expect(said).toEqual(['watch_aborted', 'forbidden']))
+    expect((await team.readChannel({ channel: 'work/x' })).threads).toEqual([])
+  })
+
+  it('a give-up note already written once (a crash before it was recorded) is taken back, not written again, and wakes nothing', async () => {
+    const tries: number[] = []
+    const { team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: ({ event }) => {
+          tries.push(event.seq)
+          throw new Error('always')
+        },
+      },
+    })
+    await team.deliver()
+    const root = await team.post({ channel: 'work/api', text: 'cannot be delivered' })
+    // The note a host wrote just before it died, saying something else than this host would.
+    await team.reply({ to: root.id, text: 'watcher "lead" couldn\'t deliver a wake-up after 5 tries (its host stopped during the last try).', noSync: true, idempotencyKey: `watch:lead:${root.id}:gave-up`, idempotencyMatch: 'shape' })
+    for (let i = 0; i < 12; i++) {
+      await team.deliver()
+      time.advance(10 * MIN)
+    }
+    expect(await replies(team, root.id)).toHaveLength(1)
+    // Five tries at the root; its note, matched to the one already there, never woke it.
+    expect(tries).toEqual(Array(DELIVERY_ATTEMPTS).fill(root.id))
+  })
+})
+
+describe('the lease fences what a host records', () => {
+  const steal = async (team: Board, time: ReturnType<typeof clock>) => {
+    // This host's lease lapses, and another host takes it.
+    time.advance(31 * SECOND)
+    expect(await team.backend.leases!.take({ name: 'watch:lead', holder: 'other-host', ttl: 30 * SECOND })).toMatchObject({ held: true })
+  }
+
+  it('a run that ends after its host lost the lease is not recorded: the next holder delivers it again', async () => {
+    let runs = 0
+    let team!: Board
+    let time!: ReturnType<typeof clock>
+    ;({ team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: async () => {
+          runs += 1
+          if (runs === 1) await steal(team, time)
+        },
+      },
+    }))
+    await team.deliver()
+    await team.post({ channel: 'work/api', text: 'a' })
+    expect(await team.deliver()).toMatchObject({ delivered: 0 })
+    time.advance(31 * SECOND)
+    expect(await team.deliver()).toMatchObject({ delivered: 1 })
+    expect(runs).toBe(2)
+  })
+
+  it('a host that lost the lease mid-pass starts no other run, and writes no note', async () => {
+    const ran: string[] = []
+    let team!: Board
+    let time!: ReturnType<typeof clock>
+    let stealOn = -1
+    ;({ team, time } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: async ({ event, attempt }) => {
+          ran.push(`${event.message?.text} ${attempt}`)
+          if (event.message?.text === 'a' && attempt === stealOn) await steal(team, time)
+          if (event.message?.text === 'a') throw new Error('a fails')
+        },
+      },
+    }))
+    await team.deliver()
+    const a = await team.post({ channel: 'work/a', text: 'a' })
+    await team.post({ channel: 'work/b', text: 'b' })
+    stealOn = 1
+    await team.deliver()
+    expect(ran).toEqual(['a 1'])
+    // The last try loses the lease too: no note.
+    for (let attempt = 2; attempt <= DELIVERY_ATTEMPTS; attempt++) {
+      time.advance(31 * SECOND + 10 * MIN)
+      stealOn = DELIVERY_ATTEMPTS
+      await team.deliver()
+    }
+    expect(await replies(team, a.id)).toEqual([])
+  })
+
+  it('every record a host makes checks it still holds the lease: begin, finish and advance refuse a host that lost it', async () => {
+    const { team } = watched({ lead: noting().watch })
+    await team.deliver()
+    const store = team.backend.deliveries!
+    const caller = { principal: 'local:user:ada', profile: null }
+    const stale = { name: 'watch:lead', holder: 'gone', epoch: 1 }
+    const posted = await team.post({ channel: 'work/a', text: 'a' })
+    expect(await store.begin({ watcher: 'lead', seq: posted.id, lane: String(posted.id), fence: stale })).toEqual({ held: false })
+    expect(await store.finish({ watcher: 'lead', seqs: [posted.id], fence: stale })).toEqual({ held: false })
+    const before = await team.cursorGet('watch:lead')
+    expect(await store.advance(caller, { watcher: 'lead', to: posted.id, fence: stale })).toEqual({ held: false })
+    expect(await team.cursorGet('watch:lead')).toBe(before)
+    expect((await store.read({ watcher: 'lead', after: 0 })).rows).toEqual([])
+  })
+
+  it('a renewal that finds the lease taken signals the run in flight at once, and its writes are refused', async () => {
+    const seen: string[] = []
+    const { team } = watched({
+      lead: {
+        tail: { channel: 'work/' },
+        run: async ({ event, board: me, signal }) => {
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+          seen.push('aborted')
+          await me.reply({ to: event.seq, text: 'too late' }).catch((error) => seen.push((error as { reason: string }).reason))
+        },
+      },
+    })
+    await team.deliver()
+    const host = team.start({ log: () => {}, lease: { ttl: 2000, every: 100 } })
+    const root = await team.post({ channel: 'work/api', text: 'x' })
+    const leases = team.backend.leases!
+    await vi.waitFor(async () => expect((await team.backend.deliveries!.read({ watcher: 'lead', after: 0 })).rows).toHaveLength(1), { timeout: 5000 })
+    const held = (await leases.holder('watch:lead'))!
+    await leases.release({ name: 'watch:lead', holder: held.holder, epoch: held.epoch })
+    await leases.take({ name: 'watch:lead', holder: 'other-host', ttl: 60_000 })
+    await vi.waitFor(() => expect(seen).toEqual(['aborted', 'watch_aborted']), { timeout: 3000 })
+    expect(await replies(team, root.id)).toEqual([])
+    host.stop()
+    await host.done
+  })
 })

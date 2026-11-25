@@ -25,15 +25,16 @@ versions are affected.
   own: a failed run is tried again later without holding up other threads,
   tries are counted in the board's file so a restart or a crash never
   delivers a recorded event twice, and after 5 tries the watcher says so once
-  on the thread. A watcher whose runs keep failing is slowed, up to 10
-  minutes. A run has a `timeout` (60 seconds unless given) and a `signal`;
+  on the thread. Each thread backs off on its own, so a failing thread never
+  holds up a new one. A run has a `timeout` (60 seconds unless given) and a `signal`;
   past it the run is aborted and its writes refused. Its writes are keyed by
   the event, so a try after a throw doesn't write twice. `coalesce` gathers a
   thread's burst into one run, and the `event` a run gets is what
   `mu tail --json` prints. `command(argv, { env, gate })` is a `run` that
   wakes a command the way `watchers.json` does: a clean environment with a
-  pointer to the event and the board, never its text, and its process group
-  stopped at the timeout. `await team.deliver()` runs them once, for tests. The watchers in
+  pointer to the event and the board, never its text. The run is over when
+  the command exits, so an agent it starts in the background lives on; until
+  then its process group is stopped at the timeout or the host's `stop()`. `await team.deliver()` runs them once, for tests. The watchers in
   `watchers.json` work as before.
 
 - `--root` on `mu tail` and `mu wait`, and `root: true` in a filter: only what

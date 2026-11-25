@@ -32,7 +32,7 @@ export const holderId = () => `${hostname().replace(/[^\x21-\x7e]/g, '-').slice(
 export async function holdLease(
   leases: Leases,
   name: string,
-  options: { ttl?: number; every?: number; wait?: number; sleep: (ms: number) => Promise<void>; stop: AbortSignal; holder?: string },
+  options: { ttl?: number; every?: number; wait?: number; sleep: (ms: number) => Promise<void>; stop: AbortSignal; holder?: string; onLost?: () => void },
 ): Promise<Held | null> {
   const ttl = options.ttl ?? LEASE_TTL
   const every = options.every ?? LEASE_EVERY
@@ -44,7 +44,7 @@ export async function holdLease(
   let seen: { holder: string; epoch: number; expires: number } | null = null
   for (let attempt = 0; ; attempt++) {
     const taken = await leases.take({ name, holder, ttl })
-    if (taken.held) return heartbeat(leases, name, holder, taken.epoch, ttl, every)
+    if (taken.held) return heartbeat(leases, name, holder, taken.epoch, ttl, every, options.onLost)
     if (seen && (seen.holder !== taken.holder || seen.epoch !== taken.epoch || seen.expires !== taken.expires)) return null
     seen = { holder: taken.holder, epoch: taken.epoch, expires: taken.expires }
     if (attempt >= tries || options.stop.aborted) return null
@@ -53,14 +53,18 @@ export async function holdLease(
   }
 }
 
-function heartbeat(leases: Leases, name: string, holder: string, epoch: number, ttl: number, every: number): Held {
+function heartbeat(leases: Leases, name: string, holder: string, epoch: number, ttl: number, every: number, onLost?: () => void): Held {
   let lost = false
   let beating: Promise<unknown> = Promise.resolve()
   const timer = setInterval(() => {
     beating = leases
       .renew({ name, holder, epoch, ttl })
       .then((renewed) => {
-        if (!renewed.held) lost = true
+        if (!renewed.held && !lost) {
+          lost = true
+          // Told at once, so what the lease guards can stop mid-way rather than at its next look.
+          onLost?.()
+        }
       })
       // A renewal that fails (a busy board) is tried at the next beat. Only an answer that someone else
       // has it now means lost: stopping on an error would leave the board with no ticker at all.

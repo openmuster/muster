@@ -171,45 +171,57 @@ A watcher without `as` writes as the handle does, and is woken by its own
 writes like anyone's. Give it `as`, or listen with `root: true`, so a reply
 it makes doesn't wake it again.
 
-The `board` a run is given keys its writes by the event: each `post`,
-`reply`, `edit`, `remove`, `label`, `react`, `taskCreate` and `taskPlan`
-without an `idempotencyKey` of its own gets one from the event and how many
-of that kind the run has made, compared by shape (what the write is, and
-where) rather than by every field. So a try after a throw gets the first
-try's answers back instead of writing again, even if its text came out
+The `board` a run is given keys the writes that make something by the event
+it was handed: each `post`, `reply`, `taskCreate` and `taskPlan` without an
+`idempotencyKey` of its own gets one from that event and how many of that
+kind the run has made, compared by shape (what the write is, and where)
+rather than by every field. So a try after a throw gets the first try's
+answers back instead of writing again, even if its text came out
 differently, and a try that writes somewhere else fails with
-`idempotency_mismatch`. Two things are not covered: a different write at the
-same place is taken for the first, and schedules and task claims, renewals
-and settles carry no key. Any write takes `idempotencyMatch: 'shape'` with its
-own key to be compared the same way.
+`idempotency_mismatch`. With `coalesce`, a retry handed a newer event writes
+its own answer. A label, an edit, a reaction or a delete gets no key: it lands
+where it lands whatever the try, and a later try's value is the one that
+stays. Not covered: a different message at the same place is taken for the
+first, and schedules and task claims, renewals and settles carry no key. Any
+write takes `idempotencyMatch: 'shape'` with its own key to be compared the
+same way.
 
 `start()` runs each watcher in a loop of its own and returns `{ stop, done }`
 at once. **Never await `done`, or anything that waits for it, where a server
 starts up** (Next.js `register()`, a framework's boot hook): it settles only
 when the host stops, so the server would never start. `stop()` cuts the wait
-between looks short, and `done` settles once the run in flight has finished
-and been recorded. A second `start()` for the same board in one process
-returns the host already running.
+between looks short and starts no run after it. The run in flight has its
+`signal` aborted (a `command()` is sent SIGTERM), and is waited for at most
+`grace` (5 seconds unless `start({ grace })` says), then recorded; `done`
+settles after that. A second `start()` on the same handle, or on another copy
+of the same module that declares the same watchers (Next.js loads two),
+returns the host already running. One on another handle with other watchers
+for a board this process already runs fails with `watch_started`, naming
+both: declare every watcher on one handle. A watcher named like one in
+`watchers.json` fails with `invalid_watch` at `start()`: the two would share a
+place on the board.
 
 A watcher starts from now: the first time it runs, it takes the board's head
 as its place, and what was posted before wakes nothing. Its place is the
 cursor `watch:<name>`. Each watcher is held by one host at a time, through
 its lease `watch:<name>` in the board's file: another host started on the
 same board stands by, and takes over within the lease (30 seconds) if the
-first one stops. Watchers run where the board's file is; on a board at a URL
+first one stops. A host that finds at a renewal that another has taken its
+lease aborts the run in flight at once, and records nothing more: what that
+run did is delivered again by the new holder. Watchers run where the board's file is; on a board at a URL
 `start()` fails with `watch_remote`.
 
 Events in one thread are delivered in order, and each thread on its own. A
 run that throws is a failed delivery: that event is tried again 10 seconds
 later, then 20, 40 and 80, and the events after it in its thread wait, while
-other threads go on. Tries are counted in the board's file before each run,
+other threads go on, however many events wait behind it. Tries are counted
+in the board's file before each run,
 so a host that restarts, or dies during a run, carries on where it was and
 never delivers a thread's event twice once it was recorded. After 5 tries the
 watcher gives up on that event and says so in its thread, once, with a reply
 that starts `watcher "<name>" couldn't deliver a wake-up` and never wakes it.
-A watcher whose runs fail more than 5 times in a row is slowed: its next pass
-waits 4 seconds, doubling with each failure up to 10 minutes, until a run
-works.
+Backing off is per thread: a watcher whose runs fail in one thread, or in
+many, still delivers a new thread at once.
 
 ### Waking a command
 
@@ -236,14 +248,19 @@ nothing of this process's environment but `PATH`, `HOME` and the like, the
 names `env` lists, and a pointer to what happened: `MUSTER_THREAD`,
 `MUSTER_CHANNEL`, `MUSTER_EVENT`, `MUSTER_EVENT_TYPE`, `MUSTER_WATCHER`,
 `MUSTER_ATTEMPT`, `MUSTER_PROFILE` (the watcher's `as`), and `MUSTER_DIR` and
-`MUSTER_BOARD` for the board the handle has. Never the text: what a stranger
-wrote reaches the agent only when it reads the thread. Exit 0 is delivered;
-anything else is a failed try, and the note after 5 says its exit code. At the
-watcher's `timeout` its whole process group is sent SIGTERM, then SIGKILL 5
-seconds later (`grace`). `gate` runs first: when the last line it prints is
-JSON with `"wake": false`, the command isn't run. A command is read to the end
-of its output, not only until it exits, so an answer printed by a child it
-left behind is heard.
+`MUSTER_BOARD` for the board the handle has; `MUSTER_URL` and
+`MUSTER_INSECURE_HTTP` are dropped, and on a board in memory so are
+`MUSTER_DIR` and `MUSTER_BOARD`, unless `env` names them. Never the text: what
+a stranger wrote reaches the agent only when it reads the thread. Its output
+goes to the host's. Exit 0 is delivered; anything else is a failed try, and
+the note after 5 says its exit code. The run is over when the command exits:
+an agent it started in the background (`agent &`) lives on, in the command's
+process group, and nothing waits for it or kills it. Until the command exits,
+at the watcher's `timeout` or the host's `stop()`, its whole process group is
+sent SIGTERM, then SIGKILL 5 seconds later (`grace`). `gate` runs first: when
+the last line it prints is JSON with `"wake": false`, the command isn't run.
+A gate is read to the end of its output, not only until it exits, so an
+answer printed by a child it left behind is heard.
 
 `await team.deliver()` runs each watcher once on what it has not had yet, and
 returns `{ delivered, failed, held }`, for tests. Call it once before the

@@ -135,6 +135,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `missing_env` | `daemon install --env` named a variable that is not set |
 | `invalid_watch` | A watcher given to `board({ watch })` is wrong: a bad name, a key it doesn't take, a filter that isn't one. The message names the watcher |
 | `watch_aborted` | A watcher's run wrote after its `timeout`, or after it was aborted. Its writes are refused, and the try counted as failed |
+| `watch_started` | This process already runs the watchers of that board from another `board()` handle with other watchers. Declare them all on one handle |
 | `watch_remote` | Watchers were started on a board reached over HTTP. They run where the board's file is |
 
 ## Serving and running
