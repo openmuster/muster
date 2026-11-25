@@ -26,17 +26,33 @@ function setup(options: { mu?: string } = {}) {
   writeFileSync(join(bin, 'mu'), options.mu ?? `#!/bin/sh\nexec ${process.execPath} ${BIN} "$@"\n`)
   chmodSync(join(bin, 'mu'), 0o755)
   const sent: { query: string; variables: any }[] = []
+  // What Linear's API lists on catching up: issues and comments changed since a time, all on one page.
+  const listed = { issues: [] as Record<string, any>[], comments: [] as Record<string, any>[] }
   let made = 9000
   const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}'))
+    for (const field of ['issues', 'comments'] as const) {
+      if (!String(body.query).includes(`${field}(`)) continue
+      const { gt, lt } = body.variables.filter.updatedAt
+      const nodes = listed[field].filter((node) => node.updatedAt > gt && (lt === undefined || node.updatedAt < lt))
+      return Response.json({ data: { [field]: { nodes, pageInfo: { hasNextPage: false, hasPreviousPage: false } } } })
+    }
     sent.push(body)
     made += 1
     if (String(body.query).includes('teams(')) return Response.json({ data: { teams: { nodes: [{ id: 'team-eng' }] } } })
     if (String(body.query).includes('issueCreate')) return Response.json({ data: { issueCreate: { success: true, issue: { id: `li-${made}`, identifier: `ENG-${made}`, state: { name: 'Todo' } } } } })
     return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${made}` } } } })
   }) as typeof fetch
-  const backend = file({ dir: join(dir, 'board'), sync: { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'cards' } }) }, fetch: fetcher })
-  const team = board({ backend })
+  const open = () => file({ dir: join(dir, 'board'), sync: { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'cards' } }) }, fetch: fetcher })
+  let backend = open()
+  let team = board({ backend })
+  /** The daemon stopped and started again: a new process, which catches up on what Linear changed meanwhile. */
+  const restart = () => {
+    backend.close()
+    backend = open()
+    team = board({ backend })
+    return team
+  }
   const lin = (payload: unknown) => {
     const body = JSON.stringify(payload)
     return backend.syncReceive('lin', { headers: { 'linear-signature': sign(body) }, body })
@@ -85,7 +101,7 @@ function setup(options: { mu?: string } = {}) {
     return tickOnce(team, watchers, states, { now: () => now, spawn: run }, undefined, { list: workflows, deps: runs })
   }
   const requests = async () => (await team.events({ after: 0, filter: { types: ['workflow.requested'] }, limit: 1000 })).events
-  return { dir, bin, team, lin, sent, tick, ran, workers, requests, daemonEnv }
+  return { dir, bin, team, lin, sent, tick, ran, workers, requests, daemonEnv, listed, restart }
 }
 
 const issue = (more: Record<string, unknown> = {}) => ({ id: 'iss-1', identifier: 'ENG-42', title: 'Fix the login redirect', description: 'It loops.', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' }, ...more })
@@ -158,4 +174,107 @@ describe('the queue template: config', () => {
     expect(text).toContain('"env:LINEAR_WEBHOOK_SECRET"')
     expect(text).toContain('"env:LINEAR_API_KEY"')
   })
+})
+
+describe('the queue template: a card starts a run', () => {
+  const comment = (id: string, body: string) => ({ type: 'Comment', action: 'create', data: { id, body, issueId: 'iss-1', issue: { id: 'iss-1', team: { key: 'ENG' } }, userId: 'u-nico' } })
+  const labelled = (names: string[], at: string) => ({ type: 'Issue', action: 'update', data: issue({ labels: names.map((name) => ({ name })), labelIds: names, updatedAt: at }) })
+
+  it('starts one run per labelled card, however often the card wakes the watcher after', async () => {
+    const { lin, tick, requests, ran } = setup()
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
+    await lin({ type: 'Issue', action: 'create', data: issue({ id: 'iss-2', identifier: 'ENG-43', labels: [{ name: 'agent' }, { name: 'Bug' }] }) })
+    await tick()
+    expect(await requests()).toHaveLength(2)
+    // The daemon's "started" replies, and a comment, wake the watcher again: the label says each card has started.
+    await lin(comment('c-1', 'also on Safari'))
+    await tick()
+    await tick()
+    expect(await requests()).toHaveLength(2)
+    expect(ran.length).toBeGreaterThan(2)
+    expect(ran.every((each) => each.code === 0)).toBe(true)
+  }, 30_000)
+
+  it('starts nothing for a card without the label, and starts it once the label is added', async () => {
+    const { team, lin, tick, requests } = setup()
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Bug' }] }) })
+    await lin(comment('c-1', 'any news?'))
+    await tick()
+    expect(await requests()).toEqual([])
+    expect((await team.readChannel({ channel: 'cards' })).threads[0]!.message.labels.started).toBeUndefined()
+    await lin(labelled(['Bug', 'Agent'], '2026-11-25T10:00:00Z'))
+    await tick()
+    expect(await requests()).toHaveLength(1)
+  }, 30_000)
+
+  it("doesn't start again when the label is taken off and put back, nor for a label taken off before the watcher looked", async () => {
+    const { lin, tick, requests } = setup()
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
+    await tick()
+    await lin(labelled([], '2026-11-25T10:00:00Z'))
+    await tick()
+    await lin(labelled(['Agent'], '2026-11-25T10:01:00Z'))
+    await tick()
+    expect(await requests()).toHaveLength(1)
+    // Another card is labelled, then unlabelled, between two ticks: the watcher wakes for it, as it was labelled before.
+    await lin({ type: 'Issue', action: 'create', data: issue({ id: 'iss-2', identifier: 'ENG-43' }) })
+    await tick()
+    await lin({ ...labelled(['Agent'], '2026-11-25T10:02:00Z'), data: { ...labelled(['Agent'], '2026-11-25T10:02:00Z').data, id: 'iss-2' } })
+    await lin({ ...labelled([], '2026-11-25T10:03:00Z'), data: { ...labelled([], '2026-11-25T10:03:00Z').data, id: 'iss-2' } })
+    await tick()
+    expect(await requests()).toHaveLength(1)
+  }, 30_000)
+
+  it('starts a card labelled while the daemon was down, once catching up reads it, new or already on the board', async () => {
+    const { lin, tick, requests, listed, restart } = setup()
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue() })
+    await tick()
+    expect(await requests()).toEqual([])
+    const later = new Date(Date.now() + 60_000).toISOString()
+    const node = (id: string, title: string) => ({ id, identifier: `ENG-${id.slice(4)}`, title, description: '', creator: { id: 'u-nico' }, team: { key: 'ENG' }, state: { name: 'Todo' }, labels: { nodes: [{ name: 'Agent' }] }, updatedAt: later })
+    listed.issues = [node('iss-1', 'Fix the login redirect'), node('iss-2', 'Opened while the daemon was down')]
+    const team = restart()
+    await tick()
+    await tick()
+    const asked = await requests()
+    expect(asked).toHaveLength(2)
+    const cards = (await team.readChannel({ channel: 'cards' })).threads.map((thread) => thread.message)
+    expect(asked.map((each) => each.thread).sort()).toEqual(cards.map((card) => card.id).sort())
+  }, 30_000)
+
+  it('starts a card posted by hand with the label and --no-sync, and sends nothing of it to Linear', async () => {
+    const { dir, tick, requests, sent, daemonEnv } = setup()
+    await tick()
+    const posted = await new Promise<number | null>((done) =>
+      spawn('mu', ['post', 'cards', 'Make the footer year current', '--label', 'tag.agent=agent', '--no-sync'], { env: watcherEnv({}, [], daemonEnv), cwd: dir, stdio: 'ignore' }).on('exit', done),
+    )
+    expect(posted).toBe(0)
+    await tick()
+    await tick()
+    expect(await requests()).toHaveLength(1)
+    expect(sent).toEqual([])
+  }, 30_000)
+
+  it('leaves the label and says so once, off Linear, when the request fails', async () => {
+    const mu = `#!/bin/sh\nif [ "$1" = workflow ]; then echo 'error: the board is busy' >&2; exit 1; fi\nexec ${process.execPath} ${BIN} "$@"\n`
+    const { team, lin, tick, requests, ran, sent } = setup({ mu })
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
+    await tick()
+    await lin(comment('c-1', 'ping'))
+    await tick()
+    expect(await requests()).toEqual([])
+    expect(ran.every((each) => each.code === 0)).toBe(true)
+    const thread = await team.readThread({ id: (await team.readChannel({ channel: 'cards' })).threads[0]!.message.id })
+    expect(thread.message.labels.started).toBe('yes')
+    const said = thread.replies.filter((reply) => reply.by.profile === 'intake')
+    expect(said).toHaveLength(1)
+    expect(said[0]!.noSync).toBe(true)
+    expect(said[0]!.text).toContain(`mu label ${thread.message.id} --unset started`)
+    expect(sent.filter((each) => each.query.includes('commentCreate'))).toEqual([])
+  }, 30_000)
 })
