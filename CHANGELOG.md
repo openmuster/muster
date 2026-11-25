@@ -3,7 +3,7 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.3.1-alpha.1
 
 ### Added
 
