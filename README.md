@@ -98,6 +98,10 @@ agent died goes back to the queue on its own.
   run against the live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
+- **A card queue** to copy from `templates/queue`: a Linear issue labelled
+  `agent` gets a spec, a pull request and a review from agents in Vercel
+  sandboxes, and you answer only what they ask. Unreleased; covered by tests,
+  not run live ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
 - **Skills** that teach an agent the board: `mu skills install`.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
   HTTP from a served board.
