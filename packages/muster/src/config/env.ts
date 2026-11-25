@@ -31,5 +31,5 @@ export const isEnv = (value: unknown): value is Env => typeof value === 'object'
 /** The variable an `env()` names. */
 export const nameOf = (value: Env) => value[ENV]
 
-/** Text that looks like a secret named the way `sync.json` or `env()` names one, written as a string by mistake. */
+/** Text that looks like a secret named the way `env()` (or the old `"env:NAME"`) names one, written as a string by mistake. */
 export const looksNamed = (value: string) => /^env[(:]/.test(value)

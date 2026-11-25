@@ -2,7 +2,7 @@ import { Failure } from '../failure.ts'
 import { labelFilter } from '../model.ts'
 import type { Filter } from '../core/reads.ts'
 
-/** A watcher as a check needs it, from `watchers.json` or declared in a board module: its name, filter and profile. */
+/** A watcher as a check needs it, declared in a board module: its name, filter and profile. */
 export type Checkable = { name: string; tail: Filter; as?: string | null }
 
 /** What `mu daemon check` writes so a watcher's filter matches it: a new thread, or a reply in the one it watches. */

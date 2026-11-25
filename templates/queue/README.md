@@ -27,10 +27,10 @@ mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDB
 
 Point Linear's webhook at `https://<your host>/api/board/webhooks/lin`.
 `board.ts` names the scripts beside it by their full paths, wherever it is
-run from. If `~/.config/muster/` has a `sync.json` or a `watchers.json`
-from an earlier copy of this template, move anything else in them into a
-module and delete them: `mu serve` refuses a module with a sync beside a
-`sync.json`, and a watcher in `watchers.json` named like one in the module.
+run from. If `~/.config/muster/` has a `watchers.json`, `sync.json` or
+`hooks.json` from an earlier copy of this template, move anything else in
+them into a board module and delete them: those files are no longer read,
+and `mu serve` refuses to start while one is there.
 
 A card posted by hand needs `--no-sync`, or it opens a Linear issue without
 the label, whose next update takes the label off the card:

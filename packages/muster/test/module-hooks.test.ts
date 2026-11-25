@@ -2,7 +2,7 @@
 // the host that start()s the module (mu daemon run, mu serve, or your own process) under one `hooks` lease.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -14,7 +14,7 @@ import { BIN, cli, tempDir, type Ran } from './helpers.ts'
 const KEY = 'a-secret-of-thirty-two-characters'
 const PACKAGE = realpathSync(fileURLToPath(new URL('..', import.meta.url)))
 
-// start() reads hooks.json and watchers.json from the config folder: this file's own, never the real one.
+// The CLI reads workflows.json from the config folder: this file's own, never the real one.
 const CONFIG = tempDir()
 beforeAll(() => {
   process.env.MUSTER_CONFIG = CONFIG
@@ -90,7 +90,7 @@ const hooksOf = async (dir: string, module: string) => (JSON.parse((await cli(di
 const post = async (dir: string, channel: string, text: string) => (JSON.parse((await cli(dir, ['post', channel, text, '--json'])).stdout) as { message: { id: number } }).message.id
 
 describe('board({ hooks })', () => {
-  it('declares hooks shaped like hooks.json, keeps only the name of the secret, and reads nothing until start()', async () => {
+  it('declares hooks, keeps only the name of the secret, and reads nothing until start()', async () => {
     const team = board({ memory: true, hooks: [{ name: 'audit', url: 'https://hooks.example.com/in', secret: env('AUDIT_SECRET'), tail: { channel: 'work/' } }] })
     expect(team.hooks).toEqual([{ name: 'audit', url: 'https://hooks.example.com/in', secret: 'AUDIT_SECRET', tail: { channel: 'work/' }, body: 'pointer' }])
     expect(Object.isFrozen(team.hooks)).toBe(true)
@@ -123,21 +123,17 @@ describe('board({ hooks })', () => {
     expect(refused([{ ...base, secret: 'env:AUDIT_SECRET' }])).toMatch(/^invalid_hook: .*secret: env\('NAME'\)/)
     expect(refused([{ ...base, run: () => {} }])).toMatch(/^invalid_hook: Hook "audit" in board\(\{ hooks \}\) has "run", which a hook doesn't take/)
     expect(refused([{ ...base, url: 'http://hooks.example.com/in' }])).toMatch(/^invalid_hook: .*needs an https URL/)
+    expect(refused([{ ...base, url: 'ftp://hooks.example.com/in' }])).toMatch(/^invalid_hook: .*needs an https URL/)
+    expect(refused([{ ...base, url: 'https://ada:pw@hooks.example.com/in' }])).toMatch(/^invalid_hook: .*password in its URL/)
+    expect(refused([{ ...base, url: 'http://127.0.0.1:8787/in' }, { ...base, name: 'local', url: 'http://localhost:8787/in' }])).toBe('not refused')
+    expect(refused([{ ...base, url: undefined }])).toMatch(/^invalid_hook: Hook "audit" .*needs a "url"/)
+    expect(refused([{ ...base, name: 'Audit!' }])).toMatch(/^invalid_hook: Hook 1 .*needs a "name"/)
+    expect(refused([{ ...base, body: 'everything' }])).toMatch(/^invalid_hook: .*"pointer" or "event"/)
+    expect(refused([{ ...base, tail: { kinds: '!backlog' } }])).toMatch(/^invalid_hook: Hook "audit" has "kinds"/)
     expect(refused([{ ...base, tail: { chanel: 'work/' } }])).toMatch(/^invalid_hook: Hook "audit" has "chanel" in its tail/)
     expect(refused([base, base])).toBe('invalid_hook: Two hooks in board({ hooks }) are named "audit".')
     expect(refused([base], { audit: { tail: {}, run: () => {} } })).toBe('invalid_hook: A watcher and a hook in board({ hooks }) are both named "audit".')
     expect(() => env('not a name')).toThrow(`env("not a name") doesn't name an environment variable.`)
-  })
-
-  it('start() refuses hooks in code beside a hooks.json: one place for them', () => {
-    writeFileSync(join(CONFIG, 'hooks.json'), '{ "hooks": [] }')
-    const team = board({ memory: true, hooks: [{ name: 'audit', url: 'https://hooks.example.com/in', secret: env('AUDIT_SECRET') }] })
-    try {
-      expect(() => team.start()).toThrow(`board({ hooks }) declares outgoing webhooks, and ${join(CONFIG, 'hooks.json')} is there too.`)
-    } finally {
-      rmSync(join(CONFIG, 'hooks.json'))
-      team.close()
-    }
   })
 })
 
@@ -182,9 +178,15 @@ describe('module hooks from the command line', () => {
     await until(async () => (await hooksOf(dir, module))[0]?.lag === 0)
     const sent = await post(dir, 'work/api', 'over serve')
     await until(() => there.got.length >= 1)
+    // What it delivered isn't news on a server's error output.
+    expect([there.got.map((each) => [each.delivery, each.signed]), stderr]).toEqual([[[`audit.${sent}`, true]], ''])
+    // What a receiver refused is.
+    there.answers.push(500)
+    const refused = await post(dir, 'work/api', 'refused once')
+    await until(() => stderr.includes('failed'))
     child.kill('SIGTERM')
     await new Promise((resolve) => child.on('exit', resolve))
-    expect([there.got.map((each) => [each.delivery, each.signed]), stderr]).toEqual([[[`audit.${sent}`, true]], ''])
+    expect(stderr).toBe(`failed    hook audit  at ${refused}  HTTP 500\n`)
   }, 60_000)
 
   it('the module loads without the secret, and mu daemon run says which variable is missing and exits 0', async () => {
@@ -195,19 +197,13 @@ describe('module hooks from the command line', () => {
     expect(ended.stderr).toContain(`error: AUDIT_SECRET isn't set, and hook "audit" in board({ hooks }) signs with it.`)
   }, 30_000)
 
-  it('refuses a module with hooks beside a hooks.json, and a module hook named like a watcher in watchers.json', async () => {
+  it('refuses a module hook named like a workflow in workflows.json: mu daemon run says so and exits 0, and check refuses', async () => {
     const { dir, module } = folder('https://hooks.example.com/in')
-    writeFileSync(join(dir, 'config', 'hooks.json'), JSON.stringify({ hooks: [{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'env:AUDIT_SECRET' }] }))
-    const both = await daemon(dir, module).done
-    expect(both.code).toBe(0)
-    expect(both.stderr).toContain(`error: ${module} declares outgoing webhooks, and ${join(dir, 'config', 'hooks.json')} is there too.`)
-
-    const clash = folder('https://hooks.example.com/in')
-    writeFileSync(join(clash.dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'audit', run: ['true'] }] }))
-    const ended = await daemon(clash.dir, clash.module).done
+    writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [{ name: 'audit', description: 'd', who: ['ada'], channels: ['general'], steps: [{ key: 'a', text: 'A' }], workers: { count: 1, agent: 'claude', as: 'worker', cwd: '/srv/app' } }] }))
+    const ended = await daemon(dir, module).done
     expect(ended.code).toBe(0)
-    expect(ended.stderr).toContain(`error: A hook in ${clash.module} and a watcher in ${join(clash.dir, 'config', 'watchers.json')} are both named "audit".`)
-    const checked = await cli(clash.dir, ['daemon', 'check', 'audit', '--json', '--module', clash.module], { env: { AUDIT_SECRET: KEY } })
+    expect(ended.stderr).toContain(`error: A hook in ${module} and a workflow in ${join(dir, 'config', 'workflows.json')} are both named "audit".`)
+    const checked = await cli(dir, ['daemon', 'check', 'audit', '--json', '--module', module], { env: { AUDIT_SECRET: KEY } })
     expect(JSON.parse(checked.stderr).error.reason).toBe('invalid_config')
   }, 30_000)
 
@@ -218,6 +214,10 @@ describe('module hooks from the command line', () => {
     expect([checked.code, checked.stderr]).toEqual([0, ''])
     expect(checked.stdout).toMatch(/^delivered {2}audit {2}HTTP 200 {2}in \d+ms\n$/)
     expect(there.got.map((each) => [each.signed, each.event.type])).toEqual([[true, 'ping']])
+    // A receiver that answers and refuses is a check that failed, with what it answered.
+    there.answers.push(401)
+    const refused = await cli(dir, ['daemon', 'check', 'audit', '--json', '--module', module], { env: { AUDIT_SECRET: KEY } })
+    expect([refused.code, JSON.parse(refused.stderr).error]).toEqual([1, expect.objectContaining({ reason: 'hook_failed', data: { hook: 'audit', status: 401 } })])
     const unset = await cli(dir, ['daemon', 'check', 'audit', '--json', '--module', module])
     expect(JSON.parse(unset.stderr).error).toMatchObject({ reason: 'invalid_config', message: expect.stringContaining('AUDIT_SECRET') })
   }, 30_000)

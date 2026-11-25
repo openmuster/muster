@@ -21,10 +21,20 @@ A board is used in one of two modes. `mu whoami` prints which.
   channel pattern to permissions (`read`, `post`, `react`, `label`, `manage`).
   Use it for agents you don't trust with the file, and for other machines.
 
-Nothing executable is stored in a board. Watcher commands, outgoing webhook
-URLs, sync mappings and secrets live in operator config (`~/.config/muster/`), written only by the
-person, by hand or with `mu daemon install`. A row in the database can
-never make the daemon run a command or call a URL.
+Nothing executable is stored in a board. Watchers, sync mappings and outgoing
+webhook URLs are code the person writes: a board module, a TypeScript file
+outside any board (`~/.config/muster/board.ts`, or the file `--module` or
+`MUSTER_MODULE` names), which exports `board({ watch, sync, hooks })`.
+Secrets are named in it with `env()` and read from the environment when a
+host starts, never written there. A row in the database can never make a
+host run a command or call a URL: an event says what happened, and the
+module decides what to do about it.
+
+A watcher's `run` is the module's own code, in the host's process: it holds
+that process's environment, platform secrets included, and is handed events
+whose text a stranger may have written. Passing them on to an agent is what
+`command()` is for: it starts a process with a clean environment, a pointer
+to the event, and only the variables the watcher names.
 
 ## 2. Layering
 
@@ -264,15 +274,21 @@ Specified as they are built: see `docs/`. Their rules in brief:
   epoch. A process that finds it held waits while it may be lapsing, and
   gives up once it sees the holder renew. Schedules keep a ledger of fired
   slots; after downtime, one catch-up per schedule within half its period.
-  Watchers come from config, wake with a pointer, and advance their cursor only
-  after delivery. Watchers declared in code (`board({ watch })`) run in a loop
-  each, wherever `start()` is called, each under its own lease `watch:<name>`;
+  It sends schedules and starts registered workflows (`workflows.json`).
+- **Watchers** are declared in a board module (`board({ watch })`) and run in
+  a loop each, wherever `start()` is called (`mu daemon run`, `mu serve`, or
+  your own process), each under its own lease `watch:<name>`;
   what each has delivered above its cursor, and how many tries an event has
   had, are rows in the board's file, so a thread's events go in order, threads
   don't wait on each other, and a restart never delivers a recorded event
-  twice. Until the operator's JSON watchers are retired, both kinds exist. Outgoing webhooks come from config too: one signed POST per
-  event, in order, a pointer unless the config asks for the event, a cursor
-  that moves only past a 2xx, and no redirect followed.
+  twice. A watcher whose runs keep failing, across threads, slows down until
+  one works. The JSON files that held watchers, sync and outgoing webhooks
+  before (`watchers.json`, `sync.json`, `hooks.json`) are not read: one left
+  in the config folder makes `mu daemon run` and `mu serve` refuse to start.
+- **Outgoing webhooks** are declared in the module too (`board({ hooks })`),
+  and sent under one lease, `hooks`: one signed POST per event, in order, a
+  pointer unless the hook asks for the event, a cursor that moves only past a
+  2xx, and no redirect followed.
 - **Serve**: tokens signed with a key that persists across restarts. A
   workload the owner names in config may trade its platform's OIDC token for
   one: the issuer is matched before anything is fetched, the audience comes
@@ -288,9 +304,9 @@ Specified as they are built: see `docs/`. Their rules in brief:
 Built and covered by tests, some of it only against stand-ins (listed further
 down): sections 3 to 7, typed blocks and schemas, files, private
 channels, budgets a board keeps, backups; `mu inbox` and the `for` filter;
-the daemon (schedules, watchers, outgoing webhooks, registered workflows, a
+the daemon and board modules (schedules, watchers, sync and outgoing webhooks declared in code, registered workflows, a
 sleep grace for leases, the LaunchAgent, a restart-storm guard and a slower
-pace for a watcher whose command keeps failing); serve mode with tokens, `mu join`,
+pace for a watcher whose runs keep failing); serve mode with tokens, `mu join`,
 `mu token exchange` for a CI job's OIDC token, MCP over HTTP, a live feed,
 and the `http()` backend, which passes the same suite as `file()`; `mu mcp`;
 the container image; `mu conformance`; the inspector and `mu demo`; `mu run`

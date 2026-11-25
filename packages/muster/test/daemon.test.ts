@@ -3,10 +3,11 @@ import { createServer } from 'node:net'
 import type { AddressInfo } from 'node:net'
 import { basename, dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { FAILING_PAUSE, loadWatchers, runDaemon, tickOnce } from '../src/daemon/daemon.ts'
+import { FAILING_PAUSE, runDaemon } from '../src/daemon/daemon.ts'
 import { plist } from '../src/daemon/launchd.ts'
-import { checkWrite } from '../src/daemon/check.ts'
-import { DELIVERY_ATTEMPTS, SLOWEST, gateSaysNo, type Deps, type Watcher, type WatchState } from '../src/daemon/watchers.ts'
+import { checkWrite, type Checkable } from '../src/daemon/check.ts'
+import { EXAMPLES, PORTING_URL, RETIRED } from '../src/config/retired.ts'
+import { DELIVERY_ATTEMPTS } from '../src/core/deliveries.ts'
 import { RESTART_LIMIT, RESTART_WINDOW, STEADY_AFTER, STOPPED_FOR, begin, ended, guardPath, readGuard, reset, retryAt, steady } from '../src/daemon/guard.ts'
 import { board, file, listen, mint } from '../src/index.ts'
 import { BIN, cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
@@ -111,272 +112,6 @@ describe('schedules', () => {
   })
 })
 
-function harness(watcher: Partial<Watcher> & { run?: string[] }, exits: (command: string[]) => { code: number; stdout?: string } = () => ({ code: 0 })) {
-  const made = memoryBoard()
-  const ran: { command: string[]; env: Record<string, string> }[] = []
-  const deps: Deps = {
-    now: () => made.time.now().getTime(),
-    spawn: async (command, env) => {
-      ran.push({ command, env })
-      const exit = exits(command)
-      return { code: exit.code, stdout: exit.stdout ?? '' }
-    },
-  }
-  const watchers: Watcher[] = [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'], every: 30, ...watcher }]
-  const states = new Map<string, WatchState>()
-  const tick = async () => {
-    made.time.advance(31_000)
-    return (await tickOnce(made.team, watchers, states, deps)).watched.lead!
-  }
-  return { ...made, ran, tick }
-}
-
-describe('routing by label, with the watchers the factory guide gives', () => {
-  // The guide's own watchers.json, so what it tells a reader to write is what is run here.
-  const guide = readFileSync(new URL('../docs/03-guides/03-factory.md', import.meta.url), 'utf8')
-  const documented = JSON.parse([...guide.matchAll(/```json\n([\s\S]*?)```/g)].map((block) => block[1]!).find((block) => block.includes('"router"'))!) as { watchers: Watcher[] }
-
-  /** The agents and gates the guide describes, played by the test: the router labels, a product's agent replies. */
-  function routed(pick: (text: string) => string, watchers: Watcher[] = documented.watchers) {
-    const made = memoryBoard()
-    const { team, time } = made
-    const woke: string[] = []
-    const product = async (thread: string) => (await team.readThread({ id: Number(thread) })).message.labels.product
-    const deps: Deps = {
-      now: () => time.now().getTime(),
-      spawn: async (command, env) => {
-        const script = command[0]!.split('/').at(-1)!
-        const thread = env.MUSTER_THREAD!
-        if (script === 'unlabelled.sh') return { code: 0, stdout: (await product(thread)) === undefined ? '' : '{"wake": false}' }
-        if (script === 'has-product.sh') return { code: 0, stdout: (await product(thread)) === command[1] ? '' : '{"wake": false}' }
-        woke.push(`${env.MUSTER_PROFILE}:${thread}`)
-        if (script === 'route.sh') {
-          const root = (await team.readThread({ id: Number(thread) })).message
-          await team.as(env.MUSTER_PROFILE!).label({ id: root.id, set: { product: pick(root.text) } })
-        } else await team.as(env.MUSTER_PROFILE!).reply({ to: Number(thread), text: `answer from ${command[2]}` })
-        return { code: 0, stdout: '' }
-      },
-    }
-    const states = new Map<string, WatchState>()
-    const tick = async () => {
-      time.advance(31_000)
-      await tickOnce(team, watchers, states, deps)
-    }
-    const replies = async (id: number) => (await team.readThread({ id })).replies.map((reply) => reply.text)
-    return { ...made, woke, tick, replies }
-  }
-  const settle = async (tick: () => Promise<void>) => {
-    for (let i = 0; i < 4; i++) await tick()
-  }
-
-  it('the router labels a question, and only that product answers, once', async () => {
-    const { team, woke, tick, replies } = routed((text) => (text.includes('card') ? 'billing' : 'api'))
-    await tick()
-    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
-    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
-    await settle(tick)
-    expect(await replies(card.id)).toEqual(['answer from billing'])
-    expect(await replies(key.id)).toEqual(['answer from api'])
-    expect(woke).toEqual([`router:${card.id}`, `router:${key.id}`, `billing-bot:${card.id}`, `api-bot:${key.id}`])
-  })
-
-  it('a follow-up wakes the product again and not the router', async () => {
-    const { team, woke, tick, replies } = routed(() => 'billing')
-    await tick()
-    const card = await team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
-    await settle(tick)
-    woke.length = 0
-    await team.as('ada').reply({ to: card.id, text: 'and the invoice address?' })
-    await settle(tick)
-    expect(woke).toEqual([`billing-bot:${card.id}`])
-    expect(await replies(card.id)).toEqual(['answer from billing', 'and the invoice address?', 'answer from billing'])
-  })
-
-  it('product=none wakes nobody and the router is not asked again', async () => {
-    const { team, woke, tick, replies } = routed(() => 'none')
-    await tick()
-    const lunch = await team.as('ada').post({ channel: 'help', text: 'lunch?' })
-    await settle(tick)
-    await team.as('ada').reply({ to: lunch.id, text: 'anyone?' })
-    await settle(tick)
-    expect(woke).toEqual([`router:${lunch.id}`])
-    expect(await replies(lunch.id)).toEqual(['anyone?'])
-  })
-
-  it('a label corrected by hand wakes the new product and leaves the old one asleep', async () => {
-    const { team, woke, tick } = routed(() => 'billing')
-    await tick()
-    const key = await team.as('ada').post({ channel: 'help', text: 'my key is refused' })
-    await settle(tick)
-    woke.length = 0
-    await team.as('ada').label({ id: key.id, set: { product: 'api' } })
-    await settle(tick)
-    expect(woke).toEqual([`api-bot:${key.id}`])
-  })
-
-  it("a product's agent that writes as the router can miss the router's label, where its own profile never does", async () => {
-    // Router last: the label lands after the product's watcher has read past the question, so the label is all it can hear.
-    const routerLast = [...documented.watchers].reverse()
-    const shared = routed(() => 'billing', routerLast.map((watcher) => ({ ...watcher, as: 'router' })))
-    await shared.tick()
-    const missed = await shared.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
-    await settle(shared.tick)
-    expect(shared.woke).toEqual([`router:${missed.id}`])
-    expect(await shared.replies(missed.id)).toEqual([])
-
-    const own = routed(() => 'billing', routerLast)
-    await own.tick()
-    const heard = await own.team.as('ada').post({ channel: 'help', text: 'how do I change my card?' })
-    await settle(own.tick)
-    expect(await own.replies(heard.id)).toEqual(['answer from billing'])
-  })
-})
-
-describe('watchers', () => {
-  it('wakes once per thread with a pointer, never the content, for what happened since it last looked', async () => {
-    const { team, ran, tick } = harness({})
-    await tick()
-    const a = await team.post({ channel: 'work/api', text: 'secret text the wake must not carry' })
-    await team.reply({ to: a.id, text: 'more' })
-    await team.reply({ to: a.id, text: 'and more' })
-    const b = await team.post({ channel: 'work/web', text: 'other thread' })
-    await team.post({ channel: 'elsewhere', text: 'not watched' })
-    const did = await tick()
-    expect(did.woke).toHaveLength(2)
-    expect(ran.map((run) => run.command)).toEqual([['wake', String(a.id)], ['wake', String(b.id)]])
-    expect(ran[0]!.env).toMatchObject({ MUSTER_THREAD: String(a.id), MUSTER_CHANNEL: 'work/api' })
-    expect(JSON.stringify(ran)).not.toContain('secret text')
-    expect((await tick()).woke).toEqual([])
-  })
-
-  it('the watcher the person-in-the-loop guide gives is not woken by work parked as backlog', async () => {
-    // The guide's own watchers.json, read as the daemon reads it.
-    const guide = readFileSync(new URL('../docs/03-guides/11-person-in-the-loop.md', import.meta.url), 'utf8')
-    const path = join(tempDir(), 'watchers.json')
-    writeFileSync(path, [...guide.matchAll(/```json\n([\s\S]*?)```/g)].map((block) => block[1]!).find((block) => block.includes('"needs-me"'))!)
-    const [documented] = loadWatchers(path)
-    expect(documented!.tail.kinds).toEqual(['!backlog'])
-    const { team, ran, tick } = harness({ tail: documented!.tail })
-    await tick()
-    const parked = (await team.taskCreate({ channel: 'work/api', text: 'later' })).task
-    await team.taskBlock({ id: parked.id, reason: 'not this week', kind: 'backlog' })
-    expect((await tick()).woke).toEqual([])
-    const asked = (await team.taskCreate({ channel: 'work/api', text: 'ask' })).task
-    await team.taskBlock({ id: asked.id, reason: 'which region?' })
-    expect((await tick()).woke).toHaveLength(1)
-    expect(ran.map((run) => run.command)).toEqual([['wake', String(asked.id)]])
-  })
-
-  it('starts from now: what was on the board before the watcher first ran wakes nothing', async () => {
-    const { team, ran, tick } = harness({})
-    await team.post({ channel: 'work/api', text: 'old news' })
-    await tick()
-    expect(ran).toEqual([])
-  })
-
-  it("its own profile's writes never wake it, but a message it scheduled does", async () => {
-    const { team, time, ran, tick } = harness({ as: 'fixer' })
-    await tick()
-    const root = await team.as('fixer').post({ channel: 'work/api', text: 'I am on it' })
-    expect((await tick()).woke).toEqual([])
-    await team.as('fixer').scheduleCreate({ thread: root.id, text: 'check back', at: new Date(time.now().getTime() + 1000).toISOString() })
-    const did = await tick()
-    expect(did.woke).toHaveLength(1)
-    expect(ran.at(-1)!.env.MUSTER_PROFILE).toBe('fixer')
-  })
-
-  it('a watcher for a profile wakes once for a mention of it, and never for its own post', async () => {
-    const { team, as, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
-    await tick()
-    await team.as('lead').post({ channel: 'work/api', text: 'my own post, @lead included' })
-    expect((await tick()).woke).toEqual([])
-    await as('local:user:bob').post({ channel: 'work/api', text: 'nothing for you' })
-    expect((await tick()).woke).toEqual([])
-    const mention = await as('local:user:bob').post({ channel: 'work/api', text: '@lead please look' })
-    const did = await tick()
-    expect(did.woke).toHaveLength(1)
-    expect(ran.at(-1)!.command).toEqual(['wake', String(mention.id)])
-    expect((await tick()).woke).toEqual([])
-  })
-
-  it('a watcher for a profile wakes for a reminder the profile scheduled in a channel', async () => {
-    const { team, time, ran, tick } = harness({ as: 'lead', tail: { for: 'lead' } })
-    await tick()
-    await team.as('lead').scheduleCreate({ channel: 'work/api', text: 'check back', at: new Date(time.now().getTime() + 1000).toISOString() })
-    const did = await tick()
-    expect(did.woke).toHaveLength(1)
-    const sent = (await team.readChannel({ channel: 'work/api' })).threads[0]!.message
-    expect([sent.text, ran.at(-1)!.command]).toEqual(['check back', ['wake', String(sent.id)]])
-  })
-
-  it('a wake that fails is tried again from the same place, and the events after it wait', async () => {
-    let failing = true
-    const { team, ran, tick } = harness({}, () => ({ code: failing ? 1 : 0 }))
-    await tick()
-    const a = await team.post({ channel: 'work/api', text: 'a' })
-    const b = await team.post({ channel: 'work/api', text: 'b' })
-    expect(await tick()).toMatchObject({ woke: [], failed: [a.id] })
-    failing = false
-    expect((await tick()).woke).toEqual([a.id, b.id])
-    expect(ran.map((run) => run.command[1])).toEqual([String(a.id), String(a.id), String(b.id)])
-  })
-
-  it('after five failed tries it says so on the thread and moves on to the next', async () => {
-    const { team, tick } = harness({}, (command) => ({ code: command[1] === '1' ? 9 : 0 }))
-    await tick()
-    const bad = await team.post({ channel: 'work/api', text: 'cannot be delivered' })
-    const good = await team.post({ channel: 'work/api', text: 'fine' })
-    expect(bad.id).toBe(1)
-    for (let i = 0; i < 4; i++) expect((await tick()).woke).toEqual([])
-    expect((await tick()).woke).toEqual([good.id])
-    const replies = (await team.readThread({ id: bad.id })).replies
-    expect(replies.map((reply) => reply.text)).toEqual(['watcher "lead" couldn\'t deliver a wake-up after 5 tries (exit 9).'])
-    expect(replies[0]!.noSync).toBe(true)
-  })
-
-  it('a gate that prints wake:false keeps the command from running', async () => {
-    const { team, ran, tick } = harness({ gate: ['gate', '{thread}'] }, (command) => (command[0] === 'gate' ? { code: 0, stdout: 'checking\n{"wake": false}\n' } : { code: 0 }))
-    await tick()
-    await team.post({ channel: 'work/api', text: 'nothing actionable' })
-    expect(await tick()).toMatchObject({ woke: [], gated: [expect.any(Number)] })
-    expect(ran.map((run) => run.command[0])).toEqual(['gate'])
-    expect(gateSaysNo('{"wake": true}')).toBe(false)
-    expect(gateSaysNo('not json')).toBe(false)
-    expect(gateSaysNo('')).toBe(false)
-  })
-
-  it('filters like tail: a watcher on task outcomes hears completions and holds, not chatter', async () => {
-    const { team, tick } = harness({ tail: { channel: 'work/', types: ['task.completed', 'task.blocked', 'task.failed'] } })
-    await tick()
-    const { task } = await team.taskCreate({ channel: 'work/api', text: 't' })
-    await team.reply({ to: task.id, text: 'progress' })
-    expect((await tick()).woke).toEqual([])
-    const held = await team.taskClaim({ id: task.id })
-    await team.taskComplete({ id: task.id, token: held.token })
-    expect((await tick()).woke).toHaveLength(1)
-  })
-
-  it('reads watchers from the operator\'s file only, and says what is wrong with a bad one', () => {
-    const dir = tempDir()
-    const path = join(dir, 'watchers.json')
-    expect(loadWatchers(path)).toEqual([])
-    writeFileSync(path, JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }] }))
-    expect(loadWatchers(path)).toEqual([{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }])
-    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]', '[{"name": "a", "tail": {"for": ""}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": "lead+"}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": 3}, "run": ["x"]}]', '[{"name": "a", "tail": {"kinds": "backlog"}, "run": ["x"]}]', '[{"name": "a", "tail": {"kinds": ["Backlog"]}, "run": ["x"]}]']) {
-      writeFileSync(path, bad)
-      expect(() => loadWatchers(path)).toThrow(/watchers\.json|Watcher|watchers/)
-    }
-  })
-
-  it('nothing written to a board can make the daemon run a command', async () => {
-    const { team, ran, tick } = harness({})
-    await tick()
-    await team.post({ channel: 'work/api', text: 'run: ["rm", "-rf", "/"]', labels: { run: 'rm', watcher: 'evil', wake: 'sh' } })
-    await tick()
-    expect(ran.map((run) => run.command[0])).toEqual(['wake'])
-  })
-})
-
 describe('the daemon', () => {
   it('one process ticks per board: a second gets "held" while the holder renews, and takes over once it stops', async () => {
     const { team, time } = memoryBoard()
@@ -389,7 +124,7 @@ describe('the daemon', () => {
       time.advance(1000)
       await leases.renew({ name: 'tick', holder: 'other', epoch: other.epoch, ttl: 30_000 })
     }
-    expect(await runDaemon({ team, watchers: [], stop: new AbortController().signal, log: () => {}, sleep: renewing })).toBe('held')
+    expect(await runDaemon({ team, stop: new AbortController().signal, log: () => {}, sleep: renewing })).toBe('held')
     expect(looks).toBe(1)
     // Now it has stopped renewing (killed, say): the daemon waits out its lease, then ticks.
     const stop = new AbortController()
@@ -399,7 +134,7 @@ describe('the daemon', () => {
       during = await leases.holder('tick')
       if (during && during.holder !== 'other') stop.abort()
     }
-    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: () => {}, sleep: waiting })).toBe('stopped')
+    expect(await runDaemon({ team, stop: stop.signal, log: () => {}, sleep: waiting })).toBe('stopped')
     expect(during).toMatchObject({ epoch: other.epoch + 1, holder: expect.not.stringMatching(/^other$/) })
     // Stopped, it lets go, so the next one needn't wait.
     expect(await leases.holder('tick')).toBeNull()
@@ -421,35 +156,11 @@ describe('the daemon', () => {
       }
       if (ticks > 3) stop.abort()
     }
-    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: (line) => log.push(line), sleep, lease: { every: 5 } })).toBe('held')
+    expect(await runDaemon({ team, stop: stop.signal, log: (line) => log.push(line), sleep, lease: { every: 5 } })).toBe('held')
     expect([ticks, log]).toEqual([1, ['lost      the tick lease: another process ticks for this board now']])
     // What it lost stays the other's.
     expect(await leases.holder('tick')).toMatchObject({ holder: 'usurper' })
   })
-
-  it('mu daemon run sends a due schedule, runs a watcher from the config file, and stops cleanly on SIGTERM', async () => {
-    const dir = tempDir()
-    const marker = join(dir, 'woke')
-    mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['sh', '-c', `echo "$MUSTER_THREAD" >> ${marker}`], every: 1 }] }))
-    await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'])
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    await cli(dir, ['post', 'work/api', 'needs a look'])
-    await cli(dir, ['schedule', 'general', 'due now', '--in', '1s'])
-    await new Promise((resolve) => setTimeout(resolve, 4000))
-    const second = await cli(dir, ['daemon', 'run'])
-    expect(second.stdout).toMatch(/another process already ticks for this board/)
-    daemon.child.kill('SIGTERM')
-    const ended = await daemon.done
-    expect(ended.code).toBe(0)
-    expect(readFileSync(marker, 'utf8')).toBe('2\n')
-    expect(JSON.parse((await cli(dir, ['read', 'general', '--json'])).stdout).threads.map((thread: { message: { text: string } }) => thread.message.text)).toContain('due now')
-    // Stopped cleanly, it let go of the ticker: the next daemon needn't wait out its lease.
-    const after = file({ dir: join(dir, 'board') })
-    expect(await after.leases!.holder('tick')).toBeNull()
-    after.close()
-  }, 40_000)
 
   it('tells a live ticker from a dead one without ps: a second daemon on a machine with no ps finds the first ticking', async () => {
     const dir = tempDir()
@@ -469,7 +180,7 @@ describe('the daemon', () => {
     await team.backend.leases!.take({ name: 'tick', holder: 'other', ttl: 30_000 })
     const stop = new AbortController()
     const sleep = async () => stop.abort()
-    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: () => {}, sleep })).toBe('stopped')
+    expect(await runDaemon({ team, stop: stop.signal, log: () => {}, sleep })).toBe('stopped')
   })
 
   it('mu daemon run on a board at a URL says the server ticks it and exits 0, so a service manager leaves it stopped', async () => {
@@ -486,13 +197,76 @@ describe('the daemon', () => {
     }
   })
 
-  it('a broken watchers file makes the daemon say so and exit 0, so a service manager leaves it stopped', async () => {
+  it('mu daemon run sends a due schedule with no board module, and stops cleanly on SIGTERM', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'])
+    for (let i = 0; i < 100 && !daemon.output().includes('board '); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    await cli(dir, ['schedule', 'general', 'due now', '--in', '1s'])
+    const sent = async () => (JSON.parse((await cli(dir, ['read', 'general', '--json'])).stdout).threads as { message: { text: string } }[]).map((thread) => thread.message.text)
+    for (let i = 0; i < 100 && !(await sent()).includes('due now'); i++) await new Promise((resolve) => setTimeout(resolve, 100))
+    const second = await cli(dir, ['daemon', 'run'])
+    expect(second.stdout).toMatch(/another process already ticks for this board/)
+    daemon.child.kill('SIGTERM')
+    const ended = await daemon.done
+    expect([ended.code, ended.stdout]).toEqual([0, expect.not.stringContaining('watching')])
+    expect(await sent()).toContain('due now')
+    // Stopped cleanly, it let go of the ticker: the next daemon needn't wait out its lease.
+    const after = file({ dir: join(dir, 'board') })
+    expect(await after.leases!.holder('tick')).toBeNull()
+    after.close()
+  }, 40_000)
+
+  it.each(RETIRED)('a %s left from before board modules makes mu daemon run and mu serve refuse, with the module that does what it did', async (name) => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), '{ not json')
+    const left = join(dir, 'config', name)
+    writeFileSync(left, '{}')
+    const said = `error: ${left} is no longer read: watchers, sync and outgoing webhooks are declared in a board module now.`
+    // The daemon says so and exits 0, so a service manager leaves it stopped rather than restarting it into the same answer.
+    const run = await cli(dir, ['daemon', 'run'])
+    expect([run.code, run.stdout]).toEqual([0, ''])
+    expect(run.stderr).toContain(said)
+    expect(run.stderr).toContain(`  For ${name}, a board module like this:`)
+    expect(run.stderr).toContain(PORTING_URL)
+    expect(run.stderr).toContain('The daemon has stopped.')
+    // Every line of the example is there, indented, to copy.
+    for (const line of EXAMPLES[name].trimEnd().split('\n').filter(Boolean)) expect(run.stderr).toContain(`      ${line}\n`)
+    // The server refuses before it listens, with a module or without one.
+    const served = await cli(dir, ['serve', '--port', '0', '--json'])
+    expect([served.code, served.stdout]).toEqual([1, ''])
+    expect(JSON.parse(served.stderr).error).toMatchObject({ reason: 'config_retired', data: { files: [left], porting: PORTING_URL } })
+    writeFileSync(join(dir, 'board.ts'), "import { board } from 'muster'\nexport default board()\n")
+    expect((await cli(dir, ['serve', '--port', '0', '--module', join(dir, 'board.ts')])).stderr).toContain(said)
+    // Status still answers, and says what is wrong.
+    const status = await cli(dir, ['daemon', 'status', '--json'])
+    expect([status.code, JSON.parse(status.stdout).retired]).toEqual([0, [left]])
+    expect((await cli(dir, ['daemon', 'status'])).stdout).toContain(`warning   ${left} is no longer read: mu daemon run and mu serve refuse to start`)
+    // The example loads as printed.
+    const ported = tempDir()
+    writeFileSync(join(ported, 'board.ts'), EXAMPLES[name])
+    const loaded = JSON.parse((await cli(ported, ['daemon', 'status', '--json', '--module', join(ported, 'board.ts')])).stdout) as { module: { error?: unknown; watchers: unknown[]; sync: unknown[]; hooks?: unknown[] } }
+    expect(loaded.module.error).toBeUndefined()
+    expect([loaded.module.watchers.length, loaded.module.sync.length, loaded.module.hooks?.length ?? 0]).toEqual([name === 'watchers.json' ? 1 : 0, name === 'sync.json' ? 1 : 0, name === 'hooks.json' ? 1 : 0])
+  }, 30_000)
+
+  it('the porting page shows the same modules the refusal prints, under each file', () => {
+    const page = readFileSync(new URL('../docs/04-reference/07-porting.md', import.meta.url), 'utf8')
+    for (const name of RETIRED) {
+      const section = page.split(`## ${name}\n`)[1]?.split('\n## ')[0] ?? ''
+      expect(/```ts board\.ts\n([\s\S]*?)```/.exec(section)?.[1]).toBe(EXAMPLES[name])
+    }
+    expect(PORTING_URL).toBe('https://openmuster.ai/docs/reference/porting')
+  })
+
+  it('names every retired file left, in one refusal', async () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    for (const name of RETIRED) writeFileSync(join(dir, 'config', name), '{}')
     const run = await cli(dir, ['daemon', 'run'])
     expect(run.code).toBe(0)
-    expect(run.stderr).toMatch(/^error: .*watchers\.json isn't JSON/)
+    expect(run.stderr).toContain(`error: ${RETIRED.map((name) => join(dir, 'config', name)).join(', ')} are no longer read`)
+    for (const name of RETIRED) expect(run.stderr).toContain(`For ${name}, a board module like this:`)
   })
 
   it('the LaunchAgent restarts after a crash but not after a clean exit, and throttles restarts', () => {
@@ -522,92 +296,6 @@ describe('the daemon', () => {
     expect((await cli(dir, ['daemon', 'uninstall'], { env })).stdout).toBe('not installed\n')
     const seen = readFileSync(calls, 'utf8').trim().split('\n').map((line) => line.split(' ')[0])
     expect(seen).toEqual(['bootout', 'bootstrap', 'bootout', 'bootout'])
-  })
-})
-
-describe("a watcher's environment", () => {
-  it('is built from nothing: the daemon\'s secrets are not passed on unless the watcher names them', async () => {
-    const { watcherEnv } = await import('../src/daemon/daemon.ts')
-    const from = { PATH: '/bin', HOME: '/home/ada', GITHUB_WEBHOOK_SECRET: 'whsec', GITHUB_TOKEN: 'ghs', MUSTER_TOKEN: 'mu1.x', MUSTER_DIR: '/boards', ALLOWED: 'yes' }
-    expect(watcherEnv({ MUSTER_THREAD: '7' }, [], from)).toEqual({ PATH: '/bin', HOME: '/home/ada', MUSTER_DIR: '/boards', MUSTER_THREAD: '7' })
-    expect(watcherEnv({}, ['ALLOWED'], from)).toEqual({ PATH: '/bin', HOME: '/home/ada', MUSTER_DIR: '/boards', ALLOWED: 'yes' })
-  })
-
-  it('end to end: a command the daemon wakes cannot see a secret the daemon was started with', async () => {
-    const dir = tempDir()
-    const seen = join(dir, 'env.txt')
-    mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'w', tail: { channel: 'work/' }, run: ['sh', '-c', `env > ${seen}`], every: 1, env: ['PASSED_ON'] }] }))
-    const daemon = cliStart(dir, ['daemon', 'run'], { GITHUB_TOKEN: 'ghs_secret_value', PASSED_ON: 'fine' })
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    await cli(dir, ['post', 'work/api', 'an issue a stranger wrote'])
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    daemon.child.kill('SIGTERM')
-    await daemon.done
-    const env = readFileSync(seen, 'utf8')
-    expect(env).not.toContain('ghs_secret_value')
-    expect(env).toMatch(/^PASSED_ON=fine$/m)
-    expect(env).toMatch(/^MUSTER_THREAD=1$/m)
-  }, 20_000)
-})
-
-describe('a watcher whose command keeps failing', () => {
-  it('is slowed once it has failed more times in a row than one event is tried, and one success puts it back', async () => {
-    let failing = true
-    const made = memoryBoard()
-    const runs: number[] = []
-    const deps: Deps = {
-      now: () => made.time.now().getTime(),
-      spawn: async () => {
-        runs.push(made.time.now().getTime())
-        return { code: failing ? 1 : 0, stdout: '' }
-      },
-    }
-    const watchers: Watcher[] = [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'], every: 1 }]
-    const states = new Map<string, WatchState>()
-    const at = async (ms: number) => {
-      made.time.advance(ms)
-      return (await tickOnce(made.team, watchers, states, deps)).watched.lead!
-    }
-    await at(1000)
-    for (let i = 0; i < 20; i++) await made.team.post({ channel: 'work/api', text: `event ${i}` })
-    // The five tries of one event come every second, as before.
-    for (let i = 0; i < DELIVERY_ATTEMPTS - 1; i++) expect((await at(1000)).failed).toHaveLength(1)
-    // The fifth gives up on that event, and the next event fails at once: six failures in a row.
-    expect((await at(1000)).slowed).toBe(4)
-    expect(runs).toHaveLength(6)
-    // Past that, a tick a second runs nothing until the wait is over, and each failure doubles it.
-    for (let i = 0; i < 3; i++) expect(await at(1000)).toEqual({ woke: [], failed: [], gated: [] })
-    expect(runs).toHaveLength(6)
-    expect((await at(1000)).slowed).toBe(8)
-    expect(runs).toHaveLength(7)
-    // The times of the ticks that ran it: the gaps double, up to ten minutes, and never shrink while it fails.
-    const ranAt = [made.time.now().getTime()]
-    for (let i = 0; i < 3600 && runs.length < 20; i++) {
-      const before = runs.length
-      await at(1000)
-      if (runs.length > before) ranAt.push(made.time.now().getTime())
-    }
-    const gaps = ranAt.slice(1).map((time, i) => time - ranAt[i]!)
-    expect(gaps.slice(0, 3)).toEqual([8_000, 16_000, 32_000])
-    expect(gaps.at(-1)).toBe(SLOWEST)
-    expect(Math.max(...gaps)).toBe(SLOWEST)
-    failing = false
-    made.time.advance(SLOWEST)
-    expect((await at(0)).woke.length).toBeGreaterThan(0)
-    expect((await at(1000)).slowed).toBeUndefined()
-  })
-
-  it("isn't woken again by its own note that it gave up", async () => {
-    const { team, ran, tick } = harness({}, () => ({ code: 9 }))
-    await tick()
-    const bad = await team.post({ channel: 'work/api', text: 'cannot be delivered' })
-    for (let i = 0; i < DELIVERY_ATTEMPTS; i++) await tick()
-    expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
-    // Nothing to do is not a failure: a quiet board after a give-up logs nothing about it.
-    for (let i = 0; i < 20; i++) expect((await tick()).slowed).toBeUndefined()
-    expect((await team.readThread({ id: bad.id })).replies).toHaveLength(1)
-    expect(ran).toHaveLength(DELIVERY_ATTEMPTS)
   })
 })
 
@@ -690,7 +378,6 @@ describe('the restart guard', () => {
     const run = (team: ReturnType<typeof memoryBoard>['team'], now: () => number) =>
       runDaemon({
         team,
-        watchers: [],
         stop: stop.signal,
         log: (line) => log.push(line),
         deps: { now },
@@ -833,10 +520,10 @@ describe('the restart guard', () => {
   it('check says the daemon stopped restarting, not only that nothing ticks', async () => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work' }, run: ['true'], every: 1 }] }))
+    writeFileSync(join(dir, 'board.ts'), "import { board } from 'muster'\nexport default board({ watch: { lead: { tail: { channel: 'work' }, run: () => {} } } })\n")
     await cli(dir, ['post', 'general', 'board exists'])
     stoppedAgo(recordOf(dir), 0)
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--json'])
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--json', '--module', join(dir, 'board.ts')])
     expect(run.code).toBe(1)
     expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'daemon_stopped', next: ['mu daemon reset'] })
   }, 60_000)
@@ -847,7 +534,7 @@ describe('the restart guard', () => {
     for (let i = 0; i < 2; i++) {
       const daemon = cliStart(dir, ['daemon', 'run'])
       // Stopped once it is up and ticking, as launchd stops it at logout.
-      await until(() => /watchers/.test(daemon.output()))
+      await until(() => /^board /m.test(daemon.output()))
       daemon.child.kill('SIGTERM')
       expect((await daemon.done).code).toBe(0)
     }
@@ -863,7 +550,7 @@ describe('the restart guard', () => {
 })
 
 describe('checking a watcher', () => {
-  const watcher = (tail: Watcher['tail'], extra: Partial<Watcher> = {}): Watcher => ({ name: 'lead', tail, run: ['true'], ...extra })
+  const watcher = (tail: Checkable['tail'], extra: Partial<Checkable> = {}): Checkable => ({ name: 'lead', tail, ...extra })
 
   it('writes what the filter matches: its channel, its labels, a mention, its words', () => {
     expect(checkWrite(watcher({ channel: 'work', labels: ['kind=bug|feature', 'urgent'], mentions: 'local:user:ada+lead', text: 'ping' }))).toEqual({
@@ -901,68 +588,102 @@ describe('checking a watcher', () => {
     expect(await reason(Promise.resolve().then(() => checkWrite(watcher({ channel: 'work/' }))))).toBe('missing_channel')
   })
 
-  const setUp = (run: string[]) => {
+  /** A folder with a board module that declares one watcher, `lead`, as `lead`, which runs `run` with each thread's ID. */
+  const setUp = (run: string, tail: Checkable['tail'] = { channel: 'work' }) => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work' }, run, as: 'lead', every: 1 }] }))
-    return dir
+    const module = join(dir, 'board.ts')
+    writeFileSync(module, `import { board, command } from 'muster'
+export default board({
+  watch: {
+    lead: { tail: ${JSON.stringify(tail)}, as: 'lead', run: command(({ event }) => ${run}) },
+  },
+})
+`)
+    return { dir, module }
+  }
+  const REPLY = `[${JSON.stringify(process.execPath)}, ${JSON.stringify(BIN)}, 'reply', String(event.thread), 'here']`
+  /** Starts the module's daemon and waits until it runs the watcher. */
+  const running = async (dir: string, module: string) => {
+    const daemon = cliStart(dir, ['daemon', 'run', '--module', module])
+    const holder = async () => {
+      const board = file({ dir: join(dir, 'board') })
+      try {
+        return await board.leases!.holder('watch:lead')
+      } finally {
+        board.close()
+      }
+    }
+    for (let i = 0; i < 200 && !(await holder()); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+    return daemon
   }
 
-  it('says nothing runs the watchers when no daemon holds the board, before writing anything', async () => {
-    const dir = setUp(['true'])
+  it('says nothing runs the watcher when no host holds it, before writing anything, and takes nothing to look', async () => {
+    const { dir, module } = setUp("['true']")
     await cli(dir, ['post', 'general', 'board exists'])
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--json'])
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--json', '--module', module])
     expect(run.code).toBe(1)
-    expect(JSON.parse(run.stderr).error.reason).toBe('no_ticker')
+    expect(JSON.parse(run.stderr).error.reason).toBe('watcher_not_running')
     expect(JSON.parse((await cli(dir, ['read', 'work', '--json'])).stdout).threads).toEqual([])
-    // It looked, and took nothing: the first ticker to come gets the lease's first epoch.
-    expect(await file({ dir: join(dir, 'board') }).leases!.take({ name: 'tick', holder: 'next', ttl: 1000 })).toMatchObject({ held: true, epoch: 1 })
+    // It looked, and took nothing: the first host to come gets the lease's first epoch.
+    expect(await file({ dir: join(dir, 'board') }).leases!.take({ name: 'watch:lead', holder: 'next', ttl: 1000 })).toMatchObject({ held: true, epoch: 1 })
   })
 
-  it('reports who answered when the command wakes something that replies', async () => {
-    const dir = setUp([process.execPath, BIN, 'reply', '{thread}', 'here'])
-    await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'])
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s'])
-    daemon.child.kill('SIGTERM')
-    await daemon.done
-    expect([run.code, run.stderr]).toEqual([0, ''])
-    expect(run.stdout).toMatch(/^answered {2}#2 {2}by .*lead.* {2}in \d+s?/)
-  }, 30_000)
+  it('says which names there are to check: a module declares none by that name, or there is no module', async () => {
+    const { dir, module } = setUp("['true']")
+    const unknown = await cli(dir, ['daemon', 'check', 'nobody', '--json', '--module', module])
+    expect([unknown.code, JSON.parse(unknown.stderr).error.reason, JSON.parse(unknown.stderr).error.message]).toEqual([2, 'unknown_watcher', `${module} declares no watcher or outgoing webhook named "nobody".`])
+    const none = await cli(dir, ['daemon', 'check', 'lead', '--json'])
+    expect([none.code, JSON.parse(none.stderr).error.reason]).toEqual([2, 'unknown_watcher'])
+  })
 
   it('checks a watcher for a profile end to end, on a board where that profile never wrote', async () => {
-    const dir = tempDir()
-    mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work', for: 'lead' }, run: [process.execPath, BIN, 'reply', '{thread}', 'here'], as: 'lead', every: 1 }] }))
+    const { dir, module } = setUp(REPLY, { channel: 'work', for: 'lead' })
     await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'])
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s'])
+    const daemon = await running(dir, module)
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '15s', '--module', module])
     daemon.child.kill('SIGTERM')
     await daemon.done
     expect([run.code, run.stderr]).toEqual([0, ''])
     expect(run.stdout).toMatch(/^answered {2}#2 {2}by .*lead.* {2}in \d+s?/)
   }, 30_000)
 
-  it('says the wake failed when the command keeps failing, rather than taking the notice for an answer', async () => {
-    const dir = setUp(['false'])
+  it('says the wake failed when the run keeps failing, rather than taking the note for an answer', async () => {
+    const { dir, module } = setUp("['false']")
     await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'])
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '20s', '--json'])
-    daemon.child.kill('SIGTERM')
-    await daemon.done
+    // The host is this process, on a clock it moves: five tries are minutes apart, and this one takes them at once.
+    const time = clock(new Date().toISOString())
+    const tried: number[] = []
+    const host = board({ dir: join(dir, 'board'), principal: 'local:user:ada', now: time.now, watch: { lead: { tail: { channel: 'work' }, as: 'lead', run: ({ event }) => {
+      tried.push(event.seq)
+      throw new Error('exit 1')
+    } } } })
+    await host.deliver()
+    // Held, so the check sees a host running the watcher; let go once it has written, so the passes below take it.
+    const held = await host.backend.leases!.take({ name: 'watch:lead', holder: 'test-host', ttl: 600_000 })
+    const checking = cliStart(dir, ['daemon', 'check', 'lead', '--timeout', '30s', '--json', '--module', module])
+    let thread: number | undefined
+    for (let i = 0; i < 200 && thread === undefined; i++) {
+      thread = (await host.readChannel({ channel: 'work' })).threads[0]?.message.id
+      if (thread === undefined) await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    await host.backend.leases!.release({ name: 'watch:lead', holder: 'test-host', epoch: held.held ? held.epoch : 0 })
+    for (let i = 0; i < DELIVERY_ATTEMPTS; i++) {
+      await host.deliver()
+      time.advance(10 * 60_000)
+    }
+    const run = await checking.done
+    host.close()
+    expect(tried).toEqual(Array(DELIVERY_ATTEMPTS).fill(thread))
     expect(run.code).toBe(1)
-    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'wake_failed', data: { thread: 2 } })
+    expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'wake_failed', data: { thread } })
   }, 40_000)
 
-  it('times out with the thread to read when the command wakes nothing that answers', async () => {
-    const dir = setUp(['true'])
+  it('times out with the thread to read when the run wakes nothing that answers', async () => {
+    const { dir, module } = setUp("['true']")
     await cli(dir, ['post', 'general', 'board exists'])
-    const daemon = cliStart(dir, ['daemon', 'run'])
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '3s', '--json'])
+    const daemon = await running(dir, module)
+    const run = await cli(dir, ['daemon', 'check', 'lead', '--timeout', '3s', '--json', '--module', module])
     daemon.child.kill('SIGTERM')
     await daemon.done
     expect(run.code).toBe(1)

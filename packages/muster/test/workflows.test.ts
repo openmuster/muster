@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadDaemonConfig, tickOnce } from '../src/daemon/daemon.ts'
+import { daemonWorkflows, tickOnce } from '../src/daemon/daemon.ts'
 import { append } from '../src/store/log.ts'
 import { openDb } from '../src/store/sqlite.ts'
 import { missingSettings, openRuns, runWorkflows, type Spawner } from '../src/daemon/runs.ts'
@@ -130,7 +130,7 @@ describe('the workflows file', () => {
   })
 })
 
-describe('workflow names in the daemon config', () => {
+describe('workflow names beside a board module', () => {
   const saved = process.env.MUSTER_CONFIG
   afterEach(() => {
     if (saved === undefined) delete process.env.MUSTER_CONFIG
@@ -142,22 +142,13 @@ describe('workflow names in the daemon config', () => {
     for (const [file, body] of Object.entries(files)) writeFileSync(join(dir, file), JSON.stringify(body))
     process.env.MUSTER_CONFIG = dir
   }
-  const watcher = (name: string) => ({ name, run: ['true'] })
-  const hook = (name: string) => ({ name, url: 'https://hooks.example.com/in', secret: 'env:HOOK_SECRET' })
 
-  it('loads workflows alongside watchers and hooks', () => {
-    setup({ 'workflows.json': { workflows: [good] }, 'watchers.json': { watchers: [watcher('w')] }, 'hooks.json': { hooks: [hook('h')] } })
-    const config = loadDaemonConfig({})
-    expect(config.workflows.map((w) => w.name)).toEqual(['release'])
-    expect(config.watchers.map((w) => w.name)).toEqual(['w'])
-    expect(config.hooks.map((h) => h.name)).toEqual(['h'])
-  })
-
-  it('refuses a workflow named like a watcher or a hook', () => {
-    setup({ 'workflows.json': { workflows: [good] }, 'watchers.json': { watchers: [watcher('release')] } })
-    expect(() => loadDaemonConfig({})).toThrow(/workflows.json and a watcher .* both named "release"/)
-    setup({ 'workflows.json': { workflows: [good] }, 'hooks.json': { hooks: [hook('release')] } })
-    expect(() => loadDaemonConfig({})).toThrow(/workflows.json and a hook .* both named "release"/)
+  it('loads the registered workflows, and refuses one named like a watcher or a hook the board module declares', () => {
+    setup({ 'workflows.json': { workflows: [good] } })
+    expect(daemonWorkflows().map((w) => w.name)).toEqual(['release'])
+    expect(daemonWorkflows({ path: '/srv/board.ts', names: ['lead'], hooks: ['audit'] }).map((w) => w.name)).toEqual(['release'])
+    expect(() => daemonWorkflows({ path: '/srv/board.ts', names: ['release'] })).toThrow(/^A watcher in \/srv\/board\.ts and a workflow in .*workflows\.json are both named "release"\.$/)
+    expect(() => daemonWorkflows({ path: '/srv/board.ts', names: [], hooks: ['release'] })).toThrow(/^A hook in \/srv\/board\.ts and a workflow in .*workflows\.json are both named "release"\.$/)
   })
 })
 
@@ -876,8 +867,7 @@ describe('the daemon starts a requested workflow', () => {
   it('runs in the daemon tick', async () => {
     const { team, root, rec } = await ready()
     const { seq } = await team.workflowRequest({ name: 'release', on: root.id })
-    const watcherDeps = { now: () => Date.now(), spawn: async () => ({ code: 0, stdout: '' }) }
-    const did = await tickOnce(team, [], new Map(), watcherDeps, undefined, { list: [release], deps: rec.deps })
+    const did = await tickOnce(team, { list: [release], deps: rec.deps })
     expect(did.workflows).toEqual({ started: [seq], refused: [] })
     expect(rec.spawned).toHaveLength(2)
   })
@@ -1283,7 +1273,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
 
     it('says the update through a whole daemon tick', async () => {
       const { team, seq, a, b, c, replies, deps } = await settledFailed()
-      const daemonTick = async () => (await tickOnce(team, [], new Map(), { now: deps.now, spawn: async () => ({ code: 0, stdout: '', stderr: '' }) } as never, undefined, { list: [pipeline], deps })).workflows
+      const daemonTick = async () => (await tickOnce(team, { list: [pipeline], deps })).workflows
       await team.taskReopen({ id: a })
       expect(await daemonTick()).toEqual({ started: [], refused: [] })
       const complete = async (id: number, result: string) => {

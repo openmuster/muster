@@ -34,7 +34,6 @@ if (mode === 'take') {
   let during: string[][] = []
   const ended = await runDaemon({
     team: board({ memory: true, principal: 'local:user:ada' }),
-    watchers: [],
     stop: stop.signal,
     log: () => {},
     sleep: async () => {

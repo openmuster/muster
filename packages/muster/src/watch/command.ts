@@ -1,8 +1,30 @@
 import { spawn } from 'node:child_process'
 import { basename, dirname } from 'node:path'
-import { watcherEnv } from '../daemon/daemon.ts'
-import { gateSaysNo } from '../daemon/watchers.ts'
 import type { WatchContext } from './watch.ts'
+
+const WATCHER_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'MUSTER_DIR', 'MUSTER_BOARD', 'MUSTER_CONFIG', 'MUSTER_URL', 'MUSTER_INSECURE_HTTP']
+
+/**
+ * What a watcher's command starts with: built from nothing, then the few names above. The host holds
+ * the platforms' secrets in its own environment, and what it wakes is often an agent reading text a
+ * stranger wrote, so nothing else is passed on unless the watcher names it.
+ */
+export function watcherEnv(extra: Record<string, string>, allow: readonly string[] = [], from: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const name of [...WATCHER_ENV, ...allow]) if (from[name] !== undefined) env[name] = from[name]!
+  return { ...env, ...extra }
+}
+
+/** Whether a gate's output says not to wake: its last non-empty line is JSON with `wake: false`. */
+export function gateSaysNo(stdout: string): boolean {
+  const last = stdout.split('\n').map((line) => line.trim()).filter(Boolean).at(-1)
+  if (!last) return false
+  try {
+    return (JSON.parse(last) as { wake?: unknown }).wake === false
+  } catch {
+    return false
+  }
+}
 
 /** A command as its words, or worked out from the event: never a string a shell splits. */
 export type Argv = string[] | ((context: WatchContext) => string[])

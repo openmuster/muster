@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,20 +25,8 @@ export const holderName = (holder: string): string => {
   return pid ? `${machine} (pid ${pid})` : holder
 }
 
-const read = (path: string): unknown => {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return null
-  }
-}
-
-/** The names in a watchers.json, in either of the shapes the daemon reads. */
-const namesIn = (path: string): string[] => {
-  const parsed = read(path) as { watchers?: { name?: string }[] } | { name?: string }[] | null
-  const list = Array.isArray(parsed) ? parsed : (parsed?.watchers ?? [])
-  return list.map((entry) => entry?.name).filter((name): name is string => typeof name === 'string')
-}
+/** The files muster read before board modules. One left in the config folder makes mu daemon run and mu serve refuse to start. */
+const RETIRED = ['watchers.json', 'sync.json', 'hooks.json']
 
 /**
  * What a factory needs, checked against what runs now: the watcher `lib/board.ts` declares, run by a host
@@ -48,58 +36,54 @@ const namesIn = (path: string): string[] => {
  */
 export function setup(options: { config: string; channel: string; watchers: readonly Declared[]; sync: readonly Synced[]; holders: Holders }): Step[] {
   const watcher = options.watchers.find((entry) => entry.tail.channel === `${options.channel}/` || entry.tail.channel === options.channel)
-  const watchersFile = join(options.config, 'watchers.json')
-  // A watcher in watchers.json named like the module's would share its place on the board: start() refuses it.
-  const clash = watcher && namesIn(watchersFile).includes(watcher.name)
   const runner = watcher ? (options.holders[`watch:${watcher.name}`] ?? null) : null
   const platforms = options.sync.map((entry) => `${entry.key} (${entry.type})`).join(', ')
   const syncer = options.holders.sync ?? null
-  // A sync.json left from before is read by a daemon run without a module, which could take the sync lease with it.
-  const syncFile = join(options.config, 'sync.json')
-  const leftover = platforms.length > 0 && existsSync(syncFile)
+  // A file from before board modules: the daemon and mu serve refuse to start while it is there, so nothing ticks.
+  const left = RETIRED.map((name) => join(options.config, name)).filter((path) => existsSync(path))
   const ticker = options.holders.tick ?? null
   return [
     {
       name: 'a watcher wakes the agent',
-      done: watcher !== undefined && runner !== null && !clash,
+      done: watcher !== undefined && runner !== null,
       detail: !watcher
         ? `no watcher on #${options.channel}/ in lib/board.ts`
-        : clash
-          ? `"${watcher.name}" is in lib/board.ts and in ${tilde(watchersFile)}: the host refuses to run both`
-          : runner
-            ? `"${watcher.name}" on #${options.channel}/, run by ${holderName(runner)}`
-            : `"${watcher.name}" on #${options.channel}/ is declared, and nothing runs it`,
+        : runner
+          ? `"${watcher.name}" on #${options.channel}/, run by ${holderName(runner)}`
+          : `"${watcher.name}" on #${options.channel}/ is declared, and nothing runs it`,
       ...(!watcher
         ? { fix: `declare one in lib/board.ts: watch: { ${options.channel}: { tail: { channel: '${options.channel}/' }, run } }` }
-        : clash
-          ? { fix: `remove "${watcher.name}" from ${tilde(watchersFile)}` }
-          : runner
-            ? {}
-            : { fix: 'pnpm host   (node host.ts, in this folder)' }),
+        : runner
+          ? {}
+          : { fix: 'pnpm host   (node host.ts, in this folder)' }),
     },
     {
       name: 'a platform to hear from',
-      done: platforms.length > 0 && syncer !== null && !leftover,
+      done: platforms.length > 0 && syncer !== null,
       detail: !platforms
         ? 'none: the factory hears only what is posted on the board'
-        : leftover
-          ? `${platforms} is in lib/board.ts, and ${tilde(syncFile)} is there too: a daemon without a module would sync that instead`
-          : syncer
+        : syncer
           ? `${platforms}, synced by ${holderName(syncer)}`
           : `${platforms} is declared, and nothing syncs it: no catch-up, nothing sent`,
       ...(!platforms
         ? { fix: "optional: declare one in lib/board.ts's sync, and point the platform's webhook at /api/board/webhooks/<key>" }
-        : leftover
-          ? { fix: `move what ${tilde(syncFile)} lists into lib/board.ts, and delete it` }
-          : syncer
+        : syncer
           ? {}
           : { fix: 'pnpm host   (node host.ts, in this folder, with the sync\'s secrets set)' }),
     },
     {
       name: 'the board is being served',
-      done: ticker !== null,
-      detail: ticker ? `tick held by ${holderName(ticker)}: a daemon or mu serve sends schedules` : 'nobody holds tick: nothing sends schedules',
-      ...(ticker ? {} : { fix: 'mu daemon run --no-module   (host.ts runs this module)' }),
+      done: ticker !== null && left.length === 0,
+      detail: left.length
+        ? `${left.map(tilde).join(', ')} ${left.length === 1 ? 'is' : 'are'} left from before board modules: mu daemon run and mu serve refuse to start until ${left.length === 1 ? 'it is' : 'they are'} moved and deleted`
+        : ticker
+          ? `tick held by ${holderName(ticker)}: a daemon or mu serve sends schedules`
+          : 'nobody holds tick: nothing sends schedules',
+      ...(left.length
+        ? { fix: `move what ${left.length === 1 ? 'it lists' : 'they list'} into lib/board.ts (or your own board module), and delete ${left.length === 1 ? 'it' : 'them'}` }
+        : ticker
+          ? {}
+          : { fix: 'mu daemon run --no-module   (host.ts runs this module)' }),
     },
   ]
 }

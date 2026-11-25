@@ -108,11 +108,10 @@ claimed answers `task_ready`, with the claim to run first.
 | `schema_exists` | That version is registered and never changes |
 | `invalid_schedule` | A bad time, a period under a minute, or no target |
 | `invalid_duration` | Not a duration: `90s`, `5m`, `1h` |
-| `unknown_watcher` | No watcher in `watchers.json` and no outgoing webhook in `hooks.json` has that name |
+| `unknown_watcher` | The board module declares no watcher and no outgoing webhook by that name, or there is no board module |
 | `missing_watcher` | `mu daemon check` needs the name of a watcher or an outgoing webhook |
 | `missing_channel` | The watcher listens to a subtree or everywhere: pass `--in` |
 | `watcher_not_checkable` | No message matches the watcher's filter: it listens for task events, to a platform's users, or to its own profile |
-| `no_ticker` | Nothing is running the watchers for this board: start `mu daemon run` or `mu serve` |
 | `watcher_not_running` | `mu daemon check` on a watcher a board module declares, and nothing holds its lease: it is declared but not started |
 | `daemon_stopped` | The daemon crashed on start too often and stopped restarting. It tries again after an hour; fix what its log says, then `mu daemon reset` to try now |
 | `allow_host_required` | `mu serve --host` beyond this machine needs `--allow-host`, or `MUSTER_ALLOW_HOSTS` |
@@ -134,7 +133,8 @@ claimed answers `task_ready`, with the claim to run first.
 | `exists` | A backup or a download won't write over a file |
 | `missing_path` | A command needs a path |
 | `no_skills` | This install doesn't carry the skills |
-| `invalid_config` | `watchers.json`, `hooks.json` or `sync.json` is wrong, a variable a module's sync or hook names with `env()` isn't set, or a board module's names clash with them. The message says what |
+| `invalid_config` | A variable a module's hook names with `env()` isn't set or is too short, or a watcher or hook in a board module is named like a workflow in `workflows.json`. The message says what |
+| `config_retired` | A `watchers.json`, `sync.json` or `hooks.json` is left in `~/.config/muster/` from before board modules. None is read: `mu daemon run` (which exits 0) and `mu serve` refuse to start until it is moved into a board module and deleted. The hint shows a module that does what it did; [Porting](./07-porting.md) has each field |
 | `missing_env` | `daemon install --env` named a variable that is not set |
 | `invalid_env` | `env()` was given something that isn't an environment variable's name |
 | `invalid_sync` | A sync given to `board({ sync })` is wrong: a key that isn't a sync name, a value that isn't `github()`, `linear()` or `slack()`, a missing `secret`, a bad `filter` or `filesPerDayMB`, or a `sync` beside a `backend` |
@@ -144,7 +144,6 @@ claimed answers `task_ready`, with the claim to run first.
 | `watch_started` | This process already runs the watchers of that board from another `board()` handle with other watchers. Declare them all on one handle |
 | `watch_remote` | Watchers were started on a board reached over HTTP. They run where the board's file is |
 | `unhealthy` | `GET /health` on a board whose sync can't run, such as a secret named with `env()` that isn't set. Its owner's log says what |
-| `sync_twice` | A board module declares `sync` and `sync.json` is there too. A board's sync is in one place: move the file's entries into the module |
 | `sync_not_started` | A provider whose secrets are named with `env()` was used on its own. Give it to `board({ sync })`, which reads them when it starts |
 
 ## Serving and running

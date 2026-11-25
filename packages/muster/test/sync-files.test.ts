@@ -2,8 +2,7 @@ import { createHmac } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { writeFileSync } from 'node:fs'
-import { board, file, github, linear, loadSync, slack } from '../src/index.ts'
+import { board, file, github, linear, slack } from '../src/index.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -218,15 +217,6 @@ describe('sync: files from Slack', () => {
     await backend.syncTick()
     expect((await texts()).find(([text]) => text === 'next day')).toEqual(['next day', 1])
     expect(kept()).toHaveLength(2)
-  })
-
-  it('sync.json sets the allowance in megabytes', () => {
-    const dir = tempDir()
-    const path = join(dir, 'sync.json')
-    writeFileSync(path, JSON.stringify({ chat: { type: 'slack', secret: 'env:S', channels: {}, filesPerDayMB: 50 } }))
-    expect(loadSync(path, { S: 'x' }).chat!.filesPerDay).toBe(50 * MB)
-    writeFileSync(path, JSON.stringify({ chat: { type: 'slack', secret: 'env:S', channels: {}, filesPerDayMB: -1 } }))
-    expect(() => loadSync(path, { S: 'x' })).toThrow(/filesPerDayMB/)
   })
 
   it("deleting a message gives none of the day's allowance back", async () => {

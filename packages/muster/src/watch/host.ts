@@ -1,11 +1,9 @@
 import { Failure } from '../failure.ts'
 import type { FeedEvent } from '../core/reads.ts'
 import type { Board } from '../handle.ts'
-import type { Fence } from '../core/deliveries.ts'
-import { loadWatchers, watchersPath } from '../daemon/daemon.ts'
-import { armHooks, hooksFileClash, hostHooks, IN_CODE, type Hook } from '../daemon/hooks.ts'
+import { DELIVERY_ATTEMPTS, RETRY_MOST, type Fence } from '../core/deliveries.ts'
+import { armHooks, hostHooks, IN_CODE, type Hook } from '../daemon/hooks.ts'
 import { holderId, holdLease, LEASE_TTL, type Held, type Leases } from '../daemon/lease.ts'
-import { DELIVERY_ATTEMPTS } from '../daemon/watchers.ts'
 import type { Watcher, WatchEvent } from './watch.ts'
 import { syncLoop } from '../sync/host.ts'
 
@@ -28,6 +26,16 @@ export type Delivered = { delivered: number; failed: number; held: string[] }
 
 /** The longest a watcher's loop waits between looks when nothing comes. */
 const QUIET = 1000
+
+/**
+ * How long a watcher's loop waits between passes once its runs have failed more times in a row than one
+ * event is tried: the run is broken, not the event, so each failure past that doubles the wait, from 2
+ * seconds up to ten minutes. One run that works puts it back to its usual pace. Zero while it isn't slowed.
+ */
+export function slowedFor(failing: number): number {
+  const over = failing - DELIVERY_ATTEMPTS
+  return over > 0 ? Math.min(RETRY_MOST, 1000 * 2 ** over) : 0
+}
 /** How long a stopped host waits for the run in flight, unless told otherwise. */
 const GRACE = 5000
 /** The most threads one pass looks at, and the most events it keeps to deliver: the rest wait for the next pass. */
@@ -403,6 +411,8 @@ async function loop(team: Board, watcher: Watcher, stop: AbortSignal, options: S
     if (message !== said) log(`error     ${watcher.name}  ${message}`)
     said = message
   }
+  // Runs that failed in a row, across threads, since the last that worked: kept while this process runs.
+  let failing = 0
   while (!stop.aborted) {
     let held: Held | null = null
     const taken = new AbortController()
@@ -434,9 +444,14 @@ async function loop(team: Board, watcher: Watcher, stop: AbortSignal, options: S
             break
           }
           quiet = did.delivered + did.failed > 0 ? 100 : Math.min(quiet * 2, QUIET)
+          const was = slowedFor(failing)
+          failing = did.delivered > 0 ? 0 : failing + did.failed
+          const slowed = slowedFor(failing)
+          if (slowed > was) log(`slowed    ${watcher.name}  its run keeps failing: next pass in ${slowed / 1000}s`)
+          if (slowed > 0) quiet = slowed
         } catch (error) {
           fail(error)
-          quiet = QUIET
+          quiet = Math.max(QUIET, slowedFor(failing))
         }
         await yieldNow()
         await sleep(quiet)
@@ -452,24 +467,7 @@ type Running = { host: Host; team: Board; names: string }
 /** The hosts running in this process, by board: kept on `globalThis`, so two copies of a module (as Next.js loads) find each other. */
 const hosts = (): Map<unknown, Running> => ((globalThis as Record<symbol, unknown>)[HOSTS] ??= new Map()) as Map<unknown, Running>
 
-const throwIf = (failure: Failure | null) => {
-  if (failure) throw failure
-}
-
 const namesOf = (watchers: Watcher[]) => watchers.map((watcher) => watcher.name).sort().join(', ') || 'none'
-
-/** A watcher in `watchers.json` and one in code with the same name would share a cursor, and each skip what the other delivered. */
-function refuseClash(watchers: Watcher[]) {
-  let configured: { name: string }[]
-  try {
-    configured = loadWatchers()
-  } catch {
-    // A file the daemon can't read is the daemon's to say so.
-    return
-  }
-  const both = watchers.find((watcher) => configured.some((entry) => entry.name === watcher.name))
-  if (both) throw new Failure('invalid_watch', `Watcher "${both.name}" is in ${watchersPath()} and in code: they would share one place on the board.`, { exit: 2, hint: 'Rename one, or remove it from watchers.json.' })
-}
 
 /**
  * Starts the board's watchers in this process, each in its own loop, and returns at once. Never await
@@ -494,9 +492,8 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
       hint: 'Declare every watcher on one handle, and start that one.',
     })
   }
-  refuseClash(watchers)
   // Read now, not when the module was imported: a secret that is unset or short stops the host here, named.
-  const armed = hooks.length > 0 ? (throwIf(hooksFileClash()), armHooks([...hooks], process.env, IN_CODE)) : []
+  const armed = hooks.length > 0 ? armHooks([...hooks], process.env, IN_CODE) : []
   const log = options.log ?? ((line: string) => process.stderr.write(`muster: ${line}\n`))
   const controller = new AbortController()
   const stopNow = () => {

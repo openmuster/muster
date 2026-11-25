@@ -1,10 +1,10 @@
 import { createHmac } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { board, file, github, linear, loadSync, slack } from '../src/index.ts'
-import { cli, cliStart, clock, tempDir } from './helpers.ts'
+import { board, file, github, linear, slack } from '../src/index.ts'
+import { clock, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const SECRET = 'whsec'
@@ -480,10 +480,8 @@ describe('sync: edits, deletes, filters and catching up', () => {
     void backend
     void team
     const dir = tempDir()
-    const path = join(dir, 'sync.json')
     writeFileSync(join(dir, 'scrub.sh'), '#!/bin/sh\ntext=$(cat)\ncase "$text" in *DROP*) exit 1;; esac\nprintf %s "$text" | sed "s/ghp_[A-Za-z0-9]*/[removed]/g"\n', { mode: 0o755 })
-    writeFileSync(path, JSON.stringify({ gh: { type: 'github', secret: 'env:S', repos: { 'acme/web': 'web' }, filter: [join(dir, 'scrub.sh')] } }))
-    const sync = loadSync(path, { S: SECRET, PATH: process.env.PATH })
+    const sync = { gh: github({ secret: SECRET, repos: { 'acme/web': 'web' }, filter: [join(dir, 'scrub.sh')] }) }
     const filtered = file({ memory: true, principal: 'local:user:ada', sync })
     const send = (id: string, body: string) => {
       const payload = JSON.stringify({ action: 'opened', issue: { number: Number(id), title: body, body: '' }, repository: repo, sender: { login: 'nico' } })
@@ -1362,36 +1360,4 @@ describe('sync: Slack catch-up after downtime', () => {
     expect(again.asked[0]!.query.get('latest')).toBe(point)
     fifth.close()
   })
-})
-
-describe('sync: config and the webhook route', () => {
-  it('reads platforms from the operator\'s file, with secrets named by environment variable and never written', () => {
-    const dir = tempDir()
-    const path = join(dir, 'sync.json')
-    expect(loadSync(path, {})).toEqual({})
-    writeFileSync(path, JSON.stringify({ gh: { type: 'github', secret: 'env:GH_SECRET', token: 'env:GH_TOKEN', repos: { 'acme/web': 'web' } } }))
-    expect(Object.keys(loadSync(path, { GH_SECRET: 's' }))).toEqual(['gh'])
-    expect(() => loadSync(path, {})).toThrow(/GH_SECRET isn't set/)
-    writeFileSync(path, JSON.stringify({ gh: { type: 'github', secret: 'the-actual-secret', repos: {} } }))
-    expect(() => loadSync(path, {})).toThrow(/names an environment variable/)
-    writeFileSync(path, JSON.stringify({ gh: { type: 'jira', secret: 'env:X' } }))
-    expect(() => loadSync(path, { X: 'x' })).toThrow(/github, linear, slack/)
-  })
-
-  it('mu serve takes a signed webhook with no token and the thread is on the board', async () => {
-    const dir = tempDir()
-    mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'config', 'sync.json'), JSON.stringify({ gh: { type: 'github', secret: 'env:GH_SECRET', repos: { 'acme/web': 'web' } } }))
-    const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'], { GH_SECRET: SECRET })
-    for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
-    const url = /MUSTER_URL=(\S+)/.exec(serving.output())![1]!
-    const body = JSON.stringify({ action: 'opened', issue: issue(3, 'From a real webhook', ''), repository: repo, sender: { login: 'nico' } })
-    const post = (signature: string) => fetch(`${url}/webhooks/gh`, { method: 'POST', headers: { 'x-github-event': 'issues', 'x-github-delivery': 'd1', 'x-hub-signature-256': signature }, body })
-    expect((await post('sha256=bad')).status).toBe(401)
-    expect((await post(`sha256=${sign(SECRET, body)}`)).status).toBe(200)
-    const page = JSON.parse((await cli(dir, ['read', 'web', '--json'])).stdout)
-    expect(page.threads.map((thread: { message: { text: string } }) => thread.message.text)).toEqual(['From a real webhook'])
-    serving.child.kill('SIGTERM')
-    await serving.done
-  }, 20_000)
 })

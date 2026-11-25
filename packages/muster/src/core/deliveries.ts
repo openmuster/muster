@@ -20,6 +20,9 @@ export function read(c: Context, request: { watcher: string; after: number }): {
   return { rows: rows.map((row) => ({ ...row, done: row.done === 1 })), now: c.now().getTime() }
 }
 
+/** How many times a watcher tries one event before it gives up on it and says so on its thread. */
+export const DELIVERY_ATTEMPTS = 5
+
 /** The first wait before a failed event is tried again; each try after doubles it. */
 export const RETRY_FIRST = 10_000
 /** The longest wait between two tries of one event. */

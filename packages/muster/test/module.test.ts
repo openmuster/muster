@@ -37,6 +37,9 @@ export const team = board({
 })
 `
 
+// A workflow named like the INTAKE module's watcher.
+const WORKFLOW = { name: 'intake', description: 'd', who: ['ada'], channels: ['general'], steps: [{ key: 'a', text: 'A' }], workers: { count: 1, agent: 'claude', as: 'worker', cwd: '/srv/app' } }
+
 // The default module runs only for the board nothing named, so these commands name none: no MUSTER_DIR,
 // and the board is the one under the test's HOME, ~/.muster/main.db.
 const UNNAMED = { MUSTER_DIR: undefined } as unknown as Record<string, string>
@@ -217,7 +220,7 @@ describe('a board module', () => {
     }
     // An installed daemon's plist names its board: it keeps ticking that board, and says why the module isn't run.
     const daemon = cliStart(dir, ['daemon', 'run'], { MUSTER_BOARD: 'work' })
-    await until(() => /^watchers {2}0$/m.test(daemon.output()))
+    await until(() => /^board /m.test(daemon.output()))
     daemon.child.kill('SIGTERM')
     const ended = await daemon.done
     expect(ended.stdout).toContain(`board     ${join(boardDir(dir), 'work.db')}\n`)
@@ -258,6 +261,43 @@ describe('a board module', () => {
     expect([missing.code, missing.stderr]).toEqual([0, expect.stringMatching(/^error: board module not loaded: There is no board module at .*gone\.ts\./)])
   }, 30_000)
 
+  it("a bare ~/.config/muster/board.ts wakes a shell command: a pointer, a gate, the names it passes on, none of the daemon's secrets, and schedules sent", async () => {
+    // The shell-only case, as in a container: one file, no project, no node_modules, and a global mu.
+    const dir = folder()
+    const woke = join(dir, 'woke')
+    const seen = join(dir, 'env')
+    const gate = join(dir, 'gate.sh')
+    writeFileSync(gate, `#!/bin/sh\ncase "$MUSTER_CHANNEL" in work/skip) echo '{"wake": false}';; esac\n`, { mode: 0o755 })
+    writeFileSync(join(dir, 'config', 'board.ts'), `import { board, command } from 'muster'
+export default board({
+  watch: {
+    lead: {
+      tail: { channel: 'work/' },
+      as: 'lead',
+      run: command(({ event }) => ['sh', '-c', 'echo "$1" >> ${woke}; env > ${seen}', 'wake', String(event.thread)], { gate: ['${gate}'], env: ['PASSED_ON'] }),
+    },
+  },
+})
+`)
+    await post(dir, 'general', 'board exists')
+    const daemon = cliStart(dir, ['daemon', 'run'], { GITHUB_TOKEN: 'ghs_secret_value', PASSED_ON: 'fine' })
+    await until(async () => (await status(dir)).module?.watchers[0]?.lag === 0)
+    await post(dir, 'work/skip', 'the gate says no')
+    const work = await post(dir, 'work/api', 'an issue a stranger wrote')
+    await cli(dir, ['schedule', 'general', 'due now', '--in', '1s'])
+    const general = async () => (JSON.parse((await cli(dir, ['read', 'general', '--json'])).stdout) as { threads: { message: { text: string } }[] }).threads.map((thread) => thread.message.text)
+    await until(() => existsSync(woke))
+    await until(async () => (await general()).includes('due now'))
+    daemon.child.kill('SIGTERM')
+    expect((await daemon.done).code).toBe(0)
+    expect(readFileSync(woke, 'utf8')).toBe(`${work}\n`)
+    const env = readFileSync(seen, 'utf8')
+    expect(env).not.toContain('ghs_secret_value')
+    expect(env).toMatch(/^PASSED_ON=fine$/m)
+    expect(env).toMatch(new RegExp(`^MUSTER_THREAD=${work}$`, 'm'))
+    expect(env).toMatch(/^MUSTER_PROFILE=lead$/m)
+  }, 60_000)
+
   it('mu serve on a module that fails to load serves the board anyway, with a loud error', async () => {
     const dir = folder(`import { board } from 'muster'\nthrow new Error('the module blew up')\nexport default board()\n`)
     const served = await serve(dir)
@@ -268,10 +308,8 @@ describe('a board module', () => {
     expect(served.stdout).not.toContain('module ')
   }, 30_000)
 
-  it("mu daemon run runs the module's watchers beside the ones in watchers.json, and status shows each one's tail, holder and lag", async () => {
+  it("mu daemon run runs the module's watchers, and status shows each one's tail, holder and lag", async () => {
     const dir = folder(INTAKE)
-    const marker = join(dir, 'woke')
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['sh', '-c', `echo "$MUSTER_THREAD" >> ${marker}`], every: 1 }] }))
     await post(dir, 'general', 'board exists')
     // Declared, and nothing runs it yet.
     const idle = await cli(dir, ['daemon', 'status'])
@@ -280,11 +318,9 @@ describe('a board module', () => {
     expect(idle.stdout).toContain('warning   declared but not started: intake.')
     const daemon = cliStart(dir, ['daemon', 'run'])
     await until(async () => (await status(dir)).module?.watchers[0]?.lag === 0)
-    expect(daemon.output()).toContain(`module    ${join(dir, 'config', 'board.ts')}  muster ${VERSION} ${PACKAGE}\nwatchers  1\nwatching  intake\n`)
+    expect(daemon.output()).toContain(`module    ${join(dir, 'config', 'board.ts')}  muster ${VERSION} ${PACKAGE}\nwatching  intake\n`)
     const feature = await post(dir, 'features', 'dark mode')
-    const work = await post(dir, 'work/api', 'needs a look')
     await until(async () => (await replies(dir, feature)).includes('Started'))
-    await until(() => existsSync(marker))
     const running = await cli(dir, ['daemon', 'status'])
     expect(running.stdout).toMatch(/^watch {5}intake {2}channel=features root=true {2}as intake {2}held by \S+:\d+:[0-9a-f]+ {2}lag \d+$/m)
     expect(running.stdout).not.toContain('declared but not started')
@@ -292,7 +328,6 @@ describe('a board module', () => {
     expect(json.module).toEqual({ path: join(dir, 'config', 'board.ts'), watchers: [{ name: 'intake', tail: { channel: 'features', root: true }, as: 'intake', holder: expect.stringContaining(':'), lag: expect.any(Number) }], sync: [] })
     daemon.child.kill('SIGTERM')
     expect((await daemon.done).code).toBe(0)
-    expect(readFileSync(marker, 'utf8')).toBe(`${work}\n`)
     expect(await replies(dir, feature)).toEqual(['Started'])
     // Stopped cleanly, it let go of the watcher's lease.
     expect((await status(dir)).module!.watchers[0]!.holder).toBeNull()
@@ -350,18 +385,11 @@ describe('a board module', () => {
     expect([set.module?.path, set.module?.error]).toEqual([join(dir, 'intake.ts'), undefined])
   }, 30_000)
 
-  it("with a module, sync.json isn't read, and mu says so", async () => {
+  it("mu serve on a module whose watcher is named like a workflow serves the board, and doesn't run the module's watchers", async () => {
     const dir = folder(INTAKE)
-    writeFileSync(join(dir, 'config', 'sync.json'), '{}')
-    const shown = await cli(dir, ['daemon', 'status'])
-    expect(shown.stderr).toBe(`warning: ${join(dir, 'config', 'sync.json')} isn't read with a board module: nothing it lists is synced. Give the module's board() its sync instead.\n`)
-  }, 30_000)
-
-  it("mu serve on a module whose watcher clashes with watchers.json serves the board, and doesn't run the module's watchers", async () => {
-    const dir = folder(INTAKE)
-    writeFileSync(join(dir, 'config', 'watchers.json'), JSON.stringify({ watchers: [{ name: 'intake', tail: {}, run: ['true'] }] }))
+    writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [WORKFLOW] }))
     const served = await serve(dir)
-    expect(served.stderr).toContain(`error: A watcher in ${join(dir, 'config', 'board.ts')} and a watcher in ${join(dir, 'config', 'watchers.json')} are both named "intake".\n  The module's watchers don't run`)
+    expect(served.stderr).toContain(`error: A watcher in ${join(dir, 'config', 'board.ts')} and a workflow in ${join(dir, 'config', 'workflows.json')} are both named "intake".\n  The module's watchers don't run`)
     expect([served.status, served.code]).toEqual([404, 0])
   }, 30_000)
 
@@ -382,14 +410,10 @@ describe('a board module', () => {
     other.close()
   }, 120_000)
 
-  it.each([
-    ['watcher', 'watchers.json', { watchers: [{ name: 'intake', tail: {}, run: ['true'] }] }],
-    ['hook', 'hooks.json', { hooks: [{ name: 'intake', url: 'https://example.com/hook', secret: 'env:HOOK_SECRET', tail: {} }] }],
-    ['workflow', 'workflows.json', { workflows: [{ name: 'intake', description: 'd', who: ['ada'], channels: ['general'], steps: [{ key: 'a', text: 'A' }], workers: { count: 1, agent: 'claude', as: 'worker', cwd: '/srv/app' } }] }],
-  ])("a module watcher named like a %s in the config files is refused when the module is loaded", async (kind, name, config) => {
+  it('a module watcher named like a workflow in workflows.json is refused when the module is loaded', async () => {
     const dir = folder(INTAKE)
-    writeFileSync(join(dir, 'config', name), JSON.stringify(config))
-    const said = `A watcher in ${join(dir, 'config', 'board.ts')} and a ${kind} in ${join(dir, 'config', name)} are both named "intake".`
+    writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [WORKFLOW] }))
+    const said = `A watcher in ${join(dir, 'config', 'board.ts')} and a workflow in ${join(dir, 'config', 'workflows.json')} are both named "intake".`
     const run = await cli(dir, ['daemon', 'run'])
     expect([run.code, run.stderr]).toEqual([0, expect.stringContaining(`error: ${said}`)])
     const shown = await cli(dir, ['daemon', 'status', '--json'])
@@ -440,7 +464,7 @@ describe('a daemon on a board module, as a service', () => {
     expect(basename(a.log)).toBe('daemon-work.log')
     // Its restart guard is the board's too.
     const daemon = cliStart(dir, ['daemon', 'run', '--module', join(dir, 'a.ts')])
-    await until(() => /^watchers {2}0$/m.test(daemon.output()))
+    await until(() => /^watching {2}none$/m.test(daemon.output()))
     daemon.child.kill('SIGTERM')
     await daemon.done
     expect(existsSync(join(dir, 'config', 'daemon', basename(guardPath('work', join(boardDir(dir), 'work.db')))))).toBe(true)
@@ -578,15 +602,6 @@ export default board({ watch: { slow: { tail: { channel: 'features' }, as: 'slow
     // Its lease was given back with the board still open: nothing holds it now.
     expect((await status(dir)).module?.watchers[0]?.holder).toBeNull()
   }, 60_000)
-
-  it("install and check say sync.json isn't read with a module, and install says to move it into the module", async () => {
-    const dir = folder(INTAKE)
-    writeFileSync(join(dir, 'config', 'sync.json'), '{}')
-    const said = `warning: ${join(dir, 'config', 'sync.json')} isn't read with a board module`
-    const installed = await cli(dir, ['daemon', 'install'], { env: fakeLaunchctl(dir) })
-    expect([installed.stderr, installed.stdout]).toEqual([expect.stringContaining(said), expect.stringContaining(`sync       ${join(dir, 'config', 'sync.json')} is not read with a board module: move its sync into the module's board()`)])
-    expect((await cli(dir, ['daemon', 'check', 'intake'])).stderr).toContain(said)
-  }, 30_000)
 
   it('the muster found for a module is the nearest node_modules above it: not NODE_PATH, and not until the module is there', async () => {
     const dir = folder()

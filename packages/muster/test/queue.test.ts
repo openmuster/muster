@@ -4,7 +4,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { tickOnce, watcherEnv } from '../src/daemon/daemon.ts'
+import { tickOnce } from '../src/daemon/daemon.ts'
+import { watcherEnv } from '../src/watch/command.ts'
 import { openRuns, threadQuote, type Spawner } from '../src/daemon/runs.ts'
 import { fillResults, pushesTask } from '../src/daemon/steps.ts'
 import { RETRY_MOST } from '../src/core/deliveries.ts'
@@ -115,8 +116,8 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
   const workflows = loadWorkflows(join(queue, 'workflows.json'))
   /**
    * One pass of what `mu serve --module board.ts` runs: a pass of its sync loop (under the `sync` lease),
-   * the module's watchers through its host (`deliver()`), then the daemon's tick with no JSON watchers:
-   * schedules and requested workflows.
+   * the module's watchers through its host (`deliver()`), then the daemon's tick: schedules and requested
+   * workflows.
    * A command a watcher runs starts from this process's environment, so for the pass it is the daemon's.
    */
   const tick = async () => {
@@ -129,7 +130,7 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
       for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name]
       Object.assign(process.env, saved)
     }
-    return tickOnce(team, [], new Map(), { now: () => Date.now(), spawn: async () => ({ code: 0, stdout: '' }) }, undefined, { list: workflows, deps: runs })
+    return tickOnce(team, { list: workflows, deps: runs })
   }
   /** Time passing on the board's clock: a failed delivery is tried again only once its wait is up. */
   const later = (ms = RETRY_MOST) => void (skew += ms)

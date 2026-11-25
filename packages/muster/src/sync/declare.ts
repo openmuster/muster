@@ -11,15 +11,15 @@ export type Secret = string | Env
 
 export { env, isEnv, type Env }
 
-/** What every platform's sync takes, as a `sync.json` entry has it. */
+/** What every platform's sync takes. */
 export type SyncOptions = {
   /** The webhook signing secret: `env('NAME')`. */
   secret: Secret
   /** An API token, where the sync sends to the platform or reads from it: `env('NAME')`. */
   token?: Secret
   /**
-   * Runs on text as it comes in, and returns what to keep, or null to drop the event. A command (an array,
-   * as in `sync.json`: text in on stdin, what to keep on stdout, a non-zero exit drops it), or a function.
+   * Runs on text as it comes in, and returns what to keep, or null to drop the event. A command (an array
+   * of words: text in on stdin, what to keep on stdout, a non-zero exit drops it), or a function.
    */
   filter?: readonly string[] | ((text: string) => string | null)
   /** Megabytes of files this sync may bring in a day. */

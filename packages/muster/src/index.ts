@@ -19,7 +19,6 @@ export { runLocal, agentEnv, type RunRequest, type RunResult } from './runner/lo
 export { github, linear, slack, type GitHubOptions, type LinearOptions, type SlackOptions } from './sync/providers.ts'
 export { env, type Env } from './config/env.ts'
 export type { Secret, SyncOptions } from './sync/declare.ts'
-export { loadSync } from './sync/config.ts'
 export type { Provider, Inbound } from './sync/types.ts'
 export { boardPolicy, applyPolicy, SANDBOX_ROUTES, type NetworkPolicy } from './runner/policy.ts'
 export { vercel, cloudflare, type CloudRunner, type CloudRequest } from './runner/cloud.ts'
