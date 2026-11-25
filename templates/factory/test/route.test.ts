@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { request } from 'node:http'
 import { createServer } from 'node:net'
@@ -14,6 +15,8 @@ let server: ChildProcess | null = null
 let url = ''
 let team: Board
 let token = ''
+/** The GitHub webhook's secret, as the app reads it from GITHUB_WEBHOOK_SECRET. */
+const SECRET = 'gh-webhook-secret'
 
 const freePort = () =>
   new Promise<number>((resolve) => {
@@ -59,7 +62,7 @@ beforeAll(async () => {
     cwd: HERE,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...env, HOME: dir, NEXT_TELEMETRY_DISABLED: '1', ALLOW_HOSTS: 'board.example.test' },
+    env: { ...process.env, ...env, HOME: dir, NEXT_TELEMETRY_DISABLED: '1', ALLOW_HOSTS: 'board.example.test', GITHUB_WEBHOOK_SECRET: SECRET },
   })
   let output = ''
   server.stdout!.on('data', (chunk) => (output += chunk))
@@ -97,6 +100,17 @@ describe('the factory route, built and started', () => {
     const feed = await ask('/api/board/feed?after=0', { method: 'GET', headers: { authorization }, until: 'event: message.posted' })
     expect([feed.status, feed.type]).toEqual([200, 'text/event-stream'])
     expect(feed.body).toContain('"text":"first"')
+  })
+
+  it("takes GitHub's webhook for the module's sync at /api/board/webhooks/gh, signed, with no token", async () => {
+    const hook = (secret: string, number: number, title: string) => {
+      const body = JSON.stringify({ action: 'opened', issue: { number, title, body: '' }, repository: { full_name: 'acme/web' }, sender: { login: 'nico' } })
+      const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
+      return ask('/api/board/webhooks/gh', { headers: { 'content-type': 'application/json', 'x-github-event': 'issues', 'x-github-delivery': `d-${number}`, 'x-hub-signature-256': signature }, body: JSON.parse(body) })
+    }
+    expect((await hook('not-the-secret', 1, 'forged')).status).toBe(401)
+    expect((await hook(SECRET, 2, 'The login redirect loops')).status).toBe(200)
+    expect((await team.readChannel({ channel: 'factory/issues' })).threads.map((thread) => thread.message.text)).toEqual([expect.stringMatching(/^The login redirect loops/)])
   })
 
   it('answers for the names in ALLOW_HOSTS, and refuses any other', async () => {

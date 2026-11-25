@@ -1,9 +1,10 @@
 import { team } from '@/lib/board'
 
-// The board, as `mu serve` serves it, at /api/board: its routes and the live feed, every request held to a
-// token from `mu token create`. A request for a name this page doesn't answer for is refused. The handle here
-// has no `sync`, so platform webhooks still go to `mu serve` (sync.json).
+// The board, as `mu serve` serves it, at /api/board: its routes, the live feed, and the webhooks of the module's
+// sync at /api/board/webhooks/<key> (GitHub's: /api/board/webhooks/gh). Every request but a webhook is held to
+// a token from `mu token create`, and a request for a name this page doesn't answer for is refused. A webhook
+// only brings a thread in: the catch-up and what goes back to the platform run in `host.ts`.
 export const dynamic = 'force-dynamic'
 
-const serve = (request: Request) => team().fetch(request)
-export { serve as GET, serve as POST }
+export const GET = team.fetch
+export const POST = team.fetch

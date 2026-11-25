@@ -17,42 +17,59 @@ access. What a thread needs is for the agent to judge from the thread.
 
 ## Set it up
 
-`templates/factory` has the pieces: a watcher, a sync file, a wake script, the
-agent's instructions, and a page.
+`templates/factory` has the pieces: a board module (`lib/board.ts`) with
+the GitHub sync and the watcher, a host that runs them (`host.ts`), a wake
+script (`lib/wake.ts`), the agent's instructions, and a page that also takes
+the webhooks. Put your repository in place of `acme/web` in `lib/board.ts`,
+then start the page and the host, each in its own terminal, from
+`templates/factory`, with the webhook's secret in both:
 
 ```bash
-cp templates/factory/watchers.json templates/factory/sync.json ~/.config/muster/
 export GITHUB_WEBHOOK_SECRET=...
-mu serve --allow-host board.example.com
+pnpm dev
 ```
-
-Then edit `~/.config/muster/watchers.json` so `run` names `wake.sh` by its
-full path, and point the platform's webhook at the board. With `mu serve`
-running, check that the watcher wakes the agent and that the agent answers:
 
 ```bash
-mu daemon check factory --in factory/issues
+export GITHUB_WEBHOOK_SECRET=...
+pnpm host
 ```
- `mu serve` listens
-on 127.0.0.1: the webhook reaches it through a proxy or a tunnel with a public
-HTTPS name, and `--allow-host` is that name.
 
-The template's `sync.json` brings threads in and sends nothing back. To have
-the agent's replies posted as comments, give the repository `"mirror": true`
-and the file a `"token"`: see [GitHub](../02-sync/02-github.md).
+The module names the secret with `env()`, so it is never written in the
+file: the page reads it on its first request, and `host.ts` when it starts,
+refusing to start while it is unset. Point GitHub's webhook at
+`https://board.example.com/api/board/webhooks/gh`, and list
+`board.example.com` in `ALLOW_HOSTS`. The page listens on 127.0.0.1: the
+webhook reaches it through a proxy or a tunnel with a public HTTPS name. The
+webhook brings a thread in; `host.ts` runs the watcher, and the sync's
+catch-up and sending.
+
+Schedules are sent by a daemon that holds `tick`. Run it without a module:
+`host.ts` runs this one.
+
+```bash
+mu daemon run --no-module
+```
+
+With all three running, check from `templates/factory` that the watcher
+wakes the agent and that the agent answers:
+
+```bash
+mu daemon check factory --module "$PWD/lib/board.ts" --in factory/issues
+```
+
+The template's sync brings threads in and sends nothing back. To have the
+agent's replies posted as comments, give the repository `mirror: true` and
+the sync a `token: env('GITHUB_TOKEN')`: see [GitHub](../02-sync/02-github.md)
+and [Sync](../02-sync/01-overview.md#in-a-board-module).
 
 > [!NOTE]
 > GitHub, Linear and Slack sync have all been run against the live services:
 > see [Sync](../02-sync/01-overview.md).
 
-```bash
-cd templates/factory
-pnpm dev
-```
-
-The page lists what is set up and what isn't, with the command for each, and
-the recent threads. `/board` shows every thread, where you read and reply from
-a browser.
+The page lists what is set up and what isn't, with the command for each, who
+holds each role (`tick` for the daemon, `sync` and `watch:factory` for the
+host), and the recent threads. `/board` shows every thread, where you read
+and reply from a browser.
 
 ## How a thread goes
 
@@ -144,8 +161,9 @@ mu read "$MUSTER_THREAD" --json | grep -q '"product":' && echo '{"wake": false}'
 mu read "$MUSTER_THREAD" --json | grep -q "\"product\": \"$1\"" || echo '{"wake": false}'
 ```
 
-`route.sh` and `answer.sh` are `templates/factory/wake.sh` with other
-instructions: they pass a pointer, and the agent reads the thread itself.
+`route.sh` and `answer.sh` do what the factory's `lib/wake.ts` does, with
+other instructions: they pass a pointer, and the agent reads the thread
+itself.
 
 Try the plumbing by hand, with you as the router:
 
@@ -196,7 +214,7 @@ pull request.
 ## Keep it safe
 
 - The wake command gets a pointer and a clean environment. It never gets the
-  secrets `sync.json` names.
+  secrets the sync names.
 - A `filter` on the sync can drop or rewrite text on its way in.
 - What arrives from a platform informs the agent; it never authorizes it.
 - A task whose brief is edited from outside is held for its owner.

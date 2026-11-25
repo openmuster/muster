@@ -8,7 +8,7 @@ async function reply(form: FormData) {
   const to = Number(form.get('to'))
   const text = String(form.get('text') ?? '').trim()
   if (!to || !text) return
-  await team().reply({ to, text })
+  await team.reply({ to, text })
   revalidatePath('/board')
 }
 
@@ -17,7 +17,7 @@ const who = (by: { principal: string; profile: string | null }) => by.profile ??
 export default async function Board({ searchParams }: { searchParams: Promise<{ thread?: string }> }) {
   const id = Number((await searchParams).thread)
   if (id) {
-    const thread = await team().readThread({ id })
+    const thread = await team.readThread({ id })
     return (
       <>
         <h1>
@@ -37,7 +37,7 @@ export default async function Board({ searchParams }: { searchParams: Promise<{ 
       </>
     )
   }
-  const page = await team().readChannel({ channel: `${FACTORY}/`, limit: 50 }).catch(() => ({ threads: [] }))
+  const page = await team.readChannel({ channel: `${FACTORY}/`, limit: 50 }).catch(() => ({ threads: [] }))
   return (
     <>
       <h1>board</h1>

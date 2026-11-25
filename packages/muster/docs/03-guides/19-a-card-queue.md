@@ -18,13 +18,12 @@ the Vercel and GitHub parts.
 
 ## The parts
 
-`templates/queue` is configuration for muster's own daemon and three small
-scripts:
+`templates/queue` is a board module for muster's own daemon, a workflow
+file, and three small scripts:
 
 | File | What it does |
 | --- | --- |
-| `sync.json` | Linear team `ENG` to the channel `cards`, both ways |
-| `watchers.json` | `card-start` runs `start.sh` for a card labelled `tag.agent=agent`; `needs-me` runs `notify.sh` when a task under `cards/` blocks |
+| `board.ts` | The board module. Its sync maps Linear team `ENG` to the channel `cards`, both ways. Its watcher `card-start` runs `start.sh` for a card labelled `tag.agent=agent`; `needs-me` runs `notify.sh` when a task under `cards/` blocks |
 | `workflows.json` | The `card` workflow: spec, work and review tasks, one Vercel worker, `--push` for the work step only |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow on it, once |
 | `notify.sh` | Tells you a task is blocked, with its ID only |
@@ -45,18 +44,23 @@ flowchart LR
 ## Set it up
 
 ```bash
-cp templates/queue/sync.json templates/queue/watchers.json templates/queue/workflows.json ~/.config/muster/
+cp templates/queue/workflows.json ~/.config/muster/
 ```
 
-Then edit the copies:
+Then edit the copy: `repo` is your repository's https address. In
+`board.ts`, `ENG` is your Linear team's key. `board.ts` stays in
+`templates/queue`, and names the scripts beside it by their full paths,
+wherever it is run from. If `~/.config/muster/` has a `sync.json` or a
+`watchers.json` from an earlier copy of this template, move anything else in
+them into a module and delete them: `mu serve` refuses a module with a sync
+beside a `sync.json`, and a watcher in `watchers.json` named like one in the
+module.
 
-- `watchers.json`: make `./start.sh` and `./notify.sh` the full paths of the
-  scripts in `templates/queue`.
-- `workflows.json`: `repo` is your repository's https address.
-- `sync.json`: `ENG` is your Linear team's key.
-
-Put the settings in the environment `mu serve` starts with. Its ticker runs
-the watchers and the workflow, and the workers start with its environment:
+Put the settings in the environment `mu serve` starts with, and give it the
+module. It runs the module's sync, its watchers and the workflow, and the
+workers start with its environment. The module names the Linear secrets with
+`env()`: `mu serve` reads them when it starts, and refuses to start, naming
+the variable, if one isn't set:
 
 ```bash
 export LINEAR_WEBHOOK_SECRET=...  LINEAR_API_KEY=lin_api_...
@@ -64,7 +68,7 @@ export MUSTER_SANDBOX_URL=https://board.example.com/api/board
 export VERCEL_TOKEN=... VERCEL_TEAM_ID=... VERCEL_PROJECT_ID=...
 export GITHUB_APP_ID=123456 GITHUB_APP_KEY_FILE=~/.config/muster/app.pem
 export ANTHROPIC_API_KEY=sk-ant-...
-mu serve --allow-host board.example.com
+mu serve --module "$PWD/templates/queue/board.ts" --allow-host board.example.com
 ```
 
 Use `MUSTER_SANDBOX_URL`, not `MUSTER_URL`. The watchers' scripts run `mu` on
@@ -82,7 +86,7 @@ mu workflow list
 
 1. An issue in the team gets the label `agent`, when it is made or later. It
    arrives as a thread in `cards` with `tag.agent=agent`.
-2. Within 30 seconds the watcher `card-start` runs `start.sh` with the
+2. Within a few seconds the watcher `card-start` runs `start.sh` with the
    thread's ID, as the profile `intake`. The script sets `started=yes` on the
    card only if it still has `tag.agent=agent` and has no `started`, in one
    write, and then asks for the `card` workflow on it. Any later wake, from a
@@ -208,7 +212,9 @@ was done again keeps the old quote.
   If the daemon refuses the request, it says why on the card itself.
 - **A label taken off.** Before the watcher looked, nothing starts. After a
   run started, it goes on: cancel its tasks with `mu tasks cancel`.
-- **The board was down.** With the key in `sync.json`, `mu serve` catches up
+- **A script keeps failing.** The watcher tries the same event again, with a
+  growing wait, and after five tries says so on the card or task, once.
+- **The board was down.** With `LINEAR_API_KEY` set, `mu serve` catches up
   when it starts again: an issue made meanwhile arrives with its labels, and
   an `agent` label added meanwhile to a card it has is brought in, and either
   starts the card, whatever state the issue is in, closed included: the
@@ -245,5 +251,7 @@ was done again keeps the old quote.
 ## Not tried live
 
 The template is covered by tests: a Linear issue starting a run through the
-real watcher, script and daemon, with workers and Linear's API as
-stand-ins. It has not been run against Linear, Vercel and GitHub together.
+module's watchers, the real scripts and the daemon's workflow tick; the
+module run by `mu daemon run --module`; and `mu serve --module` taking
+Linear's webhook and commenting back on the issue, with workers and Linear's
+API as stand-ins. It has not been run against Linear, Vercel and GitHub together.

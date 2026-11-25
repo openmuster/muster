@@ -174,6 +174,26 @@ versions are affected.
   server ticks that board and exits 0. Before, it stayed up and every tick
   was refused.
 
+- The factory and card queue templates are board modules: their watchers
+  and their sync are in code, and `watchers.json`, `sync.json` and `wake.sh`
+  are gone from both. The factory's `lib/board.ts` exports a module-scope
+  `team` with its GitHub sync and the watcher `factory`. `pnpm host`
+  (`host.ts`) runs both, holding the leases `watch:factory` and `sync`, and
+  stops cleanly on SIGTERM or SIGINT. GitHub's webhook goes to the app's
+  `/api/board/webhooks/gh` (the route is `export const GET = team.fetch`),
+  and the page says who holds `tick`, `sync` and `watch:factory`.
+  `lib/wake.ts` replaces `wake.sh`, and in a Vercel sandbox keys the wake's
+  task by the event, so a retried wake makes no second task. An agent
+  started on this machine gets only what any process needs, the pointer and
+  `ANTHROPIC_API_KEY`; the Vercel and GitHub App settings reach the wake only
+  with `FACTORY_RUNNER=vercel`, and then only `mu run`. The queue's
+  `board.ts` declares its Linear sync with `env()` and runs `start.sh` and
+  `notify.sh` with `command()`, by their full paths; run it with
+  `mu serve --module`. If you copied either template's `watchers.json` or
+  `sync.json` into `~/.config/muster/`, move what else they hold into a
+  module and delete them: a watcher there and in a module under one name is
+  refused, and so is a module's sync beside a `sync.json`.
+
 ### Fixed
 
 - A feed (`GET /api/board/feed`) whose client left while it was still
