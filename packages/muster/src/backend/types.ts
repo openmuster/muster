@@ -117,8 +117,11 @@ export type Backend = {
   /** Sends what is due now. Whoever holds the board's `tick` lease calls it. */
   scheduleTick(caller: Caller): Promise<ReturnType<typeof schedules.tick>>
 
-  /** Takes a platform's webhook for the sync named `key`. Only the server that owns the board answers this. */
-  syncReceive(key: string, received: { headers: Record<string, string | undefined>; body: string }): Promise<{ status: number; body: string }>
+  /**
+   * Takes a platform's webhook for the sync named `key`. Only the server that owns the board answers this.
+   * `skipped` says what it carried that was late, and not applied.
+   */
+  syncReceive(key: string, received: { headers: Record<string, string | undefined>; body: string }): Promise<{ status: number; body: string; skipped?: string[] }>
   /** Imports what is waiting and delivers what is owed. The ticker calls it. */
   syncTick(): Promise<{ imported: number; delivered: number; failed: number; skipped?: string[] }>
 

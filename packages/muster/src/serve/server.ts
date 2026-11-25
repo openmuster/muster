@@ -136,6 +136,7 @@ export function createHandler(options: ServeOptions) {
         const headers: Record<string, string | undefined> = {}
         for (const [name, value] of Object.entries(req.headers)) headers[name] = Array.isArray(value) ? value[0] : value
         const answer = await options.backend.syncReceive(url.pathname.slice((MOUNT + '/webhooks/').length), { headers, body: Buffer.concat(chunks).toString('utf8') })
+        for (const note of answer.skipped ?? []) options.log?.(`skipped sync ${note}`)
         res.writeHead(answer.status, { 'content-type': 'text/plain' })
         return res.end(answer.body)
       }

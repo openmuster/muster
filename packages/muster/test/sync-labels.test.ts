@@ -314,3 +314,154 @@ describe('sync: what a Linear issue is filed under, after downtime', () => {
     second.close()
   })
 })
+
+describe('sync: Linear updates that arrive late', () => {
+  // Linear stamps each change to an issue (`updatedAt`); a webhook it retries, or one held up, comes after a newer one.
+  const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, '0')}:00.000Z`
+  const add = (minute: number, more: Record<string, unknown> = {}) => ({ type: 'Issue', action: 'update', webhookTimestamp: Date.parse(at(minute)), data: linearIssue({ labels: [{ id: 'l-1', name: 'agent' }], labelIds: ['l-1'], updatedAt: at(minute), ...more }) })
+  const remove = (minute: number, more: Record<string, unknown> = {}) => ({ type: 'Issue', action: 'update', webhookTimestamp: Date.parse(at(minute)), data: linearIssue({ labels: [], labelIds: [], updatedAt: at(minute), ...more }) })
+  const created = { type: 'Issue', action: 'create', data: linearIssue({ updatedAt: at(0) }) }
+
+  it('a removal older than the add that came first leaves the label on', async () => {
+    const { lin, labels } = setup()
+    await lin(created)
+    await lin(add(2))
+    const late = await lin(remove(1))
+    expect((await labels('eng'))['tag.agent']).toBe('agent')
+    expect(late).toMatchObject({ status: 200, skipped: [expect.stringContaining('issue:iss-1')] })
+  })
+
+  it('the same when the add started the thread, for an issue the board never saw', async () => {
+    const { team, lin, labels } = setup()
+    await lin(add(2, { userId: 'u-maya' }))
+    await lin(remove(1))
+    expect((await team.readChannel({ channel: 'eng' })).threads).toHaveLength(1)
+    expect((await labels('eng'))['tag.agent']).toBe('agent')
+  })
+
+  it('an update delivered again with the same updatedAt changes nothing, even after the thread was changed by hand', async () => {
+    const { team, lin, labels, changes } = setup()
+    await lin(created)
+    await lin(add(2))
+    const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+    await team.label({ id: root.id, unset: ['tag.agent'] })
+    const before = await changes('eng')
+    // A retry: the same change, sent at another time, so its body is not the same.
+    const again = await lin({ ...add(2), webhookTimestamp: Date.parse(at(5)) })
+    expect(await changes('eng')).toBe(before)
+    expect((await labels('eng'))['tag.agent']).toBeUndefined()
+    expect(again).toMatchObject({ skipped: [expect.any(String)] })
+  })
+
+  it('a removal newer than the add takes the label off', async () => {
+    const { lin, labels } = setup()
+    await lin(created)
+    await lin(add(1))
+    await lin(remove(2))
+    expect((await labels('eng'))['tag.agent']).toBeUndefined()
+  })
+
+  it("a newer update that leaves out the issue's labels leaves them, and an older one after it is still skipped", async () => {
+    const { lin, labels } = setup()
+    await lin(created)
+    await lin(add(1))
+    await lin({ type: 'Issue', action: 'update', data: { id: 'iss-1', team: { key: 'ENG' }, state: { name: 'Done' }, updatedAt: at(3) } })
+    await lin(remove(2))
+    expect(await labels('eng')).toMatchObject({ state: 'done', 'tag.agent': 'agent' })
+  })
+
+  it('what was applied survives a restart', async () => {
+    const dir = tempDir()
+    const time = clock()
+    const sync = { lin: linear({ secret: SECRET, teams: { ENG: 'eng' } }) }
+    const send = (backend: ReturnType<typeof file>, payload: unknown) => {
+      const body = JSON.stringify(payload)
+      return backend.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })
+    }
+    const first = file({ dir, principal: 'local:user:ada', now: time.now, sync })
+    await send(first, created)
+    await send(first, add(2))
+    first.close()
+    const second = file({ dir, principal: 'local:user:ada', now: time.now, sync })
+    await send(second, remove(1))
+    expect((await board({ backend: second }).readChannel({ channel: 'eng' })).threads[0]!.message.labels['tag.agent']).toBe('agent')
+    second.close()
+  })
+
+  describe('and catching up', () => {
+    const node = (minute: number, labels: string[]) => ({ ...linearIssue({ creator: { id: 'u-nico' }, priority: 0, labels: { nodes: labels.map((name) => ({ name })) } }), updatedAt: at(minute) })
+    function downtime(listed: () => unknown[], comments: () => unknown[] = () => []) {
+      const time = clock()
+      const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+        const query = String(JSON.parse(String(init?.body ?? '{}')).query)
+        if (query.includes('issues(')) return Response.json({ data: { issues: { nodes: listed(), pageInfo: { hasNextPage: false, endCursor: null } } } })
+        return Response.json({ data: { comments: { nodes: comments(), pageInfo: { hasPreviousPage: false, startCursor: null } } } })
+      }) as typeof fetch
+      const dir = tempDir()
+      const sync = { lin: linear({ secret: SECRET, token: 'lin_api_token', teams: { ENG: 'eng' } }) }
+      const open = () => file({ dir, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+      const send = (backend: ReturnType<typeof file>, payload: unknown) => {
+        const body = JSON.stringify(payload)
+        return backend.syncReceive('lin', { headers: { 'linear-signature': sign(SECRET, body) }, body })
+      }
+      const tag = async (backend: ReturnType<typeof file>) => (await board({ backend }).readChannel({ channel: 'eng' })).threads[0]!.message.labels['tag.agent']
+      return { time, open, send, tag }
+    }
+
+    it("an older snapshot read on catching up doesn't undo a newer webhook", async () => {
+      const { time, open, send, tag } = downtime(() => [node(1, ['agent'])])
+      const first = open()
+      await send(first, { type: 'Issue', action: 'create', data: linearIssue({ labels: [{ name: 'agent' }], updatedAt: at(0) }) })
+      first.close()
+      time.advance(3_600_000)
+      const second = open()
+      // The removal comes in first; the read of what was missed holds the issue as it was a minute before it.
+      await send(second, remove(2))
+      expect(await tag(second)).toBeUndefined()
+      const tick = await second.syncTick()
+      expect(await tag(second)).toBeUndefined()
+      expect(tick.skipped).toEqual([expect.stringContaining('issue:iss-1')])
+      second.close()
+    })
+
+    it("and a webhook older than what catching up applied doesn't undo it", async () => {
+      const { time, open, send, tag } = downtime(() => [node(3, ['agent'])])
+      const first = open()
+      await send(first, created)
+      first.close()
+      time.advance(3_600_000)
+      const second = open()
+      await second.syncTick()
+      expect(await tag(second)).toBe('agent')
+      await send(second, remove(2))
+      expect(await tag(second)).toBe('agent')
+      second.close()
+    })
+
+    it('a comment read with its latest edit keeps it when an older edit comes in after', async () => {
+      const { time, open, send } = downtime(() => [], () => [{ id: 'c-1', body: 'final', updatedAt: at(5), user: { id: 'u-maya' }, issue: node(0, []) }])
+      const first = open()
+      await send(first, created)
+      first.close()
+      time.advance(3_600_000)
+      const second = open()
+      await second.syncTick()
+      await send(second, { type: 'Comment', action: 'update', data: { id: 'c-1', body: 'draft', issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } }, updatedAt: at(3) } })
+      const team = board({ backend: second })
+      const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+      expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['final'])
+      second.close()
+    })
+  })
+
+  it('a comment edit older than the one applied leaves the newer text', async () => {
+    const { team, lin } = setup()
+    await lin(created)
+    const comment = (body: string, minute: number, action = 'update') => ({ type: 'Comment', action, webhookTimestamp: Date.parse(at(minute)), data: { id: 'c-1', body, issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } }, updatedAt: at(minute) } })
+    await lin(comment('first', 1, 'create'))
+    await lin(comment('third', 3))
+    await lin(comment('second', 2))
+    const root = (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+    expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['third'])
+  })
+})

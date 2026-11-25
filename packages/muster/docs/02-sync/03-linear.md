@@ -76,6 +76,29 @@ to it in a mapped team:
 
 An issue in a team that isn't mapped starts nothing.
 
+### In the order Linear made them
+
+Linear resends a webhook the board didn't answer, such as one sent while it
+was restarting, and a webhook can be held up on the way. So a change can
+arrive after a newer one: a label taken off, then put back, can come in as
+put back, then taken off. The board goes by when Linear says the issue
+changed (its `updatedAt`), not by when the webhook came:
+
+- For each issue, it keeps when the newest change it applied was made, in
+  the board's file, so a restart doesn't forget it.
+- A change made no later than that is skipped, and the log says so:
+  `skipped sync lin issue:<id>: a change made at … came after one made at …`.
+  A webhook sent again, with the same `updatedAt`, is one of these.
+- [Catching up](#catching-up) reads each issue with its `updatedAt` and
+  follows the same rule: what it read doesn't undo a newer webhook, and a
+  webhook older than what it read doesn't undo it.
+- A comment's edits go the same way, by the comment's own `updatedAt`. A
+  comment removed is removed, whenever that arrives.
+- A newer change that doesn't say everything, such as one with no list of
+  labels, still changes only what it carries.
+
+A change from a webhook with no `updatedAt` is applied as it arrives.
+
 ## What goes back
 
 - A reply in a synced thread is posted as a comment on the issue.
