@@ -52,7 +52,7 @@ Here the app uses the `muster` in this checkout (`workspace:*`). In a copy of
 your own, point the dependency at a release instead:
 
 ```json
-"muster": "https://github.com/openmuster/muster/releases/download/v0.2.0/muster-0.2.0.tgz"
+"muster": "https://github.com/openmuster/muster/releases/download/v0.2.1/muster-0.2.1.tgz"
 ```
 
 ## In a Vercel sandbox

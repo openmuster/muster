@@ -26,7 +26,7 @@ mu demo
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
 
 To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.2.0/muster-0.2.0.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.2.1/muster-0.2.1.tgz`.
 muster is not published to npm: install it from the URL.
 
 To upgrade, run the install line again; `mu --version` says what you have, and
@@ -86,15 +86,13 @@ agent died goes back to the queue on its own.
   and `mu daemon check`, which tells you whether a watcher wakes anything.
 - **CI with no stored secret:** a job on GitHub Actions or GitLab CI trades
   its own OIDC token for a short-lived board token, for the workloads you
-  name. On the main branch, in no release yet
+  name. Since 0.2.1
   ([CI](./packages/muster/docs/03-guides/08-ci.md)).
 - **Outgoing webhooks:** a signed HTTP request to a URL of yours when
-  something happens, such as a task blocked on your answer. On the main
-  branch, in no release yet
+  something happens, such as a task blocked on your answer. Since 0.2.1
   ([Outgoing webhooks](./packages/muster/docs/01-concepts/15-outgoing-webhooks.md)).
 - **Registered workflows:** a named plan of tasks and workers you register
-  once, and a named person starts with `mu workflow run`. On the main
-  branch, in no release yet
+  once, and a named person starts with `mu workflow run`. Since 0.2.1
   ([Workflows](./packages/muster/docs/01-concepts/16-workflows.md)).
 - **Sync** with GitHub, Linear and Slack, by webhook. All three have been
   run against the live services.
@@ -119,14 +117,14 @@ been used against the real thing, and what has not.
 | `mu daemon install` | Run once on macOS: it sent a scheduled message and came back after being killed. Not built for Linux |
 | `mu run --runner vercel` | Run live on 23 Nov 2026 against a scratch board through a tunnel, with Claude Code: a run attached to its end, the sandbox deleted and the agent's token revoked after; inside, the board's token and the model's key were placeholders, no Vercel credential, the npm registry blocked; `--repo` cloned, its dependencies installed from the lockfile, the agent working in the checkout; a kept base forked for later runs; two `--ready --loop` workers over three tasks, each task taken once. `--push` with a GitHub App: a private repository cloned with the App's read token, an agent fixing a bug and running the repository's tests offline, and the change pushed to `mu/task-<id>` with a pull request opened, the App its author |
 | `mu run --runner cloudflare` and its Worker template | Deployed and run live on 24 Nov 2026 against a scratch board through a tunnel. Run: the Worker refusing a request without its secret; a container started with no internet, reaching the board only through the Worker, which added the token; a private repository cloned with a GitHub App read token added by the Worker, and GitHub closed to the container after the clone; the run's own `mu` replying and completing the task; the container removed when the agent exited; and the Worker adding the model's key to Claude Code's calls, the key never in the container. Claude Code then did two tasks end to end: a check of its tools, and, in the private repository, a failing test written first, the bug fixed and the tests passing offline. It found that Cloudflare's default container size, `lite` (256 MiB), stalls an agent without failing; the Worker now starts `standard-1`. `--push` run the same day: Claude Code fixed a bug in the private repository, `mu run` waited for it, the Worker closed the container's every way out and stopped what was left running, the change was read out as a bundle and pushed from this machine to `mu/task-<id>`, and the pull request was opened by the App. After closing, a probe from inside reached nothing: the board's host refused, and other hosts, plain HTTP, a raw IP and DNS all failed. |
-| Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author. Labels and assignees arriving as `tag.*` and `assignee.*` (unreleased): covered by tests, not yet run live |
+| Sync with GitHub | Run against a live private repository on 22 Nov 2026, through a public tunnel: issues, comments both ways, edits, deletes, close and reopen, a thread started on the board opening an issue, pull requests, CI results, a review, a merge, forged and unsigned webhooks refused, and catch-up after downtime. It found two faults, both fixed in the pre-release after 0.2.0-alpha.2. Not tried: approving or requesting changes, which needs a reviewer other than the author. Labels and assignees arriving as `tag.*` and `assignee.*` (since 0.2.1): covered by tests, not yet run live |
 | Sync with Slack | Run against a live workspace on 22 Nov 2026, through a public tunnel: the URL check, a channel message becoming a thread, replies both ways, edits and deletes both ways, a thread started on the board posted to the channel, `--no-sync` kept on the board, the app's own messages not imported back, and a signed request more than five minutes old refused. No faults found. Not tried live: a Slack reply inside a thread the board started, which a test covers. Catch-up after downtime came later and is covered by tests only |
-| Sync with Linear | Run against a live workspace on 22 Nov 2026, through a public tunnel, with a personal API key: an issue becoming a thread, comments as replies, comment edits and deletes, state changes as the `state` label, a board reply posted as a comment, and a thread started on the board opening an issue. No faults found. Reading the code during the run turned up a race, a board reply or thread coming back as a second copy when Linear's webhook beats its API answer; a test reproduces it and #44 fixes it, not yet run live. Not tried live: an OAuth app, and a forged webhook refused, which a test covers. Catch-up after downtime came later and is covered by tests only. Labels, assignee, priority and project arriving as labels (unreleased): covered by tests against payloads written by hand, not yet run live |
+| Sync with Linear | Run against a live workspace on 22 Nov 2026, through a public tunnel, with a personal API key: an issue becoming a thread, comments as replies, comment edits and deletes, state changes as the `state` label, a board reply posted as a comment, and a thread started on the board opening an issue. No faults found. Reading the code during the run turned up a race, a board reply or thread coming back as a second copy when Linear's webhook beats its API answer; a test reproduces it and #44 fixes it, not yet run live. Not tried live: an OAuth app, and a forged webhook refused, which a test covers. Catch-up after downtime came later and is covered by tests only. Labels, assignee, priority and project arriving as labels (since 0.2.1): covered by tests against payloads written by hand, not yet run live |
 | `mu mcp` | Used once with Claude Code as the client |
 | MCP over HTTP on `mu serve` | Connected once with Claude Code as the client; no other client was tried |
 | `mu join` | Run once: a request approved from the inspector, and the waiting agent got its token |
 | `MUSTER_CLAIM_TOKEN`, a claim token a run brings | Run by hand on one machine, from two config folders standing in for two instances; never on a serverless host |
-| `mu token exchange`, a CI job signing in with its OIDC token (unreleased) | Tested against an issuer on the test machine, with real RSA keys; never run against GitHub's or GitLab's |
+| `mu token exchange`, a CI job signing in with its OIDC token (since 0.2.1) | Tested against an issuer on the test machine, with real RSA keys; never run against GitHub's or GitLab's |
 | The container image | Built, run and restarted in CI on every change; never run on a public address |
 | `mu daemon check` | Covered by tests against a real daemon; not yet used on a long-running setup |
 | `mu inbox` and `for` watchers | Covered by tests; not yet used by hand or with a live agent |

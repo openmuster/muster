@@ -405,16 +405,20 @@ describe('hooks from the command line', () => {
     const dir = setUpDir([{ name: 'phone', url: there.url, secret: 'env:HOOK_SECRET', tail: { channel: 'work/' }, body: 'event' }])
     await cli(dir, ['post', 'general', 'board exists'])
     const daemon = cliStart(dir, ['daemon', 'run'], { HOOK_SECRET: KEY })
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // Waited for, not timed: on a busy machine the daemon takes longer to start and to deliver.
+    const until = async (done: () => boolean, ms = 15_000) => {
+      for (const end = Date.now() + ms; !done() && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    await until(() => /^hooks {5}1$/m.test(daemon.output()))
     await cli(dir, ['post', 'work/api', 'needs a look'])
-    await new Promise((resolve) => setTimeout(resolve, 2500))
+    await until(() => there.got.length > 0)
     daemon.child.kill('SIGTERM')
     const ended = await daemon.done
     expect(ended.code).toBe(0)
     expect(ended.stdout).toMatch(/^hooks {5}1$/m)
     expect(ended.stdout).toMatch(/^sent {6}hook phone {2}1$/m)
     expect(there.got.map((each) => [each.signed, each.body.event.message.text])).toEqual([[true, 'needs a look']])
-  }, 20_000)
+  }, 40_000)
 
   it('mu serve sends hooks too, and says on its error output what a receiver refused', async () => {
     const there = await receiver()
