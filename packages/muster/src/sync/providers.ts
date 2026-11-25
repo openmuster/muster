@@ -959,9 +959,12 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
     type: 'notion',
     verify({ headers, body }) {
       const signature = headers['x-notion-signature']
-      // The one request Notion can't sign: the token it will sign with, sent once, to be pasted back into Notion. Taken
-      // only while the sync waits for it (`secret` is `pending`): once it has its secret, nothing unsigned is.
-      if (signature === undefined && options.secret === NOTION_PENDING && isVerification(body)) return
+      // While the sync waits for its token (`secret` is `pending`), the one request Notion can't sign, that token, is all
+      // it takes: `pending` is no secret, so nothing signed with it is believed. Once it has its secret, nothing unsigned is.
+      if (options.secret === NOTION_PENDING) {
+        if (signature === undefined && isVerification(body)) return
+        throw bad()
+      }
       if (!same(signature ?? '', `sha256=${hmac(options.secret, body)}`)) throw bad()
     },
     challenge({ headers, body }) {

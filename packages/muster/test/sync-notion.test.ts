@@ -123,6 +123,9 @@ describe('sync: Notion', () => {
     // Someone else's token, sent after it, is answered the same but never written over the first.
     expect(await backend.syncReceive('nt', { headers: {}, body: JSON.stringify({ verification_token: 'secret_PlantedByAnyoneElse0123456789' }) })).toEqual({ status: 200, body: 'ok' })
     expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)
+    // While pending, `pending` is no key: an event signed with it is refused, and brings in nothing.
+    const forged = JSON.stringify({ id: 'f', type: 'page.created', entity: { id: P1, type: 'page' } })
+    expect((await backend.syncReceive('nt', { headers: { 'x-notion-signature': sign(forged, 'pending') }, body: forged })).status).toBe(401)
     // A board that has its secret takes nothing unsigned, a verification token included.
     const configured = setup()
     expect((await configured.backend.syncReceive('nt', { headers: {}, body })).status).toBe(401)
