@@ -42,10 +42,12 @@ mu serve --module ~/loop/board.ts --allow-host board.example.com
 ```
 
 7. **Point each platform at it**, at `https://<host>/api/board/webhooks/<key>`,
-   where `<key>` is the sync's name in `board.ts`: `slack`, `lin`, `gh`.
-   Each platform's page says what to subscribe to and which scopes its token
-   needs: [Slack](../02-sync/04-slack.md), [Linear](../02-sync/03-linear.md),
-   [GitHub](../02-sync/02-github.md).
+   where `<key>` is the sync's name in `board.ts`: `slack`, `lin`, `gh`,
+   `nt`. Each platform's page says what to subscribe to and which scopes its
+   token needs: [Slack](../02-sync/04-slack.md),
+   [Linear](../02-sync/03-linear.md), [GitHub](../02-sync/02-github.md),
+   [Notion](../02-sync/05-notion.md). Notion's webhook is verified once
+   first: start with `NOTION_WEBHOOK_SECRET=pending`, and follow its page.
 8. **Your app's button.** Make it a token that can only post reports, and
    keep it on the app's server:
 
@@ -100,8 +102,8 @@ one the loop starts for that run.
 Once a card's run has ended, a reply on the card by someone trusted sends the
 work and its review back with that reply, and the work carries on from its
 branch: the same pull request gets another commit. Reply where the card is:
-in the Slack thread, on the Linear issue, on the GitHub issue, or on the
-board.
+in the Slack thread, on the Linear issue, on the GitHub issue, on the Notion
+page, or on the board.
 
 - **One round at a time.** A reply made while a round runs waits for it to
   end, and goes into the next.
@@ -132,6 +134,6 @@ mu token revoke Xk3v9QmB2a1c
 ```
 
 To stop the loop, stop `mu serve`. What the platforms send while it is down
-doesn't reach it, and the board catches up on Linear, Slack and GitHub when it
-starts again. To take a source out, remove its sync from `board.ts` and its
+doesn't reach it, and the board catches up on Linear, Slack, GitHub and Notion
+when it starts again. To take a source out, remove its sync from `board.ts` and its
 webhook from the platform.

@@ -4,7 +4,7 @@
 // nothing: who is trusted, and the secrets, are read when a watcher runs or the board starts.
 //
 // A card is a thread in a source's channel under `cards/` (`cards/slack`, `cards/linear`, `cards/github`,
-// `cards/app`), and a task. A card's runs are in channels under its own (`cards/slack/card-12`). Its hold says
+// `cards/notion`, `cards/app`), and a task. A card's runs are in channels under its own (`cards/slack/card-12`). Its hold says
 // where it is:
 //
 //   triage     an agent is turning the report into a spec (the `triage` workflow)
@@ -15,7 +15,7 @@
 // Nothing here reads what a message means. The triage agent decides what the change is; people decide who
 // is trusted and what is approved; the board says who wrote what.
 import { spawn, spawnSync } from 'node:child_process'
-import { board, env, github, linear, loadWorkflows, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
+import { board, env, github, linear, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
 
 /** The sync keys below whose authors are named by a login someone else could take later: `gh`, GitHub's. */
 const LOGIN_KEYED = new Set(['gh'])
@@ -394,6 +394,9 @@ export const sync = {
   lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), token: env('LINEAR_API_KEY'), teams: { ENG: 'cards/linear' } }),
   // GitHub issues on your repository, with the card's replies sent back as comments.
   gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), token: env('GITHUB_TOKEN'), repos: { 'your-org/your-repo': { issues: 'cards/github', mirror: true } } }),
+  // A Notion database, by its data source ID: its pages are reports, and the card's replies are comments on them.
+  // NOTION_WEBHOOK_SECRET is `pending` until Notion has sent its verification token: see the Notion sync page.
+  nt: notion({ secret: env('NOTION_WEBHOOK_SECRET'), token: env('NOTION_TOKEN'), databases: { '00000000000040008000000000000000': 'cards/notion' } }),
 }
 
 export const team = board({ sync, watch })

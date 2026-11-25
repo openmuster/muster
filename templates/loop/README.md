@@ -3,7 +3,7 @@
 Feedback from anywhere becomes a card, an agent makes the change as a pull
 request, and a comment on the card starts another round on the same pull
 request. A report can come from a Slack thread, a Linear issue, a GitHub
-issue, the inspector, or your own app. You hear about a card when it needs
+issue, a Notion page, the inspector, or your own app. You hear about a card when it needs
 your approval, when a task blocks on a decision of yours, and when a round
 is done.
 
@@ -16,12 +16,12 @@ each step.
 
 | File | What it is |
 | --- | --- |
-| `board.ts` | Sync from Slack, Linear and GitHub, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `round`, `settled`, `resume`, `needs-me` |
+| `board.ts` | Sync from Slack, Linear, GitHub and Notion, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `round`, `settled`, `resume`, `needs-me` |
 | `workflows.json` | `triage`, one step that turns a report into a card, and `card`, spec, work and review, with `--push` for the work step only |
 
 ```bash
 cp workflows.json ~/.config/muster/
-# then edit: your repository in workflows.json, your Slack channel ID, Linear team and GitHub repository in board.ts
+# then edit: your repository in workflows.json, your Slack channel ID, Linear team, GitHub repository and Notion database in board.ts
 export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a...   # who may start work without your approval, and approve (not GitHub logins)
 export NOTIFY_CMD=...                                    # optional: a command that gets one line to show you
 mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDBOX_URL, not MUSTER_URL
