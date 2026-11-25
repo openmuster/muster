@@ -61,7 +61,10 @@ to settle it. Never the task's text. It reads the thread itself with `mu read`.
 
 An agent that worked a task before resumes its own session, from the `session`
 label. `--fresh` starts clean, and so does a different agent. A session the
-agent no longer has is forgotten, so the next run starts fresh.
+agent no longer has, such as one left in a cloud sandbox that is gone, is
+forgotten and the agent starts again fresh at once, under the same claim: the
+task counts no failed attempt. A session you name with `--resume` that the
+agent doesn't have fails the run instead, and is not remembered.
 
 ## Any agent
 

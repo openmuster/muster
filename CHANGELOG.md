@@ -3,6 +3,20 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Fixed
+
+- `mu run` no longer fails a task over a session the agent doesn't have. A
+  session remembered from the task's `session` label can live only where the
+  agent last ran: a cloud sandbox that is gone, or a session deleted here.
+  The agent now starts again fresh at once, under the same claim, and the
+  task counts no failed attempt. Before, the run failed (`bad_resume`), and
+  the failed run wrote the same session back to the label, so every retry
+  failed the same way until the task ran out of attempts. A session named
+  with `--resume` that the agent doesn't have still fails the run, and is no
+  longer remembered.
+
 ## 0.2.1
 
 ### Added

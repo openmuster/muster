@@ -1399,8 +1399,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   if (asked !== undefined && !isSessionId(asked)) throw misuse('invalid_session', `"${asked}" isn't a session ID.`)
   // The label is one anyone who may label can set: a value that isn't shaped like an ID is ignored, never passed on.
   const remembered = on(parsed.flags, 'fresh') || before.agent !== agent.name || !isSessionId(before.session) ? undefined : before.session
-  const resume = asked ?? remembered
-  const started = runLocal({
+  const start = (resume: string | undefined) => runLocal({
     agent,
     prompt: agentPrompt(task, me.profile),
     cwd,
@@ -1419,6 +1418,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
     ...(timeout ? { timeoutMs: duration(timeout, 'timeout') * 1000 } : {}),
     signal: run.io.stop,
   })
+  const started = start(asked ?? remembered)
   let lost = false
   const renewing = setInterval(
     () => {
@@ -1429,7 +1429,15 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
     },
     Math.max(10_000, (leaseS * 1000) / 3),
   )
-  const result = await started.done
+  let result = await started.done
+  // A session remembered from a label may live only where the agent last ran, such as a cloud sandbox that is
+  // gone: it is forgotten, and the agent starts again fresh under the same claim, so the task loses no attempt.
+  // A session asked for by --resume is not second-guessed: that run fails, and says why.
+  if (result.kind === 'bad_resume' && asked === undefined && remembered !== undefined && !run.io.stop.aborted) {
+    await run.team.label({ id: task, unset: ['session', 'agent'] }).catch(() => {})
+    if (result.parsed.costUsd !== undefined) onCost?.(result.parsed.costUsd)
+    result = await start(undefined).done
+  }
   clearInterval(renewing)
   onKind?.(result.kind)
   if (result.parsed.costUsd !== undefined) onCost?.(result.parsed.costUsd)
@@ -1453,7 +1461,8 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   const labels: Record<string, string> = {}
   if (result.parsed.costUsd !== undefined) labels.cost = result.parsed.costUsd.toFixed(4)
   if (result.parsed.usage) labels.tokens = String(result.parsed.usage.input + result.parsed.usage.output)
-  if (result.parsed.sessionId) {
+  // A run that couldn't resume names the session it couldn't find: that one is not remembered again.
+  if (result.parsed.sessionId && result.kind !== 'bad_resume') {
     labels.session = result.parsed.sessionId
     labels.agent = agent.name
   }

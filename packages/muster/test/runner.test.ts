@@ -246,16 +246,62 @@ describe('mu run', () => {
     expect(readFileSync(join(dir, 'codex.args'), 'utf8')).not.toContain('resume')
   }, 30_000)
 
-  it('a session the agent no longer has is forgotten, so the next run starts fresh', async () => {
+  /**
+   * Claude Code as it behaves when told to resume a session it doesn't have (one left in another sandbox): it
+   * names that session in its output, says so, and exits 1. Started fresh, it settles the task.
+   */
+  const staleAware = (dir: string) =>
+    fakes(dir, {
+      claude: [
+        'cat >/dev/null',
+        `echo "$@" >> ${dir}/args`,
+        'case "$*" in *--resume*)',
+        `  echo '{"type":"system","subtype":"init","session_id":"c95ba2d4-gone"}'`,
+        `  echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"c95ba2d4-gone"}'`,
+        '  echo "No conversation found with session ID: c95ba2d4-gone" >&2; exit 1;;',
+        'esac',
+        'mu tasks complete $MUSTER_TASK "done" >/dev/null',
+        `echo '{"type":"result","subtype":"success","is_error":false,"session_id":"new-1"}'`,
+      ].join('\n'),
+    })
+  const resumed = (dir: string) => readFileSync(join(dir, 'args'), 'utf8').trim().split('\n').map((args) => args.includes('--resume'))
+
+  it('a session it was asked for by --resume and no longer has fails the run, and is not remembered', async () => {
     const dir = tempDir()
-    const env = fakes(dir, { claude: `cat >/dev/null; echo "$@" >> ${dir}/args; case "$*" in *--resume*) echo "No conversation found with session ID: gone" >&2; exit 1;; esac; echo '{"type":"result","subtype":"success","is_error":false,"session_id":"new-1"}'` })
+    const env = staleAware(dir)
     await cli(dir, ['tasks', 'create', 'work', 't'])
-    await cli(dir, ['label', '1', 'session=gone', 'agent=claude'])
-    const first = JSON.parse((await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir, '--json'], { env })).stdout)
-    expect(first.kind).toBe('bad_resume')
-    await cli(dir, ['tasks', 'reopen', '1'])
-    await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir], { env })
-    expect(readFileSync(join(dir, 'args'), 'utf8').trim().split('\n').map((args) => args.includes('--resume'))).toEqual([true, false])
+    const run = await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir, '--resume', 'c95ba2d4-gone', '--json'], { env })
+    expect([run.code, JSON.parse(run.stdout).kind, JSON.parse(run.stdout).outcome]).toEqual([1, 'bad_resume', 'failed'])
+    expect(resumed(dir)).toEqual([true])
+    const after = await task(dir)
+    expect(after).toMatchObject({ state: 'failed', attempts: 1 })
+    // The failed run's output names the session it couldn't find: that name must not be written back.
+    expect(after.labels.session).toBeUndefined()
+    expect(after.labels.agent).toBeUndefined()
+  }, 30_000)
+
+  it('a remembered session the agent no longer has, as from another sandbox, is dropped and the task run fresh at once', async () => {
+    const dir = tempDir()
+    const env = staleAware(dir)
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['label', '1', 'session=c95ba2d4-gone', 'agent=claude'])
+    const run = await cli(dir, ['run', '1', '--agent', 'claude', '--cwd', dir, '--json'], { env })
+    expect([run.code, JSON.parse(run.stdout).outcome, JSON.parse(run.stdout).session]).toEqual([0, 'completed', 'new-1'])
+    // Once with the stale session, once fresh: no more.
+    expect(resumed(dir)).toEqual([true, false])
+    // Nothing counted against the task, and the session it now has is the fresh one.
+    expect(await task(dir)).toMatchObject({ state: 'completed', attempts: 0, labels: { session: 'new-1', agent: 'claude' } })
+  }, 30_000)
+
+  it('a worker does the same: a remembered stale session costs no attempt', async () => {
+    const dir = tempDir()
+    const env = staleAware(dir)
+    await cli(dir, ['tasks', 'create', 'work', 't'])
+    await cli(dir, ['label', '1', 'session=c95ba2d4-gone', 'agent=claude'])
+    const run = await cli(dir, ['run', '--ready', 'work', '--loop', '--wait', '1s', '--agent', 'claude', '--cwd', dir], { env })
+    expect(run.code).toBe(0)
+    expect(resumed(dir)).toEqual([true, false])
+    expect(await task(dir)).toMatchObject({ state: 'completed', attempts: 0, labels: { session: 'new-1' } })
   }, 30_000)
 
   it('a session label that is not shaped like an ID is never passed to the agent, and neither is a bad --resume', async () => {
