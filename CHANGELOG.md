@@ -36,6 +36,10 @@ versions are affected.
   a trusted reply on the card starts another round on the same pull request,
   and each round's screenshots reach the card. See
   [A feedback loop](./packages/muster/docs/03-guides/20-a-feedback-loop.md).
+  - A task of a run answered and unblocked after the run's workers stopped
+    gets a worker of its own (`resume`).
+  - [Running the feedback loop](./packages/muster/docs/03-guides/21-running-the-loop.md),
+    the operator's day-to-day, and the `loop-card` skill for the agents.
 
 ## 0.3.1-alpha.1
 

@@ -89,6 +89,7 @@ mu inspect
 - [A board on a server](./03-guides/18-a-board-on-a-server.md)
 - [A card queue](./03-guides/19-a-card-queue.md)
 - [A feedback loop](./03-guides/20-a-feedback-loop.md)
+- [Running the feedback loop](./03-guides/21-running-the-loop.md)
 
 ## Reference
 
