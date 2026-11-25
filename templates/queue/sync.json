@@ -1,0 +1,8 @@
+{
+  "lin": {
+    "type": "linear",
+    "secret": "env:LINEAR_WEBHOOK_SECRET",
+    "token": "env:LINEAR_API_KEY",
+    "teams": { "ENG": "cards" }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "workflows": [
+    {
+      "name": "card",
+      "description": "Spec, do and review one card, as a pull request",
+      "who": [
+        "intake"
+      ],
+      "channels": [
+        "cards"
+      ],
+      "timeout": "6h",
+      "steps": [
+        {
+          "key": "spec",
+          "text": "Write the spec for card #{thread} in {channel}.\n{thread.text}\nRead the repository, change nothing, and complete this task with a short spec as its result: what to change, in which files, and how to check it works.\nIf you can't go on without a person's decision, block this task and stop: mu tasks block <this task> \"<one line on where things stand> -> <the decision you need, and what you recommend>\" --kind needs_input, in at most 1,000 characters.",
+          "labels": {
+            "role": "spec"
+          }
+        },
+        {
+          "key": "work",
+          "text": "Make the change for card #{thread}.\nRead the spec task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole). Make the change with its tests, and complete this task with a one-line summary.\nIf you can't go on without a person's decision, block this task and stop: mu tasks block <this task> \"<one line on where things stand> -> <the decision you need, and what you recommend>\" --kind needs_input, in at most 1,000 characters.",
+          "needs": [
+            "spec"
+          ],
+          "labels": {
+            "role": "work"
+          }
+        },
+        {
+          "key": "review",
+          "text": "Review the change for card #{thread} against its spec.\nRead the spec and the work task's result in {run} (mu tasks {run} --state all lists them; mu read <id> --json prints one, and its result is task.result, whole). Change nothing. Complete this task with \"approve\", or with what has to change, in at most 1,000 characters.\nIf you can't go on without a person's decision, block this task and stop: mu tasks block <this task> \"<one line on where things stand> -> <the decision you need, and what you recommend>\" --kind needs_input, in at most 1,000 characters.",
+          "needs": [
+            "work"
+          ],
+          "labels": {
+            "role": "review"
+          }
+        }
+      ],
+      "workers": {
+        "count": 1,
+        "agent": "claude",
+        "as": "agent",
+        "runner": "vercel",
+        "repo": "https://github.com/your-org/your-repo",
+        "push": true,
+        "timeout": "45m"
+      }
+    }
+  ]
+}
