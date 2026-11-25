@@ -44,6 +44,7 @@ if ! said=$(mu run "$task" --runner vercel "$@" --json 2>&1); then
       ;;
   esac
   printf '%s\n' "$said" >&2
+  echo "answer.sh: #$task is answered and ready, but no worker started on it. Fix the above, then: mu run $task --runner vercel $*" >&2
   exit 1
 fi
 echo "answered #$task, and ran it"

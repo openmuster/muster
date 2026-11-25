@@ -77,6 +77,9 @@ function setup(options: { mu?: (dir: string) => string } = {}) {
   }
   writeFileSync(join(bin, 'notified'), `#!/bin/sh\nprintf '%s\\n' "$@" >> ${dir}/notified.txt\n`)
   chmodSync(join(bin, 'notified'), 0o755)
+  // macOS's own notifier, stood in for: a test never pops a notification, and Linux has none.
+  writeFileSync(join(bin, 'osascript'), '#!/bin/sh\nexit 0\n')
+  chmodSync(join(bin, 'osascript'), 0o755)
   const ran: { command: string[]; code: number | null; stderr: string }[] = []
   // As spawnCommand does, with the environment built the same way, from the daemon's own; started in the template's folder.
   const run: Deps['spawn'] = (command, env, allow) =>
@@ -172,6 +175,8 @@ describe('the queue template: config', () => {
     const watchers = loadWatchers(join(queue, 'watchers.json'))
     expect(watchers.map((each) => each.name)).toEqual(['card-start', 'needs-me'])
     expect(loadWorkflows(join(queue, 'workflows.json')).map((each) => each.name)).toEqual(['card'])
+    // The daemon refuses a workflow named like a watcher.
+    expect(watchers.map((each) => each.name)).not.toContain('card')
     expect(Object.keys(loadSync(join(queue, 'sync.json'), { LINEAR_WEBHOOK_SECRET: 's', LINEAR_API_KEY: 'k' }))).toEqual(['lin'])
     const text = readFileSync(join(queue, 'sync.json'), 'utf8')
     expect(text).toContain('"env:LINEAR_WEBHOOK_SECRET"')
@@ -229,6 +234,20 @@ describe('the queue template: a card starts a run', () => {
     await lin({ ...labelled([], '2026-11-25T10:03:00Z'), data: { ...labelled([], '2026-11-25T10:03:00Z').data, id: 'iss-2' } })
     await tick()
     expect(await requests()).toHaveLength(1)
+  }, 30_000)
+
+  it('starts a card again once you take `started` off it, as the retry line says', async () => {
+    const { team, lin, tick, requests } = setup()
+    await tick()
+    await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
+    await tick()
+    // The daemon's "started" reply wakes the watcher once more, and finds the card started.
+    await tick()
+    expect(await requests()).toHaveLength(1)
+    const card = (await team.readChannel({ channel: 'cards' })).threads[0]!.message
+    await team.label({ id: card.id, unset: ['started'] })
+    await tick()
+    expect((await requests()).map((each) => each.thread)).toEqual([card.id, card.id])
   }, 30_000)
 
   it('starts a card labelled while the daemon was down, once catching up reads it, new or already on the board', async () => {

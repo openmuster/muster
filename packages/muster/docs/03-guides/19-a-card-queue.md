@@ -135,7 +135,11 @@ it with the workflow's settings, since the run's own worker stops after ten
 idle minutes. If a worker of the run takes the task first, that is fine too.
 Run it as yourself, with no `--as` and no `MUSTER_PROFILE`: the run's tasks
 are the daemon's, and only the board's owner with no profile may unblock
-them. It stays until the sandbox's run ends, as `mu run --push` does.
+them. Run it where `mu serve` runs, with the same `MUSTER_SANDBOX_URL`,
+Vercel, GitHub App and model settings in your shell: it starts the worker
+itself. It stays until the sandbox's run ends, as `mu run --push` does. If
+the worker can't start, the task is answered and ready, and the script
+prints the `mu run` line to retry with.
 
 ## When not to
 
@@ -158,8 +162,10 @@ them. It stays until the sandbox's run ends, as `mu run --push` does.
 - **The board was down.** With the key in `sync.json`, `mu serve` catches up
   when it starts again: an issue made meanwhile arrives with its labels, and
   an `agent` label added meanwhile to a card it has is brought in, and either
-  starts the card. Without a key there is no catch-up; the card starts at
-  the issue's next update.
+  starts the card, whatever state the issue is in, closed included: the
+  budget on `cards` is the cap. Without a key there is no catch-up: an issue
+  made while the board was down never arrives, and a label added meanwhile
+  to a card it has arrives with the issue's next update.
 - **An issue from before sync was set up.** Linear's webhook for a label
   added to it is dropped, since the board never saw the issue: see
   [Linear](../02-sync/03-linear.md). Make a new issue instead.
