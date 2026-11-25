@@ -98,9 +98,4 @@ describe('the factory route, built and started', () => {
     expect([feed.status, feed.type]).toEqual([200, 'text/event-stream'])
     expect(feed.body).toContain('"text":"first"')
   })
-
-  it('refuses a request that came for another name', async () => {
-    const answer = await ask('/api/board/head', { headers: { authorization: `Bearer ${token}`, host: 'evil.example' } })
-    expect(answer.status).toBe(403)
-  })
 })

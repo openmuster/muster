@@ -1,11 +1,11 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { board, http, listen, mint, type Board, type BoardOptions } from '../src/index.ts'
+import { board, github, http, listen, mint, type Board, type BoardOptions } from '../src/index.ts'
 import { tempDir } from './helpers.ts'
 
-type Asked = { method?: string; path: string; headers?: Record<string, string>; body?: unknown; host?: string }
+type Asked = { method?: string; path: string; headers?: Record<string, string>; body?: unknown; raw?: string; host?: string }
 type Answer = { status: number; type: string | null; body: string }
 
 const closers: (() => Promise<void> | void)[] = []
@@ -14,10 +14,10 @@ afterAll(async () => {
 })
 
 /** One board on disk, served both ways: by `mu serve`'s server, and by `team.fetch`, with one key. */
-async function both(options: { serve?: BoardOptions['serve'] } = {}) {
+async function both(options: Omit<BoardOptions, 'dir' | 'key'> = {}) {
   const dir = tempDir()
   const key = randomBytes(32)
-  const team = board({ dir: join(dir, 'board'), key, ...(options.serve ? { serve: options.serve } : {}) })
+  const team = board({ ...options, dir: join(dir, 'board'), key })
   const server = await listen({ backend: team.backend, key, feedInterval: 20 })
   closers.push(() => server.close(), () => team.close())
   const port = Number(new URL(server.url).port)
@@ -27,7 +27,7 @@ async function both(options: { serve?: BoardOptions['serve'] } = {}) {
   /** Asks `mu serve`, over a socket, with exactly these headers. Reads a feed up to its first event. */
   const viaServe = (asked: Asked): Promise<Answer> =>
     new Promise((resolve, reject) => {
-      const text = asked.body === undefined ? undefined : JSON.stringify(asked.body)
+      const text = asked.raw ?? (asked.body === undefined ? undefined : JSON.stringify(asked.body))
       const req = httpRequest({ host: '127.0.0.1', port, path: asked.path, method: asked.method ?? 'POST', headers: { host: asked.host ?? `127.0.0.1:${port}`, ...asked.headers } }, (res) => {
         let body = ''
         res.setEncoding('utf8')
@@ -46,11 +46,14 @@ async function both(options: { serve?: BoardOptions['serve'] } = {}) {
 
   /** Asks `team.fetch` the same thing, as a web Request. */
   const viaFetch = async (asked: Asked, on: Board = team): Promise<Answer> => {
-    const response = await on.fetch(
+    // Detached, as a route exports it: `export const GET = team.fetch`.
+    const GET = on.fetch
+    const text = asked.raw ?? (asked.body === undefined ? undefined : JSON.stringify(asked.body))
+    const response = await GET(
       new Request(`http://127.0.0.1:${port}${asked.path}`, {
         method: asked.method ?? 'POST',
         headers: { host: asked.host ?? `127.0.0.1:${port}`, ...asked.headers },
-        ...(asked.body === undefined ? {} : { body: JSON.stringify(asked.body) }),
+        ...(text === undefined ? {} : { body: text }),
       }),
     )
     const reader = response.body!.getReader()
@@ -161,6 +164,23 @@ describe('team.fetch', () => {
     expect((await viaFetch({ path: '/api/board/head', headers: { authorization }, host: 'board.example.com' })).status).toBe(200)
     expect((await viaFetch({ path: '/api/board/head', headers: { authorization }, host: 'BOARD.example.com:443' })).status).toBe(200)
     expect((await viaFetch({ path: '/api/board/head', headers: { authorization }, host: 'board.example.com.evil.example' })).status).toBe(403)
+  })
+
+  it("takes a webhook for the handle's sync: signed by the platform, with no token", async () => {
+    const secret = 'webhook-secret'
+    const { team, viaServe, viaFetch } = await both({ sync: { gh: github({ secret, repos: { 'acme/web': 'web' } }) } })
+    const hook = (number: number, title: string, signature?: string): Asked => {
+      const raw = JSON.stringify({ action: 'opened', issue: { number, title, body: '' }, repository: { full_name: 'acme/web' }, sender: { login: 'nico' } })
+      const signed = `sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`
+      return { path: '/api/board/webhooks/gh', headers: { 'x-github-event': 'issues', 'x-github-delivery': `d-${number}`, 'x-hub-signature-256': signature ?? signed }, raw }
+    }
+    // Tampered with, or signed with another secret: refused the same way by both.
+    const forged = await viaFetch(hook(1, 'forged', 'sha256=bad'))
+    expect(forged).toEqual(await viaServe(hook(1, 'forged', 'sha256=bad')))
+    expect(forged.status).toBe(401)
+    expect((await viaFetch(hook(2, 'through team.fetch'))).status).toBe(200)
+    expect((await viaServe(hook(3, 'through mu serve'))).status).toBe(200)
+    expect((await team.readChannel({ channel: 'web' })).threads.map((thread) => thread.message.text).sort()).toEqual(['through mu serve', 'through team.fetch'])
   })
 
   it("holds a body to mu serve's limits as it arrives", async () => {

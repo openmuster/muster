@@ -41,7 +41,8 @@ name it is reached by in `ALLOW_HOSTS`, comma-separated.
 The app also serves the board itself at `/api/board`
 (`app/api/board/[...path]/route.ts`, through `team.fetch`): what `mu serve`
 serves, for the same names, and every request needs a token from
-`mu token create`.
+`mu token create`. Its handle has no `sync` yet, so point webhooks at
+`mu serve` as above.
 
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass
