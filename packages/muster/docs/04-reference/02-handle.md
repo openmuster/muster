@@ -406,3 +406,4 @@ serves the board without it. Both say why, loudly.
 | `claude`, `codex`, `generic`, `runLocal` | Agents, and running one here |
 | `vercel`, `cloudflare`, `boardPolicy` | Running one in a cloud sandbox |
 | `github`, `linear`, `slack`, `env`, `loadSync` | Sync |
+| `workflowResult(team, id, owner)` | A workflow step's result, for code that goes on from it: `{ workflow, step, request, thread, on, result }` only when the daemon made the task and the run's own worker completed it, as a result is checked before it is quoted. Null otherwise, whatever the task's labels say |
