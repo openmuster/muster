@@ -91,8 +91,8 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
     const event = JSON.parse(row.payload) as Inbound
     const lane = `${row.key}\n${event.thread}`
     if (stuck.has(lane)) continue
-    // Its files are fetched on the ticker first; the rest of its thread waits for it.
-    if (event.files?.length) {
+    // Read from the platform, or its files fetched, on the ticker first; the rest of its thread waits for it.
+    if (event.unread || event.files?.length) {
       stuck.add(lane)
       continue
     }
@@ -113,6 +113,40 @@ export function importPending(ctx: Context, sync: Sync, only?: string): { import
     }
   }
   return { imported, failed, stale }
+}
+
+/**
+ * Reads what `unread` events are about from their platforms, on the ticker, before they are imported: each is
+ * replaced by what its provider read, in its place in the inbox, or dropped when that is nothing. One that can't
+ * be read now is tried again on a later tick, and given up after IMPORT_ATTEMPTS, as an import is.
+ */
+export async function readPending(ctx: Context, sync: Sync, fetcher: typeof fetch): Promise<void> {
+  const rows = ctx.db.raw.prepare("select key, id, received, payload, attempts from inbox where done = 0 and payload like '%\"unread\":true%' order by received, id").all() as { key: string; id: string; received: string; payload: string; attempts: number }[]
+  for (const row of rows) {
+    const provider = sync[row.key]
+    const event = JSON.parse(row.payload) as Inbound
+    if (!provider?.read || !event.unread) continue
+    let read: Inbound[]
+    try {
+      read = (await provider.read(event, fetcher)).map(({ unread: _, ...each }) => each)
+    } catch {
+      const attempts = row.attempts + 1
+      ctx.db.write(() => ctx.db.raw.prepare("update inbox set attempts = ?, done = ?, payload = case when ? = 1 then '{}' else payload end where key = ? and id = ? and done = 0").get(attempts, attempts >= IMPORT_ATTEMPTS ? 1 : 0, attempts >= IMPORT_ATTEMPTS ? 1 : 0, row.key, row.id))
+      continue
+    }
+    ctx.db.write(() => {
+      if (read.length === 0) {
+        ctx.db.raw.prepare("update inbox set done = 1, payload = '{}' where key = ? and id = ? and done = 0").get(row.key, row.id)
+        return
+      }
+      // The first takes the row's place; the rest follow it, in the same place in the inbox's order.
+      ctx.db.raw.prepare('update inbox set payload = ? where key = ? and id = ? and done = 0').get(JSON.stringify({ ...read[0]!, id: row.id }), row.key, row.id)
+      read.slice(1).forEach((each, index) => {
+        const id = `${row.id}#${index + 1}`
+        ctx.db.raw.prepare('insert or ignore into inbox (key, id, received, payload) values (?, ?, ?, ?)').get(row.key, id, row.received, JSON.stringify({ ...each, id }))
+      })
+    })
+  }
 }
 
 /**

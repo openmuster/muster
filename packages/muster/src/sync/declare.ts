@@ -121,7 +121,7 @@ export function checkSync(sync: unknown): Record<string, Provider> {
     if (!SYNC_KEY.test(key)) throw misuse('invalid_sync', `"${key}" isn't a sync name: lowercase letters, numbers, "-" and "_", up to 32.`, 'The name is the webhook\'s path: /api/board/webhooks/<name>.')
     const given = provider as Partial<Provider> | null
     if (typeof given !== 'object' || given === null || typeof given.type !== 'string' || typeof given.verify !== 'function') {
-      throw misuse('invalid_sync', `sync "${key}" isn't a platform: give it github({ ... }), linear({ ... }) or slack({ ... }).`)
+      throw misuse('invalid_sync', `sync "${key}" isn't a platform: give it github({ ... }), linear({ ... }), slack({ ... }) or notion({ ... }).`)
     }
   }
   return sync as Record<string, Provider>

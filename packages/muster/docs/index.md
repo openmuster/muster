@@ -66,6 +66,7 @@ mu inspect
 - [GitHub](./02-sync/02-github.md)
 - [Linear](./02-sync/03-linear.md)
 - [Slack](./02-sync/04-slack.md)
+- [Notion](./02-sync/05-notion.md)
 
 ## Guides
 
