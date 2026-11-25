@@ -120,6 +120,9 @@ describe('sync: Notion', () => {
     expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)
     expect(statSync(notionTokenFile()).mode & 0o777).toBe(0o600)
     expect(notionTokenFile()).toBe(join(process.env.MUSTER_CONFIG!, 'notion-verification-token'))
+    // Notion signs even this request, with the token it carries: signed or not, it is taken, and only written once.
+    expect(await backend.syncReceive('nt', { headers: { 'x-notion-signature': sign(body) }, body })).toEqual({ status: 200, body: 'ok' })
+    expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)
     // Someone else's token, sent after it, is answered the same but never written over the first.
     expect(await backend.syncReceive('nt', { headers: {}, body: JSON.stringify({ verification_token: 'secret_PlantedByAnyoneElse0123456789' }) })).toEqual({ status: 200, body: 'ok' })
     expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)

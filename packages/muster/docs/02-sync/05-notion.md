@@ -33,8 +33,9 @@ whose pages and comments are never imported.
 
 ## Set up the webhook
 
-Notion sends its verification token once, to the webhook's URL, and it has
-to be pasted back into Notion before anything else is sent:
+Notion sends its verification token once, to the webhook's URL, signed with
+that same token, and it has to be pasted back into Notion before anything
+else is sent:
 
 1. Start the board with the sync in its module and `NOTION_WEBHOOK_SECRET`
    set to `pending`. Only then does the board take Notion's one unsigned
