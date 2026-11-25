@@ -354,12 +354,13 @@ describe('sync: files to Slack', () => {
 describe('sync: files with Linear', () => {
   const issue = { type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-1', title: 'Crash', description: 'see ![shot.png](https://uploads.linear.app/org/a/b) and [notes](https://example.com/notes)', team: { key: 'ENG' }, creatorId: 'u1' } }
 
-  it("fetches a file uploaded to Linear with the key, sent only to Linear's upload host; any other link stays text", async () => {
+  it("fetches a file uploaded to Linear with the key, sent only to Linear's upload host; any other link stays text, and the issue keeps what it is filed under", async () => {
     const { team, backend, calls, lin } = setup()
-    await lin(issue)
+    await lin({ ...issue, data: { ...issue.data, labels: [{ name: 'Bug' }], priority: 2 } })
     await backend.syncTick()
     const [thread] = (await team.readChannel({ channel: 'eng' })).threads
-    expect(thread!.message).toMatchObject({ text: `Crash\n\n${issue.data.description}`, attachments: [{ name: 'shot.png', type: 'image/png', size: TRACE.length }] })
+    expect(thread!.message).toMatchObject({ text: `Crash\n\n${issue.data.description}`, attachments: [{ name: 'shot.png', type: 'image/png', size: TRACE.length }], labels: { priority: 'high', kind: 'issue', ref: 'ENG-1' } })
+    expect(Object.keys(thread!.message.labels).some((name) => name.startsWith('tag.'))).toBe(true)
     expect(calls.filter((call) => !call.url.includes('graphql')).map((call) => [call.url, call.auth])).toEqual([['https://uploads.linear.app/org/a/b', LINEAR_TOKEN]])
   })
 

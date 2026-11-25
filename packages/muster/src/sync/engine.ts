@@ -4,7 +4,7 @@ import { findMessage } from '../core/context.ts'
 import { fileBytes } from '../core/files.ts'
 import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
-import type { By } from '../model.ts'
+import { LIMITS, labelKey, labelValue, type By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
 import { FILTERED, withLines } from './files.ts'
 import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
@@ -12,6 +12,24 @@ import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provide
 export type Sync = Record<string, Provider>
 
 const board: By = { principal: 'board', profile: null }
+
+/**
+ * A platform's labels, held to what a person's own are held to: a key or a value the board wouldn't take
+ * from `mu label` is left out, and so is whatever comes after the most a message carries. So nothing
+ * sync writes is a label a person can't then change or take off.
+ */
+function taken(labels: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(labels)) {
+    if (Object.keys(out).length >= LIMITS.labels) break
+    try {
+      out[labelKey(name)] = labelValue(name, value)
+    } catch {
+      // Not a label the board keeps: the rest of the event still is.
+    }
+  }
+  return out
+}
 
 /** A delivery older than this is from a process that died mid-send, and no longer holds imports. */
 const SENDING_STALE_MS = 2 * SEND_MS
@@ -156,7 +174,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
         by: { principal: `${key}:user:${event.parent.author}`, profile: null },
         channel,
         thread: 'self',
-        data: { re: null, replyTo: null, text, labels: { ...event.parent.labels, source: key }, attachments: [], noSync: false, mentions: [], origin: { key, external: event.thread, thread: event.thread, place: event.place } },
+        data: { re: null, replyTo: null, text, labels: { ...taken({ source: key, ...event.parent.labels }), source: key }, attachments: [], noSync: false, mentions: [], origin: { key, external: event.thread, thread: event.thread, place: event.place } },
       },
       at,
     )
@@ -167,9 +185,21 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
     if (!root) return
     const message = findMessage(ctx.db, root.message)
     if (!message) return
+    const wanted = taken(event.labels ?? {})
+    // What the platform thread no longer has: a property it names, and any key under a prefix it owns.
+    const unset = new Set((event.unset ?? []).filter((name) => name in message.labels))
+    for (const prefix of event.owns ?? []) for (const name of Object.keys(message.labels)) if (name.startsWith(prefix) && !(name in wanted)) unset.add(name)
+    for (const name of unset) if (name.startsWith('board.') || name in wanted) unset.delete(name)
     const set: Record<string, string> = {}
-    for (const [name, value] of Object.entries(event.labels ?? {})) if (message.labels[name] !== value && !changedSince(ctx, message.id, name, event.at)) set[name] = value
-    if (Object.keys(set).length) append(ctx.db, { type: 'labels.changed', by, channel: message.channel, thread: message.thread, data: { id: message.id, set, unset: [], before: message.labels } }, at)
+    let count = Object.keys(message.labels).length - unset.size
+    // On catching up, a label the board has changed since the platform's own change is the newer, and stays.
+    for (const name of unset) if (changedSince(ctx, message.id, name, event.at)) unset.delete(name)
+    for (const [name, value] of Object.entries(wanted)) {
+      if (message.labels[name] === value || changedSince(ctx, message.id, name, event.at)) continue
+      if (!(name in message.labels) && ++count > LIMITS.labels) continue
+      set[name] = value
+    }
+    if (Object.keys(set).length || unset.size) append(ctx.db, { type: 'labels.changed', by, channel: message.channel, thread: message.thread, data: { id: message.id, set, unset: [...unset], before: message.labels } }, at)
     return
   }
 
@@ -184,7 +214,7 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
         by,
         channel,
         thread: 'self',
-        data: { re: null, replyTo: null, text: event.kind === 'root' ? text : (event.text ?? ''), labels: { ...(event.labels ?? {}), source: key }, attachments: event.kind === 'root' ? attachments : [], noSync: false, mentions: [], origin: { key, external: event.kind === 'root' ? event.external : event.thread, thread: event.thread, place: event.place } },
+        data: { re: null, replyTo: null, text: event.kind === 'root' ? text : (event.text ?? ''), labels: { ...taken({ source: key, ...(event.labels ?? {}) }), source: key }, attachments: event.kind === 'root' ? attachments : [], noSync: false, mentions: [], origin: { key, external: event.kind === 'root' ? event.external : event.thread, thread: event.thread, place: event.place } },
       },
       at,
     )

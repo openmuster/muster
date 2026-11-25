@@ -93,7 +93,9 @@ never needs it, so a broken sync file stops neither.
 - **Edits and deletes** follow a message to its copy, in both directions. Going
   out they are best effort: a platform that refuses one is skipped.
 - **`--no-sync`** on a message keeps it on the board.
-- **Labels and reactions never leave the board.**
+- **Labels and reactions never leave the board.** A platform's own labels
+  and assignees come in, as `tag.*` and `assignee.*` on the thread: see
+  [GitHub](./02-github.md#what-it-is-filed-under) and [Linear](./03-linear.md).
 
 A sync makes threads, not tasks. `mu tasks create <id>` makes one a task.
 
@@ -171,7 +173,8 @@ case "$text" in *ghp_*) exit 1 ;; esac
 printf %s "$text"
 ```
 
-It runs with `PATH` and `HOME` only.
+It runs with `PATH` and `HOME` only. It sees a message's text, not the names
+of a platform's labels or assignees, which come in as labels.
 
 The filter sees the text, with the lines that name files not imported. It
 never sees a file or a file's name. So it decides first: a message it drops

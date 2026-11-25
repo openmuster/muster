@@ -36,6 +36,28 @@ own comments and issues by the IDs Linear gave them, so they don't come back.
 | A comment | A reply, by `lin:user:<id>` |
 | A comment is edited or removed | The reply is edited or deleted |
 | The issue's state changes | The label `state`, in lowercase with dashes: `in-progress` |
+| A label is on it, added or removed | A label per Linear label: `tag.bug=bug` |
+| It is assigned, reassigned or unassigned | `assignee.<handle>=<handle>`, from the assignee's profile handle or the name they show |
+| Its priority is set or cleared | `priority`: `urgent`, `high`, `medium` or `low`. No priority is no label |
+| It joins, moves or leaves a project | `project`, the project's name in lowercase |
+
+```bash
+mu read eng --label tag.agent=agent
+mu wait eng --label priority=urgent --timeout 1h
+```
+
+Under `tag.` and `assignee.` the thread says what Linear says now, and the
+rules are the ones for [GitHub](./02-github.md#what-it-is-filed-under): the
+key is the name cut to fit, the value is the name in lowercase, what you set
+by hand under those two goes at the issue's next update, at most 40 are kept,
+and nothing goes back. `priority` and `project` are Linear's as well: one you
+set by hand on a synced thread is replaced, or taken off when the issue has
+none. All of this holds for a thread started on the board too, once it has
+opened its issue.
+
+Not imported: an assignee's email. A webhook about a change to an issue the
+board has never seen, one made before sync was set up, is dropped: its thread
+starts when the issue is created, or when [catching up](#catching-up) reads it.
 
 ## What goes back
 
@@ -80,7 +102,8 @@ After downtime, and when a token is set, the ticker asks Linear for the issues i
 the mapped teams updated since the last event it received, then the comments
 on them. An issue created while the board was down arrives whole, with its
 title, description and labels, and its comments as replies. A state change
-missed meanwhile sets `state`, by `lin`: Linear's list doesn't say who
+missed meanwhile sets `state`, and what the issue is filed under now (its
+labels, assignee, priority and project) is brought up to date, by `lin`: Linear's list doesn't say who
 moved the issue, so the change is put down to the sync. An older issue updated while the board was down
 starts a thread too. What the board already has, by webhook or because it
 sent it, isn't imported again.
