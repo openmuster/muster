@@ -16,7 +16,7 @@ import { DAEMON_SPEC, SERVE_SPEC, chooseModule, endLaunch, invokedAs, launchGuar
 import { syncPath } from '../sync/config.ts'
 import { boardPath } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
-import { fillResults, pushesTask } from '../daemon/steps.ts'
+import { FillRefused, fillResults, pushesTask } from '../daemon/steps.ts'
 import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import * as guard from '../daemon/guard.ts'
@@ -1501,24 +1501,33 @@ export const agentPrompt = (task: number, profile: string | null) =>
   ].join('\n')
 
 /**
- * Fills a workflow task's `{steps.<key>.result}` once it is claimed, before any agent reads it. When the
- * board won't take the filled text (too long, say), the task fails with why, under the claim just made, and
- * that is returned: an agent never works a task whose results weren't quoted into it. Null when all is well.
+ * Fills a workflow task's `{steps.<key>.result}` once it is claimed, before any agent reads it. A task
+ * whose text was changed since the daemon made it is held (`workflow.edited`) for a person to read; one this
+ * caller can't fill, or whose filled text the board won't take (too long, say), fails with why. Either way
+ * no agent works it, and why is returned. When the board couldn't answer (out of reach, busy, a token that
+ * ran out) the claim is given back and the error thrown: the task is taken again later. Null when all is well.
  */
 async function filled(run: Run, task: number, owner: string, token: string, team: Board = run.team): Promise<string | null> {
   try {
     await fillResults(run.team, task, owner)
     return null
   } catch (error) {
-    if (!(error instanceof Failure) || error.reason === 'network_error' || error.reason === 'busy' || error.reason === 'bad_answer') {
+    if (!(error instanceof Failure) || RELEASE_ON.has(error.reason)) {
       await team.taskRelease({ id: task, token }).catch(() => {})
       throw error
+    }
+    if (error instanceof FillRefused && error.why === 'edited') {
+      await team.taskBlock({ id: task, token, kind: 'workflow.edited', reason: error.message })
+      return error.message
     }
     const reason = `couldn't quote the earlier steps' results into it: ${error.message}`
     await team.taskFail({ id: task, token, reason })
     return reason
   }
 }
+
+/** What the board says when it couldn't answer, rather than answering no: a task claimed meanwhile is given back, not failed. */
+const RELEASE_ON = new Set(['network_error', 'busy', 'bad_answer', 'unauthorized', 'internal'])
 
 /** Starts an agent on a task and stays with it: renews the claim while it works, and settles what it left unsettled. */
 async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => void, onCost?: (cost: number) => void): Promise<number> {
@@ -1825,7 +1834,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   if (on(parsed.flags, 'push') && str(parsed.flags, 'ready') !== undefined) {
     throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
   }
-  const { repo, gh, push, app } = repoAndPush(parsed, env)
+  const { repo, gh, push: pushAsked, app } = repoAndPush(parsed, env)
   const githubApi = env.MUSTER_GITHUB_API ? { api: env.MUSTER_GITHUB_API } : {}
   // The token made for this run, once it is, and what undoes a start that didn't happen: that token goes, and a
   // claim a worker made for this task is given back, so the task is ready again and burns no attempt.
@@ -1849,7 +1858,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     try {
       cloneToken = (await installationToken(app, gh, { contents: 'read' }, githubApi)).token
     } catch (error) {
-      if (push || !(error instanceof Failure && error.reason === 'github_app_not_installed')) {
+      if (pushAsked || !(error instanceof Failure && error.reason === 'github_app_not_installed')) {
         await undo()
         throw startFailed(error)
       }
@@ -1859,6 +1868,10 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
   const task = ready === undefined ? id(parsed.positionals[0], 'a task') : 0
+  // A workflow's task run by ID rather than by its worker is pushed only if the daemon made it to be, as a
+  // worker's is. (Its steps' results aren't filled in here: `mu run` in the sandbox can't write as the
+  // daemon, so it fails such a task rather than start an agent on it. Its worker fills them in.)
+  const push = pushAsked && task !== 0 && !held.claimToken ? await pushesTask(run.team, task, (await run.team.whoami()).principal, true) : pushAsked
   // One length of time sets them all. The agent gets `timeout`; a Vercel sandbox outlives it by the time it
   // takes to set up and to settle the task, so the task is always settled by mu run and never cut off; and
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.

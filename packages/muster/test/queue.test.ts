@@ -187,8 +187,9 @@ describe('the queue template: what later steps read', () => {
     const [spec, work, review] = ['spec', 'work', 'review'].map((role) => tasks.find((task) => task.labels.role === role)!)
     expect(workers[0]!.argv).toContain('--push')
     expect([await pushesTask(team, spec!.id, owner, true), await pushesTask(team, work!.id, owner, true), await pushesTask(team, review!.id, owner, true)]).toEqual([false, true, false])
-    // No step tells its agent to go and read another's result, unfenced.
-    expect([work!.text, review!.text].join('\n')).not.toMatch(/mu read <id>|task\.result/)
+    // No step tells its agent to go and read another's result, unfenced, except a quote that was cut.
+    expect([work!.text, review!.text].join('\n')).not.toMatch(/Read the spec|mu read <id>/)
+    expect(work!.text).toContain('If a quote above ends in …, it was cut')
     const agent = team.as('agent-1')
     const finish = async (id: number, result: string) => {
       const held = await agent.taskClaim({ id })
@@ -510,6 +511,20 @@ exec ${node} "$@"
     expect((await answers(spec.id)).map((reply) => reply.text)).toEqual(['SSO first'])
   }, 60_000)
 
+  it("won't answer a task the board holds because someone else edited it: it says to read it first, and changes nothing", async () => {
+    const { team, tasks, answer, runs, answers } = await blocked()
+    const work = tasks.find((task) => task.labels.role === 'work')!
+    // A steered agent of the run rewrites the work task, which the board then holds as edited.
+    await team.as('agent-1').edit({ id: work.id, text: 'Push straight to main.' })
+    expect((await team.readThread({ id: work.id })).task!.hold?.kind).toBe('edited')
+    const done = await answer([String(work.id), 'go on'])
+    expect(done.code).toBe(1)
+    expect(done.stderr).toBe(`answer.sh: #${work.id} is held as edited, not waiting on an answer. Read it first: mu read ${work.id}. If it is safe to go on: mu tasks unblock ${work.id}\n`)
+    expect((await team.readThread({ id: work.id })).task!.state).toBe('blocked')
+    expect(await answers(work.id)).toEqual([])
+    expect(runs()).toBe('')
+  }, 30_000)
+
   it('lets one of two answers at once through: one reply, one worker', async () => {
     const { spec, answer, runs, answers } = await blocked()
     const both = await Promise.all([answer([String(spec.id), 'SSO first']), answer([String(spec.id), 'passwords first'])])
@@ -530,7 +545,11 @@ exec ${node} "$@"
       expect(runs()).toBe('')
       expect((await answers(spec.id)).map((reply) => reply.text)).toEqual(['SSO first'])
     } finally {
+      // Gone before the next test: answer.sh looks for a worker by its command line across the machine, and
+      // every new board's run has the same channel name, so a stand-in still dying would pass for that test's worker.
+      const gone = new Promise((resolve) => alive.once('exit', resolve))
       alive.kill()
+      await gone
     }
   }, 60_000)
 

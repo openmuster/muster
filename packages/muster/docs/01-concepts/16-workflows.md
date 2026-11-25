@@ -133,10 +133,20 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   agent starts, as the daemon's own profile, so the board doesn't hold the
   task as edited. It reads which task is which step from the
   `workflow.step` label the daemon made each task with, never from labels
-  set since. A step that completed with no result, or that the task doesn't
-  wait for, reads `(No result from step "plan", #43: it completed without
-  one.)` or the like. If the filled text is longer than the board takes, the
-  worker fails the task and runs no agent on it. A result is quoted once,
+  set since. A result is quoted only when one of the run's workers
+  (`<workers.as>-…`) completed the step under a claim made from the daemon's
+  machine: every agent of the run holds a token for the run's channel, so
+  one that claimed and completed another step itself gets `(No result from
+  step "work", #44: it wasn't completed by one of the run's workers.)`. A
+  step that completed with no result, or that the task doesn't wait for,
+  reads `(No result from step "plan", #43: it completed without one.)` or
+  the like. The worker fills only the text the daemon wrote: a task edited
+  since by anyone else is held as `workflow.edited` for you to read, and no
+  agent works it. Only a worker on the daemon's machine can fill one, so a
+  task run by ID (`mu run <id> --runner vercel`) whose text names a result
+  fails rather than start an agent on it; let its worker take it. If the
+  filled text is longer than the board takes, the worker fails the task and
+  runs no agent on it. A result is quoted once,
   when the task is first taken: reopen a step and redo it, and a task that
   already quoted it keeps the old quote. Only your own text names a
   result: `{steps.` in an argument, the thread's message or a result is
@@ -215,7 +225,8 @@ For a request on thread 812 in `work/api`, the daemon:
    principal, is never taken. It stops when nothing is ready for ten
    minutes. When a step sets its own `push`, the daemon labels every task
    `workflow.push=true` or `false` as it makes it, and a worker skips the
-   push for a task made with `false`. It reads that from the board's record
+   push for a task made with `false`, as does `mu run <id> --push` for one
+   such task. It reads that from the board's record
    of the task's making, so a label someone sets later, an agent in the
    run's channel included, changes nothing, and without `--push` no label
    makes a worker push.

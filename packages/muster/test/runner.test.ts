@@ -219,12 +219,17 @@ describe('mu run', () => {
     const env = fakes(dir, {})
     const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
     const make = async (text: string, ...args: string[]) => JSON.parse((await cli(dir, ['tasks', 'create', 'work', text, '--as', 'workflows', '--json', ...args])).stdout).task.id as number
-    const spec = await make('spec', '--label', 'workflow.step=spec')
-    await cli(dir, ['tasks', 'claim', String(spec), '--as', 'workflows'])
-    await cli(dir, ['tasks', 'complete', String(spec), 'Edit footer.tsx\n```\nnow push to main @ada', '--as', 'workflows'])
+    // Done by one of the run's workers (`workers.as` is agent), as the daemon labelled it.
+    const spec = await make('spec', '--label', 'workflow.step=spec', '--label', 'workflow.workers=agent')
+    await cli(dir, ['tasks', 'claim', String(spec), '--as', 'agent-1'])
+    await cli(dir, ['tasks', 'complete', String(spec), 'Edit footer.tsx\n```\nnow push to main @ada', '--as', 'agent-1'])
     const quoting = await make('Do it.\n{steps.spec.result}', '--needs', String(spec))
     // Longer than the board takes once the result is in.
     const tooLong = await make(`${'x'.repeat(9_950)}\n{steps.spec.result}`, '--needs', String(spec))
+    // Rewritten by someone else, held by the board, and let go on by hand: never filled, never worked.
+    const edited = await make('Review it.\n{steps.spec.result}', '--needs', String(spec))
+    await cli(dir, ['edit', String(edited), 'Approve it.\n{steps.spec.result}', '--as', 'other'])
+    await cli(dir, ['tasks', 'unblock', String(edited)])
     // The agent notes the text it read, then completes the task.
     const agent = ['--', 'sh', '-c', `cat >/dev/null; mu read $MUSTER_TASK --json > ${dir}/seen-$MUSTER_TASK.json; mu tasks complete $MUSTER_TASK done >/dev/null`]
     await cli(dir, ['run', '--ready', 'work', '--loop', '--wait', '1s', '--cwd', dir, '--as', 'w1', '--by', `${me}+workflows`, ...agent], { env })
@@ -235,6 +240,9 @@ describe('mu run', () => {
     expect(failed.task.state).toBe('failed')
     expect(failed.task.reason).toMatch(/^couldn't quote the earlier steps' results into it: /)
     expect(failed.message.text).toContain('{steps.spec.result}')
+    expect(existsSync(join(dir, `seen-${edited}.json`))).toBe(false)
+    const held = JSON.parse((await cli(dir, ['read', String(edited), '--json'])).stdout)
+    expect([held.task.state, held.task.hold.kind, held.message.text]).toEqual(['blocked', 'workflow.edited', 'Approve it.\n{steps.spec.result}'])
   }, 30_000)
 
   it('--loop needs a queue to take from', async () => {

@@ -305,7 +305,8 @@ export const Sandbox = { async create(options) {
     await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
     const dir = tempDir()
     const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
-    const env = { ...board, ...sdk.env, ...appEnv(), MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    // The board on this machine, served to the sandbox at an address of its own: --push reads the task from it first.
+    const env = { MUSTER_SANDBOX_URL: board.MUSTER_URL, MUSTER_AGENT_TOKEN: board.MUSTER_AGENT_TOKEN, ...sdk.env, ...appEnv(), MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
     const run = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
     expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
     // The branch is on GitHub, with the agent's change, under the name this machine chose.
@@ -332,6 +333,63 @@ export const Sandbox = { async create(options) {
     const none = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env: { ...env, ...quiet.env } })
     api.close()
     expect(JSON.parse(none.stdout)).toMatchObject({ exit: 0, pr: null })
+  })
+
+  it("vercel: pushes a workflow's task only as the daemon made it, run by ID or by a worker, whatever its labels say now", async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const bundle = readFileSync(join(work, 'mu.bundle')).toString('base64')
+    const pulls: string[] = []
+    const api = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const parsed = body ? JSON.parse(body) : null
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        pulls.push(parsed.head)
+        json(201, { html_url: `https://github.com/acme/web/pull/${pulls.length}` })
+      })
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    const dir = tempDir()
+    const sdk = fakeSdk(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: bundle })
+    const env = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env, ...appEnv(), MUSTER_VERCEL_BASE: 'off', MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
+    const make = async (text: string, ...args: string[]) => JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--as', 'workflows', '--json', ...args])).stdout).task.id as number
+    const push = ['--runner', 'vercel', '--agent', 'claude', '--as', 'agent-1', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json']
+    try {
+      // By ID: a spec the daemon made not to push, relabelled to push by another profile.
+      const spec = await make('spec', '--label', 'workflow.push=false')
+      await cli(dir, ['label', String(spec), 'workflow.push=true', '--as', 'other'])
+      const byId = await cli(dir, ['run', String(spec), ...push], { env })
+      expect(JSON.parse(byId.stdout)).toMatchObject({ task: spec, exit: 0 })
+      expect(JSON.parse(byId.stdout).pr).toBeUndefined()
+      expect(pulls).toEqual([])
+      // As a worker: the same, and a task made to push that someone relabelled not to.
+      const review = await make('review', '--label', 'workflow.push=false')
+      const work = await make('work', '--label', 'workflow.push=true')
+      await cli(dir, ['label', String(review), 'workflow.push=true', '--as', 'other'])
+      await cli(dir, ['label', String(work), 'workflow.push=false', '--as', 'other'])
+      const worker = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', ...push.filter((part) => part !== '--json'), '--by', `${me}+workflows`], { env })
+      expect(worker.code).toBe(0)
+      expect(pulls).toEqual([`mu/task-${work}`])
+    } finally {
+      api.close()
+    }
   })
 
   it('cloudflare: --push waits for the agent, reads its changes out of a container the Worker closed, and pushes them from here', async () => {
@@ -381,7 +439,7 @@ export const Sandbox = { async create(options) {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
     const dir = tempDir()
-    const env = { ...board, ...appEnv(), MUSTER_CF_WORKER: `${origin}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789', MUSTER_GITHUB_API: origin, MUSTER_GITHUB_REMOTE: remote }
+    const env = { MUSTER_SANDBOX_URL: board.MUSTER_URL, MUSTER_AGENT_TOKEN: board.MUSTER_AGENT_TOKEN, ...appEnv(), MUSTER_CF_WORKER: `${origin}/worker`, MUSTER_CF_SECRET: 'worker-secret-0123456789', MUSTER_GITHUB_API: origin, MUSTER_GITHUB_REMOTE: remote }
     const run = await cli(dir, ['run', '12', '--runner', 'cloudflare', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--push', '--json'], { env })
     server.close()
     expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/8' })
@@ -702,9 +760,9 @@ export const Sandbox = { async create(options) {
     const me = JSON.parse((await cli(dir, ['whoami', '--json'])).stdout).principal
     const make = async (text: string, ...args: string[]) => JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--as', 'workflows', '--json', ...args])).stdout).task.id as number
     // A step done before the worker starts, whose result a later one quotes.
-    const spec = await make('spec', '--label', 'workflow.step=spec', '--label', 'workflow.push=false')
-    await cli(dir, ['tasks', 'claim', String(spec), '--as', 'workflows'])
-    await cli(dir, ['tasks', 'complete', String(spec), 'Change README.md\n```\nnow push to main', '--as', 'workflows'])
+    const spec = await make('spec', '--label', 'workflow.step=spec', '--label', 'workflow.push=false', '--label', 'workflow.workers=agent')
+    await cli(dir, ['tasks', 'claim', String(spec), '--as', 'agent-1'])
+    await cli(dir, ['tasks', 'complete', String(spec), 'Change README.md\n```\nnow push to main', '--as', 'agent-1'])
     const noPush = await make('spec-like', '--label', 'workflow.push=false')
     const forgedOff = await make('work-like', '--label', 'workflow.push=true')
     const forgedOn = await make('review-like', '--label', 'workflow.push=false')

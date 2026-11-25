@@ -191,9 +191,14 @@ reach a later step unfenced: the work's diff, which the review downloads and
 reads; anything an agent chooses to read itself with `mu read`; and a later
 task's own text, which an earlier step's agent may edit, since its token may
 post in the run's channel. The board then holds that task as `edited`, and
-`needs-me` pings you: read what changed before you answer it with
-`answer.sh`. A result is quoted once, when the task is first taken: a task
-reopened after a step it quotes was done again keeps the old quote.
+`needs-me` pings you. `answer.sh` won't answer it: read what changed, and
+unblock it yourself only if it is safe. Even then its worker doesn't fill
+results into text it didn't write, and holds it again as `workflow.edited`.
+A step's result is quoted only when the run's own worker completed it: an
+agent that claimed and completed another step itself, with its sandbox's
+token, gets a `no result` note in the next task instead. A result is quoted
+once, when the task is first taken: a task reopened after a step it quotes
+was done again keeps the old quote.
 
 ## What goes wrong
 
