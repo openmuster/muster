@@ -35,6 +35,16 @@ versions are affected.
 
 ### Fixed
 
+- A registered workflow's run that was summed up as failed, and then went on
+  after someone reopened its failed task (`mu tasks reopen`), now gets a new
+  summary once it settles again, such as `implement finished (updated): 3
+  completed, 0 failed, 0 canceled`. Before, the thread, and the Linear or
+  Slack issue it syncs to, kept saying the run failed while its work was done
+  and its pull request open. The update is said once per reopen, also across
+  a daemon restart, and never while the run is still going; a reopened task
+  nobody takes is summed up as it stands once the workflow's `timeout` has
+  passed since the reopen. Runs reopened before upgrading aren't summed up
+  again.
 - `mu run` no longer fails a task over a session the agent doesn't have. A
   session remembered from the task's `session` label can live only where the
   agent last ran: a cloud sandbox that is gone, or a session deleted here.
