@@ -7,6 +7,27 @@ versions are affected.
 
 ### Added
 
+- Workflow steps can quote an earlier step's result with
+  `{steps.<key>.result}`, fenced and defused as `{thread.text}` is. The
+  worker that takes the task fills it in before its agent starts. A step may
+  name only a step it `needs`, directly or through another, and
+  `workflows.json` is refused otherwise. A missing result reads as a
+  `(No result from step …)` note, and so does one that the run's own worker
+  didn't complete, such as a step another agent of the run claimed and
+  completed with its sandbox's token. A task whose text was edited since the
+  daemon made it isn't filled, and is held as `workflow.edited`.
+- A task claim says, in its `task.claimed` event, whether the claimer was a
+  token held to channels (`narrowed: true`).
+- A workflow step can set `push: true` or `push: false` to override
+  `workers.push`. The worker, and `mu run <id> --push`, read it from how the
+  daemon made the task, so a label set later by anyone else doesn't change
+  whether a task is pushed.
+- The card queue template uses both: the spec and review steps push nothing,
+  and the work and review steps get the spec's result (and the review the
+  work's summary) quoted, rather than being told to `mu read` it unfenced.
+  `answer.sh` answers only a task held on a question (`needs_input`), and
+  refuses one held because someone edited it.
+
 - Parking work for later: `mu tasks create … --hold backlog --reason "…"`
   makes a task already blocked, in one write, so no `--ready` claim takes it
   before you unblock it. Any kind works; `backlog` is the convention.

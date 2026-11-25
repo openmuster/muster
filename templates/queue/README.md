@@ -13,7 +13,7 @@ guide is [A card queue](../../packages/muster/docs/03-guides/19-a-card-queue.md)
 | --- | --- |
 | `sync.json` | Linear team `ENG` to the channel `cards`, both ways |
 | `watchers.json` | `card-start` for a card labelled `tag.agent=agent`; `needs-me` for a blocked task under `cards/` |
-| `workflows.json` | The `card` workflow: spec, work and review, one Vercel worker, `--push` |
+| `workflows.json` | The `card` workflow: spec, work and review, one Vercel worker, `--push` for the work step only |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow, once |
 | `notify.sh` | Tells you a task is blocked: `NOTIFY_CMD`, or a macOS notification |
 | `answer.sh` | Unblocks a blocked task, posts your answer, and starts a worker on the rest of its run |
@@ -39,10 +39,11 @@ Answer a blocked task as yourself, with no `--as` and no `MUSTER_PROFILE`:
 ```
 
 What a card can reach: anyone who can label an issue in the team, or post in
-`cards`, starts a run, as `intake`, whatever `who` says. Each step's sandbox
-may push a branch and open a pull request in the repository (`push` is per
-workflow, not per step), that pull request runs your CI on the agent's code,
-and task results go back to the issue as a comment. The guide has the rest.
+`cards`, starts a run, as `intake`, whatever `who` says. The work step's
+sandbox pushes a branch and opens a pull request in the repository (spec and
+review set `push: false`), that pull request runs your CI on the agent's code,
+and task results go back to the issue as a comment. The spec's result reaches
+the later steps quoted and fenced, as the card does. The guide has the rest.
 
 Covered by tests, with Linear's API and the sandboxes as stand-ins. It has
 not been run live.

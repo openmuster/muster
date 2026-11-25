@@ -381,7 +381,9 @@ function claimNow(ctx: Context, caller: Caller, row: TaskRow, root: Message, cla
     by: byOf(caller),
     channel: root.channel,
     thread: root.id,
-    data: { id: row.id, epoch: row.epoch + 1, until, token: hashOf(token), pid: claim.pid ?? null, pidStart: claim.pidStart ?? null, from: 'ready' },
+    // Whether the claimer was a token held to channels, such as a sandbox's: a workflow trusts a step's
+    // result only from a claim its own worker made, never from one an agent in the run's channel made.
+    data: { id: row.id, epoch: row.epoch + 1, until, token: hashOf(token), pid: claim.pid ?? null, pidStart: claim.pidStart ?? null, from: 'ready', ...(caller.can !== undefined ? { narrowed: true } : {}) },
   })
   return token
 }

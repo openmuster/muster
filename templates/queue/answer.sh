@@ -26,6 +26,12 @@ const m = t.message
 const at = /^cards\/card-([0-9]+)$/.exec(m.channel)
 const ok = t.task && m.by.principal === process.argv[1] && m.by.profile === "workflows" && at && m.labels.workflow === "card" && m.labels.request === at[1]
 if (!ok) { console.error("answer.sh: #" + m.id + " is not a task of a card run"); process.exit(1) }
+// Only a question an agent asked is answered here. A task held for anything else, such as its text being
+// edited by someone other than the daemon, is for you to read first, and to unblock yourself if it is safe.
+if (t.task.state === "blocked" && t.task.hold && t.task.hold.kind !== "needs_input") {
+  console.error("answer.sh: #" + m.id + " is held as " + t.task.hold.kind + ", not waiting on an answer. Read it first: mu read " + m.id + ". If it is safe to go on: mu tasks unblock " + m.id)
+  process.exit(1)
+}
 process.stdout.write(m.channel + " " + at[1])' "$owner")
 set -- $run
 channel="$1"
@@ -41,7 +47,7 @@ const k = w.workers
 const cloud = k.runner === "vercel" || k.runner === "cloudflare"
 const out = [...(cloud ? ["--runner", k.runner] : ["--cwd", k.cwd]), "--agent", k.agent, "--as", k.as + "-answer"]
 if (k.repo) out.push("--repo", k.repo)
-if (k.push) out.push("--push")
+if (k.push || w.steps.some((step) => step.push === true)) out.push("--push")
 if (k.timeout) out.push("--timeout", k.timeout)
 if (out.some((each) => /\s/.test(each))) { console.error("answer.sh: a worker setting in workflows.json has a space in it"); process.exit(1) }
 process.stdout.write(out.join(" "))')

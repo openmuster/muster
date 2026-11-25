@@ -39,9 +39,9 @@ can register one or change what one does.
       "channels": ["work/"],
       "timeout": "2h",
       "steps": [
-        { "key": "plan", "text": "Plan the work for: {args.goal}\n{thread.text}" },
-        { "key": "work", "text": "Do what the plan made, for: {args.goal}", "needs": ["plan"] },
-        { "key": "review", "text": "Review the work for: {args.goal}", "needs": ["work"] }
+        { "key": "plan", "text": "Plan the work for: {args.goal}\n{thread.text}", "push": false },
+        { "key": "work", "text": "Do what the plan says, for: {args.goal}\n{steps.plan.result}", "needs": ["plan"] },
+        { "key": "review", "text": "Review the work for: {args.goal}\n{steps.plan.result}\n{steps.work.result}", "needs": ["work"], "push": false }
       ],
       "workers": {
         "count": 3,
@@ -58,8 +58,9 @@ can register one or change what one does.
 
 The example is a fixed pipeline: the daemon makes the three tasks, and the
 workers only complete them. `plan` ends with a short plan as its result,
-`work` reads it, makes the change and, with `push`, opens the pull request,
-and `review` checks the change against the plan. A step never asks an agent
+`work` gets it quoted into its text, makes the change and, with `push`, opens
+the pull request, and `review` checks the change against the plan. `plan` and
+`review` push nothing. A step never asks an agent
 to create more tasks: workers take only the tasks the daemon itself made for
 the run, so tasks an agent made would never be taken. A complete example, with a
 second workflow, is
@@ -71,7 +72,7 @@ second workflow, is
 | `description` | What it is for. `mu workflow list` shows it |
 | `who` | Who may start it. Required, at least one entry. See below |
 | `channels` | Where it may be started. Required. An entry ending in `/` is a prefix (`work/` covers `work/api`); any other is that channel only |
-| `steps` | 1 to 20 tasks. `key` and `text` are required. `needs` names earlier keys, `for` gives the task to one profile, `labels` are `k: v` text |
+| `steps` | 1 to 20 tasks. `key` and `text` are required. `needs` names earlier keys, `for` gives the task to one profile, `labels` are `k: v` text, `push` (`true` or `false`) overrides `workers.push` for that step |
 | `workers` | The crew. See below |
 | `timeout` | How long a run may take before it is summed up as it stands, such as `2h`. Left out, `24h` |
 
@@ -85,12 +86,13 @@ second workflow, is
 | `runner` | `local` (the default), `vercel` or `cloudflare` |
 | `cwd` | The folder local workers run in. Required when the runner is `local` |
 | `repo` | The repository each task works on |
-| `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel` or `cloudflare`, and a `repo` on github.com |
+| `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel` or `cloudflare`, and a `repo` on github.com. A step's own `push` wins over it |
 | `timeout` | A limit on each task, as `mu run --timeout` takes it |
 
 The file is checked when it is read. A step that `needs` a key that isn't an
-earlier step, two steps with one key, or a `push` with nothing to push to is
-refused with a message that names the workflow.
+earlier step, two steps with one key, a `push` with nothing to push to, or a
+`{steps.<key>.result}` for a step it doesn't need is refused with a message
+that names the workflow.
 
 ## Starting one
 
@@ -123,6 +125,32 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   close the quote. It is cut at 2,000 characters, with `…`, and defused as a
   summary's quotes are: `@` mentions nobody, `<` and `>` make no Slack ping,
   and no Markdown link or image renders.
+- **`{steps.<key>.result}` is an earlier step's result,** quoted into the
+  task as `{thread.text}` is: the same line (`The result of step "plan", #43,
+  quoted as written: …`), fence, defusing and cap. A step may name only a
+  step it `needs`, directly or through another, so the result is there when
+  the task is ready. The worker that takes the task fills it in, before its
+  agent starts, as the daemon's own profile, so the board doesn't hold the
+  task as edited. It reads which task is which step from the
+  `workflow.step` label the daemon made each task with, never from labels
+  set since. A result is quoted only when one of the run's workers
+  (`<workers.as>-…`) completed the step under a claim made from the daemon's
+  machine: every agent of the run holds a token for the run's channel, so
+  one that claimed and completed another step itself gets `(No result from
+  step "work", #44: it wasn't completed by one of the run's workers.)`. A
+  step that completed with no result, or that the task doesn't wait for,
+  reads `(No result from step "plan", #43: it completed without one.)` or
+  the like. The worker fills only the text the daemon wrote: a task edited
+  since by anyone else is held as `workflow.edited` for you to read, and no
+  agent works it. Only a worker on the daemon's machine can fill one, so a
+  task run by ID (`mu run <id> --runner vercel`) whose text names a result
+  fails rather than start an agent on it; let its worker take it. If the
+  filled text is longer than the board takes, the worker fails the task and
+  runs no agent on it. A result is quoted once,
+  when the task is first taken: reopen a step and redo it, and a task that
+  already quoted it keeps the old quote. Only your own text names a
+  result: `{steps.` in an argument, the thread's message or a result is
+  written with a lookalike brace, so it is never filled.
 - **The board keeps the request, as a `workflow.requested` event.** It says
   who asked, whether their profile was held by their token, and whether their
   token was held to channels, and nothing else about the workflow.
@@ -189,12 +217,19 @@ For a request on thread 812 in `work/api`, the daemon:
    may not be private, so the daemon answers `couldn't start` instead.
 3. Starts the workers. Each is `mu run --ready work/api/implement-41 --loop
    --wait 10m` with the workflow's settings, `--by <owner>+workflows` and
-   `--label workflow=implement --label request=41`. `--by` is what holds a
+   `--label workflow=implement --label request=41`, and `--push` if any step
+   pushes. `--by` is what holds a
    worker to the run: it takes only tasks created by the daemon's own
    profile, which only the board itself can write as. A task someone else
    puts in the run's channel with the same labels, even under the owner's
    principal, is never taken. It stops when nothing is ready for ten
-   minutes.
+   minutes. When a step sets its own `push`, the daemon labels every task
+   `workflow.push=true` or `false` as it makes it, and a worker skips the
+   push for a task made with `false`, as does `mu run <id> --push` for one
+   such task. It reads that from the board's record
+   of the task's making, so a label someone sets later, an agent in the
+   run's channel included, changes nothing, and without `--push` no label
+   makes a worker push.
 4. Replies on the thread.
 
 | Reply | When |
