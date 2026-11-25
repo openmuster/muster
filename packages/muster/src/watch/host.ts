@@ -249,7 +249,7 @@ async function giveUp(me: Board, store: ReturnType<typeof deliveriesOf>, watcher
 /** A watcher's own writes never wake it, but a message it scheduled does: that is how it asks to be woken later. */
 const own = (watcher: Watcher, event: FeedEvent) => watcher.as !== undefined && event.by.profile === watcher.as && !(event.data as { schedule?: unknown }).schedule
 
-/** Runs each watcher once, under its lease: for tests, and for a host that runs on a timer of its own. */
+/** Runs each watcher once, under its lease, taken for the pass and not renewed: for tests. */
 export async function deliver(team: Board, watchers: Watcher[], states: Map<string, WatchState>, log: (line: string) => void = () => {}): Promise<Delivered> {
   const out: Delivered = { delivered: 0, failed: 0, held: [] }
   if (watchers.length === 0) return out
@@ -369,7 +369,11 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
   if (running) return running
   const log = options.log ?? ((line: string) => process.stderr.write(`muster: ${line}\n`))
   const controller = new AbortController()
-  const stopNow = () => controller.abort()
+  const stopNow = () => {
+    controller.abort()
+    // A start() after this is a new host, though this one is still finishing what it ran.
+    if (hosts().get(key) === host) hosts().delete(key)
+  }
   if (options.signal?.aborted) controller.abort()
   options.signal?.addEventListener('abort', stopNow, { once: true })
   const loops = watchers.map((watcher) =>

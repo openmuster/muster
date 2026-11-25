@@ -35,10 +35,9 @@ function run(argv: string[], env: Record<string, string>, signal: AbortSignal, g
       if (settled) return
       settled = true
       signal.removeEventListener('abort', stop)
-      clearTimeout(killer)
+      // A kill already on its way stays on its way: a child that ignored SIGTERM and let go of the output is still killed.
       resolve({ ...ended, stdout })
     }
-    let killer: ReturnType<typeof setTimeout> | undefined
     const child = spawn(argv[0]!, argv.slice(1), { env, stdio: ['ignore', 'pipe', 'inherit'], detached: true })
     const group = (name: NodeJS.Signals) => {
       try {
@@ -49,8 +48,7 @@ function run(argv: string[], env: Record<string, string>, signal: AbortSignal, g
     }
     function stop() {
       group('SIGTERM')
-      killer = setTimeout(() => group('SIGKILL'), grace)
-      killer.unref()
+      setTimeout(() => group('SIGKILL'), grace).unref()
     }
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()

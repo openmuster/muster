@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { GAVE_UP } from '../src/daemon/check.ts'
 import { DELIVERY_ATTEMPTS, SLOWEST } from '../src/daemon/watchers.ts'
-import { board, type Board, type Watch } from '../src/index.ts'
-import { cliStart, clock, tempDir } from './helpers.ts'
+import { board, file, http, listen, mint, type Board, type Watch } from '../src/index.ts'
+import { cliStart, clock, reason, tempDir } from './helpers.ts'
 
 const HOST = fileURLToPath(new URL('./fixtures/host.ts', import.meta.url))
 
@@ -156,7 +156,7 @@ describe('watchers in code', () => {
     const team = board({ dir, principal: 'local:user:ada' })
     await team.post({ channel: 'general', text: 'board exists' })
     const hosts = [0, 1].map(() => {
-      const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', HOST, 'start', dir, marker, '1000', '200'], { env: { PATH: process.env.PATH }, stdio: ['ignore', 'pipe', 'inherit'] })
+      const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', HOST, 'start', dir, marker, '4000', '500'], { env: { PATH: process.env.PATH }, stdio: ['ignore', 'pipe', 'inherit'] })
       const exited = new Promise((resolve) => child.once('exit', resolve))
       return { child, exited }
     })
@@ -169,18 +169,20 @@ describe('watchers in code', () => {
     const first: number[] = []
     for (let i = 0; i < 10; i++) first.push((await team.post({ channel: 'work/api', text: `event ${i}` })).id)
     await vi.waitFor(() => expect(lines()).toHaveLength(10), { timeout: 10_000 })
-    const holder = lines()[0]![0]
-    expect(lines()).toEqual(first.map((seq) => [holder, seq]))
+    // Each once, in order. Which host delivered them is the lease's business: a late heartbeat on a busy machine may hand it over.
+    expect(lines().map(([, seq]) => seq)).toEqual(first)
+    const holder = Number((await team.backend.leases!.holder('watch:w'))!.holder.split(':')[1])
     const killed = hosts.find((host) => host.child.pid === holder)!
     const other = hosts.find((host) => host.child.pid !== holder)!
     killed.child.kill('SIGKILL')
     await killed.exited
     const second: number[] = []
     for (let i = 0; i < 5; i++) second.push((await team.post({ channel: 'work/api', text: `later ${i}` })).id)
-    await vi.waitFor(() => expect(lines()).toHaveLength(15), { timeout: 15_000 })
+    await vi.waitFor(() => expect(lines()).toHaveLength(15), { timeout: 20_000 })
     await new Promise((resolve) => setTimeout(resolve, 500))
-    // Each event once, in order: the first ten by the host that held it, the rest by the one that took over.
-    expect(lines()).toEqual([...first.map((seq) => [holder, seq]), ...second.map((seq) => [other.child.pid, seq])])
+    // Each event once, in order, and the ones after the kill by the host that took over.
+    expect(lines().map(([, seq]) => seq)).toEqual([...first, ...second])
+    expect(lines().slice(10)).toEqual(second.map((seq) => [other.child.pid, seq]))
     other.child.kill('SIGTERM')
     expect(await other.exited).toBe(0)
     team.close()
@@ -189,6 +191,55 @@ describe('watchers in code', () => {
 
 const SECOND = 1000
 const MIN = 60 * SECOND
+
+describe('a host in a server', () => {
+  it('lets the event loop run after each delivery: a burst never holds up the requests beside it', async () => {
+    const { team } = watched({ lead: noting().watch })
+    await team.deliver()
+    for (let i = 0; i < 50; i++) await team.post({ channel: `work/t${i}`, text: `event ${i}` })
+    // What a server's other work gets while it delivers: turns of the event loop.
+    let turns = 0
+    let counting = true
+    const turn = () => {
+      turns += 1
+      if (counting) setImmediate(turn)
+    }
+    setImmediate(turn)
+    expect((await team.deliver()).delivered).toBe(50)
+    counting = false
+    expect(turns).toBeGreaterThanOrEqual(50)
+  })
+
+  it('refuses to run watchers on a board reached over HTTP: they run where its file is', async () => {
+    const key = Buffer.alloc(32, 7)
+    const server = await listen({ backend: file({ memory: true }), key })
+    try {
+      const token = mint(key, { sub: 'local:user:ada', profile: null, exp: Math.floor(Date.now() / 1000) + 3600 })
+      const remote = board({ backend: http({ url: server.url, token }), watch: { lead: noting().watch } })
+      expect(await reason(remote.deliver())).toBe('watch_remote')
+      expect(await reason((async () => remote.start())())).toBe('watch_remote')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("narrows the event by its type: a message event has its message, a task event its task", async () => {
+    const said: string[] = []
+    const { team } = watched({
+      lead: {
+        tail: { channel: 'work/', types: ['message.posted', 'task.created'] },
+        run: ({ event }) => {
+          if (event.type === 'message.posted') said.push(`${event.message.id} ${event.message.text}`)
+          if (event.type === 'task.created') said.push(`task ${event.task.id} ${event.task.state}`)
+        },
+      },
+    })
+    await team.deliver()
+    const { task } = await team.taskCreate({ channel: 'work/api', text: 'fix it' })
+    await team.deliver()
+    expect(said).toEqual([`${task.id} fix it`, `task ${task.id} ready`])
+  })
+})
 const replies = async (team: Board, id: number) => (await team.readThread({ id })).replies.map((reply) => reply.text)
 
 describe('delivering, and failing', () => {
@@ -463,7 +514,7 @@ describe('runs that throw, hang, or come in bursts', () => {
       dir,
       principal: 'local:user:ada',
       watch: {
-        stuck: { tail: { channel: 'work/' }, timeout: '30s', run: () => new Promise(() => {}) },
+        stuck: { tail: { channel: 'work/' }, timeout: '1s', run: () => new Promise(() => {}) },
         slow: {
           tail: { channel: 'work/' },
           run: async () => {
@@ -479,9 +530,9 @@ describe('runs that throw, hang, or come in bursts', () => {
     const host = team.start({ log: () => {} })
     const posted = await team.post({ channel: 'work/api', text: 'wake' })
     await vi.waitFor(() => expect([fine, slow]).toEqual([[posted.id], 'running']), { timeout: 5000 })
-    // Stopped mid-run, it waits for the slow run to finish and be recorded. The stuck one is never waited out here.
+    // Stopped mid-run, it waits for the slow run to finish and be recorded, and for the stuck one's timeout.
     host.stop()
-    await Promise.race([host.done, new Promise((resolve) => setTimeout(resolve, 2000))])
+    await host.done
     expect(slow).toBe('finished')
     // Recorded: a later pass doesn't run it again.
     const again: string[] = []
