@@ -8,6 +8,18 @@ updates:
     groups:
       dev-tooling:
         dependency-type: development
+    # These need code changes, so each comes as its own deliberate pull request:
+    # tsdown 0.23 writes dist/index.mjs, which package.json doesn't point to; TypeScript 6 and 7,
+    # vitest 5, and @types/node past the Node lines CI runs.
+    ignore:
+      - dependency-name: tsdown
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
