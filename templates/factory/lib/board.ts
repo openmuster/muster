@@ -1,9 +1,10 @@
-// The factory's board module: the board, the watcher that wakes the agent, and how `/api/board` serves it.
-// Importing it opens and starts nothing, so the pages and the route share it: `host.ts` runs the watcher,
-// in a process of its own.
+// The factory's board module: the board, its GitHub sync, the watcher that wakes the agent, and how
+// `/api/board` serves it. Importing it opens, reads and starts nothing, so the pages and the route share it:
+// the route takes GitHub's webhooks (`team.fetch`), and `host.ts`, in a process of its own, runs the watcher
+// and the sync's catch-up and sending (`team.start()`).
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { board, command, http, type Duration } from 'muster'
+import { board, command, env, github, http, type Duration } from 'muster'
 
 export const FACTORY = process.env.FACTORY_CHANNEL ?? 'factory'
 
@@ -25,9 +26,22 @@ const url = process.env.MUSTER_URL
 // Where ALLOW_HOSTS isn't set, it takes `mu serve`'s MUSTER_ALLOW_HOSTS.
 const allowed = process.env.ALLOW_HOSTS
 
-/** The factory's board: the one at MUSTER_URL when set, else the default board on this machine. */
+/**
+ * GitHub issues and pull requests into `factory/` channels. Put your repository in place of `acme/web`. The
+ * webhook's secret is read from GITHUB_WEBHOOK_SECRET when the board starts or takes its first request; with
+ * it unset, `host.ts` refuses to start and `/api/board/webhooks/gh` answers 503. Nothing goes back to GitHub:
+ * for the agent's replies as comments, add `token: env('GITHUB_TOKEN')` and give the repository `mirror: true`.
+ */
+export const sync = {
+  gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), repos: { 'acme/web': { issues: `${FACTORY}/issues`, pulls: `${FACTORY}/prs` } } }),
+}
+
+/**
+ * The factory's board: the default board on this machine, with its sync. At MUSTER_URL when set, it has no
+ * sync, and `host.ts` can't run its watcher: both run where a board's file is.
+ */
 export const team = board({
-  ...(url ? { backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) } : {}),
+  ...(url ? { backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) } : { sync }),
   serve: allowed === undefined ? {} : { hosts: allowed.split(',').map((name) => name.trim()).filter(Boolean) },
   watch: {
     // New activity under factory/ wakes the agent on its thread, as `factory`. A thread's messages within

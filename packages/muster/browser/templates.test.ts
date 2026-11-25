@@ -149,12 +149,15 @@ describe('the factory template, in a browser', () => {
     expect(await page.locator('h1').textContent()).toBe('factory')
     const watcher = page.locator('.item', { hasText: 'a watcher wakes the agent' }).first()
     expect(await watcher.textContent()).toBe('to do · a watcher wakes the agent"factory" on #factory/ is declared, and nothing runs itpnpm host   (node host.ts, in this folder)')
-    // The template's host, on the same board: it takes the watcher's lease, and the page names it.
-    const host = spawn(process.execPath, ['host.ts'], { cwd: join(TEMPLATES, 'factory'), detached: true, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: dir, MUSTER_DIR: join(dir, 'board'), MUSTER_CONFIG: join(dir, 'config'), FACTORY_AGENT: 'true' } })
+    const platform = page.locator('.item', { hasText: 'a platform to hear from' }).first()
+    expect(await platform.textContent()).toMatch(/^to do · a platform to hear fromgh \(github\) is declared, and nothing syncs it/)
+    // The template's host, on the same board: it takes the watcher's lease and the sync's, and the page names it.
+    const host = spawn(process.execPath, ['host.ts'], { cwd: join(TEMPLATES, 'factory'), detached: true, stdio: 'ignore', env: { PATH: process.env.PATH, HOME: dir, MUSTER_DIR: join(dir, 'board'), MUSTER_CONFIG: join(dir, 'config'), FACTORY_AGENT: 'true', GITHUB_WEBHOOK_SECRET: 'gh-webhook-secret' } })
     servers.push(host)
-    await expect.poll(async () => (await team.backend.leases!.holder('watch:factory'))?.holder ?? '', { timeout: 20_000 }).toContain(`:${host.pid}:`)
+    for (const role of ['watch:factory', 'sync']) await expect.poll(async () => (await team.backend.leases!.holder(role))?.holder ?? '', { timeout: 20_000 }).toContain(`:${host.pid}:`)
     await page.reload()
     expect(await watcher.textContent()).toMatch(new RegExp(`^done · a watcher wakes the agent"factory" on #factory/, run by .+ \\(pid ${host.pid}\\)$`))
+    expect(await platform.textContent()).toMatch(new RegExp(`^done · a platform to hear fromgh \\(github\\), synced by .+ \\(pid ${host.pid}\\)$`))
     expect(await page.locator('h2', { hasText: 'recent threads' }).textContent()).toBe('recent threads: 1 · open tasks: 1')
     const link = page.locator('.item a', { hasText: 'The login redirect goes to the wrong host' })
     expect(await link.textContent()).toBe(`#${issue.id} The login redirect goes to the wrong host`)

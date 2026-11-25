@@ -8,7 +8,7 @@ import { tickOnce, watcherEnv } from '../src/daemon/daemon.ts'
 import { openRuns, threadQuote, type Spawner } from '../src/daemon/runs.ts'
 import { fillResults, pushesTask } from '../src/daemon/steps.ts'
 import { RETRY_MOST } from '../src/core/deliveries.ts'
-import { board, file, linear, loadSync, loadWorkflows, type Board, type WatchContext } from '../src/index.ts'
+import { board, file, linear, loadWorkflows, type Board, type WatchContext } from '../src/index.ts'
 import * as module from '../../../templates/queue/board.ts'
 import { BIN, cliStart, tempDir } from './helpers.ts'
 
@@ -234,17 +234,17 @@ describe('the queue template: what later steps read', () => {
 })
 
 describe('the queue template: config', () => {
-  it('its board module, workflow and sync file are ones the daemon loads, with the secrets named and not written', () => {
+  it('its board module and workflow are ones the daemon loads, with the secrets named and not written', () => {
     const watchers = module.team.watchers
     expect(watchers.map((each) => [each.name, each.as])).toEqual([['card-start', 'intake'], ['needs-me', null]])
     expect(existsSync(join(queue, 'watchers.json'))).toBe(false)
     expect(loadWorkflows(join(queue, 'workflows.json')).map((each) => each.name)).toEqual(['card'])
     // The daemon refuses a workflow named like a watcher.
     expect(watchers.map((each) => each.name)).not.toContain('card')
-    expect(Object.keys(loadSync(join(queue, 'sync.json'), { LINEAR_WEBHOOK_SECRET: 's', LINEAR_API_KEY: 'k' }))).toEqual(['lin'])
-    const text = readFileSync(join(queue, 'sync.json'), 'utf8')
-    expect(text).toContain('"env:LINEAR_WEBHOOK_SECRET"')
-    expect(text).toContain('"env:LINEAR_API_KEY"')
+    // Linear is the module's sync now, its secrets named with env() and read when it starts.
+    expect(module.team.sync).toEqual([{ key: 'lin', type: 'linear', env: ['LINEAR_WEBHOOK_SECRET', 'LINEAR_API_KEY'] }])
+    expect(existsSync(join(queue, 'sync.json'))).toBe(false)
+    expect(readFileSync(join(queue, 'board.ts'), 'utf8')).not.toMatch(/lin_api_|whsec/)
   })
 })
 
@@ -427,21 +427,45 @@ describe('the queue template: when a script fails', () => {
   }, 30_000)
 })
 
-describe('the queue template: its board module, run by mu daemon run --module', () => {
+describe('the queue template: its board module, run by mu', () => {
   /** Waited for, not timed: on a busy machine the daemon takes longer to start and to deliver. */
-  const until = async (done: () => Promise<boolean>, ms = 30_000) => {
+  const until = async (done: () => boolean | Promise<boolean>, ms = 30_000) => {
     for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) if (await done()) return
     throw new Error('waited too long')
   }
 
-  it('starts the card workflow once for a labelled card, as intake, and only warns about a sync.json it then does not read', async () => {
-    const { dir, bin, team, daemonEnv, requests } = setup()
-    // sync.json where the daemon looks for it, with its secrets set: a board module doesn't read it, and says so.
-    copyFileSync(join(queue, 'sync.json'), join(dir, 'config', 'sync.json'))
-    // The worker the daemon starts for the run: a stand-in that notes how it was called.
+  /**
+   * What `mu` runs with: the daemon's environment, the module's Linear secrets, a stand-in for the worker
+   * it starts, and Linear's API stood in for inside the process (loaded before the CLI), noting each call.
+   */
+  function muEnv(dir: string, bin: string, daemonEnv: NodeJS.ProcessEnv) {
     writeFileSync(join(bin, 'worker'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${dir}/workers.txt\n`)
     chmodSync(join(bin, 'worker'), 0o755)
-    const daemon = cliStart(dir, ['daemon', 'run', '--module', join(queue, 'board.ts')], { ...(daemonEnv as Record<string, string>), MUSTER_BIN: join(bin, 'worker'), LINEAR_WEBHOOK_SECRET: 'whsec' })
+    const stand = join(dir, 'linear-api.mjs')
+    writeFileSync(
+      stand,
+      `import { appendFileSync } from 'node:fs'
+const real = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  if (!String(url).startsWith('https://api.linear.app/')) return real(url, init)
+  const body = JSON.parse(String(init?.body ?? '{}'))
+  appendFileSync(${JSON.stringify(join(dir, 'linear.jsonl'))}, JSON.stringify(body) + '\\n')
+  const q = String(body.query)
+  for (const field of ['issues', 'comments']) if (q.includes(field + '(')) return Response.json({ data: { [field]: { nodes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false } } } })
+  if (q.includes('teams(')) return Response.json({ data: { teams: { nodes: [{ id: 'team-eng' }] } } })
+  if (q.includes('issueCreate')) return Response.json({ data: { issueCreate: { success: true, issue: { id: 'li-1', identifier: 'ENG-1', state: { name: 'Todo' } } } } })
+  return Response.json({ data: { commentCreate: { success: true, comment: { id: 'lc-' + Date.now() } } } })
+}
+`,
+    )
+    const linear = () => (existsSync(join(dir, 'linear.jsonl')) ? readFileSync(join(dir, 'linear.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { query: string; variables: any }) : [])
+    const env = { ...(daemonEnv as Record<string, string>), MUSTER_BIN: join(bin, 'worker'), LINEAR_WEBHOOK_SECRET: SECRET, LINEAR_API_KEY: 'lin_api_secret', NODE_OPTIONS: `--import ${stand}` }
+    return { env, linear }
+  }
+
+  it('mu daemon run --module starts the card workflow once for a labelled card, as intake', async () => {
+    const { dir, bin, team, daemonEnv, requests } = setup()
+    const daemon = cliStart(dir, ['daemon', 'run', '--module', join(queue, 'board.ts')], muEnv(dir, bin, daemonEnv).env)
     try {
       // The watcher starts from now: its place on the board is set once it first runs.
       await until(async () => (await team.as('intake').cursorGet('watch:card-start')) !== null)
@@ -460,8 +484,38 @@ describe('the queue template: its board module, run by mu daemon run --module', 
     }
     const ended = await daemon.done
     // A daemon told to stop stops cleanly.
-    expect(ended.code).toBe(0)
-    expect(ended.stderr).toContain(`warning: ${join(dir, 'config', 'sync.json')} isn't read with a board module: nothing it lists is synced.`)
+    expect([ended.code, ended.stderr]).toEqual([0, expect.not.stringContaining('warning')])
+  }, 60_000)
+
+  it("mu serve --module takes Linear's webhook for a labelled issue, starts the card, and comments on the issue", async () => {
+    // The test's handle only reads: it is never ticked, so its stand-in sync sends nothing.
+    const { dir, bin, team, daemonEnv, requests } = setup()
+    const { env, linear } = muEnv(dir, bin, daemonEnv)
+    const serving = cliStart(dir, ['serve', '--module', join(queue, 'board.ts'), '--port', '0', '--print-token'], env)
+    try {
+      await until(() => serving.output().includes('MUSTER_TOKEN=') || serving.child.exitCode !== null)
+      const url = /MUSTER_URL=(\S+)/.exec(serving.output())?.[1]
+      expect(url, serving.output()).toBeDefined()
+      // The card's watcher starts from now: wait for it before Linear sends anything.
+      await until(async () => (await team.as('intake').cursorGet('watch:card-start')) !== null)
+      const hook = (payload: unknown, secret = SECRET) => {
+        const body = JSON.stringify(payload)
+        return fetch(`${url}/webhooks/lin`, { method: 'POST', headers: { 'content-type': 'application/json', 'linear-signature': createHmac('sha256', secret).update(body).digest('hex') }, body })
+      }
+      expect((await hook({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) }, 'wrong')).status).toBe(401)
+      expect((await hook({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })).status).toBe(200)
+      await until(async () => (await requests()).length === 1)
+      const asked = await requests()
+      expect(asked[0]!.by.profile).toBe('intake')
+      // The daemon's "started" reply goes back to the issue as a comment.
+      await until(() => linear().some((call) => call.query.includes('commentCreate')))
+      const comment = linear().find((call) => call.query.includes('commentCreate'))!
+      expect([comment.variables.input.issueId, comment.variables.input.body]).toEqual(['iss-1', `started card: 3 tasks in cards/card-${asked[0]!.seq}`])
+    } finally {
+      serving.child.kill('SIGTERM')
+    }
+    const ended = await serving.done
+    expect(ended.stderr).not.toContain('warning')
   }, 60_000)
 })
 

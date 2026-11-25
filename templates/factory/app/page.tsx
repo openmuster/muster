@@ -8,11 +8,11 @@ export const dynamic = 'force-dynamic'
 export default async function Page() {
   const me = await team.whoami()
   const config = process.env.MUSTER_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'muster')
-  // Who holds each role: `tick` (mu serve or a daemon) and each watcher's `watch:<name>` (host.ts). A board at
+  // Who holds each role: `tick` (a daemon or mu serve), and `sync` and each watcher's `watch:<name>` (host.ts). A board at
   // a URL keeps its leases on its server, which this page can't see into.
-  const roles = ['tick', ...team.watchers.map((watcher) => `watch:${watcher.name}`)]
+  const roles = ['tick', 'sync', ...team.watchers.map((watcher) => `watch:${watcher.name}`)]
   const holders = Object.fromEntries(await Promise.all(roles.map(async (role) => [role, (await team.backend.leases?.holder(role).catch(() => null))?.holder ?? null] as const)))
-  const steps = setup({ config, channel: FACTORY, watchers: team.watchers, holders })
+  const steps = setup({ config, channel: FACTORY, watchers: team.watchers, sync: team.sync, holders })
   const page = await team.readChannel({ channel: `${FACTORY}/`, limit: 15 }).catch(() => ({ threads: [] }))
   const open = (await team.taskList({ channel: `${FACTORY}/` }).catch(() => ({ tasks: [] }))).tasks
   return (

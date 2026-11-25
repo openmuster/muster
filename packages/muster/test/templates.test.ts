@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { loadSync } from '../src/index.ts'
 
 import { authorized } from '../../../templates/cloudflare-runner/src/auth.ts'
 import { REGISTRY_HOSTS, boardHeaders, modelPasses, registryPasses, repoPasses, repoProps } from '../../../templates/cloudflare-runner/src/gates.ts'
@@ -227,11 +226,10 @@ describe('the cloudflare runner lifecycle', () => {
 })
 
 describe('the factory template', () => {
-  // Its watcher is in its board module, lib/board.ts, and tested with the template (templates/factory/test).
-  it('its sync file is one the daemon loads, with the secret named and not written, and no watchers.json is left beside it', () => {
-    expect(Object.keys(loadSync(join(factory, 'sync.json'), { GITHUB_WEBHOOK_SECRET: 's' }))).toEqual(['gh'])
-    expect(readFileSync(join(factory, 'sync.json'), 'utf8')).toContain('"env:GITHUB_WEBHOOK_SECRET"')
-    expect([existsSync(join(factory, 'watchers.json')), existsSync(join(factory, 'wake.sh'))]).toEqual([false, false])
+  // Its watcher and its sync are in its board module, lib/board.ts, and tested with the template (templates/factory/test).
+  it('keeps none of its old configuration files: watchers.json, wake.sh and sync.json are in the module now', () => {
+    expect(['watchers.json', 'wake.sh', 'sync.json'].filter((name) => existsSync(join(factory, name)))).toEqual([])
+    expect(readFileSync(join(factory, 'lib', 'board.ts'), 'utf8')).toContain("secret: env('GITHUB_WEBHOOK_SECRET')")
   })
 })
 

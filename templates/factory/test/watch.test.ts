@@ -99,7 +99,7 @@ describe('host.ts', () => {
     const host = spawn(process.execPath, ['host.ts'], {
       cwd: HERE,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { PATH: process.env.PATH, ...env, ...SANDBOX_SETTINGS, FACTORY_AGENT: agent, FACTORY_COALESCE: '0s', HOST_ONLY_SECRET: 'sk-not-for-the-agent' } as unknown as NodeJS.ProcessEnv,
+      env: { PATH: process.env.PATH, ...env, ...SANDBOX_SETTINGS, GITHUB_WEBHOOK_SECRET: 'gh-webhook-secret', FACTORY_AGENT: agent, FACTORY_COALESCE: '0s', HOST_ONLY_SECRET: 'sk-not-for-the-agent' } as unknown as NodeJS.ProcessEnv,
     })
     let output = ''
     host.stderr!.on('data', (chunk) => (output += chunk))
@@ -107,8 +107,8 @@ describe('host.ts', () => {
     try {
       // The watcher starts from now: it has a place on the board once it has run.
       await until(async () => (await team.as('factory').cursorGet('watch:factory')) !== null)
-      const holder = await team.backend.leases!.holder('watch:factory')
-      expect(holder?.holder).toMatch(new RegExp(`:${host.pid}:`))
+      // It runs the watcher and the module's sync: catch-up and what goes back to GitHub.
+      for (const role of ['watch:factory', 'sync']) await until(async () => ((await team.backend.leases!.holder(role))?.holder ?? '').includes(`:${host.pid}:`))
       const issue = await team.as('triage').post({ channel: 'factory/intake', text: 'The login redirect goes to the wrong host' })
       await until(() => existsSync(join(dir, 'woken.txt')))
       // The agent's own reply wakes nothing.
@@ -127,10 +127,24 @@ describe('host.ts', () => {
       host.kill('SIGTERM')
     }
     expect([await ended, output]).toEqual([143, expect.stringContaining('factory: watching #factory/')])
-    // Its lease goes with it, so another host takes over at once.
-    expect(await team.backend.leases!.holder('watch:factory')).toBeNull()
+    // Its leases go with it, so another host takes over at once.
+    expect([await team.backend.leases!.holder('watch:factory'), await team.backend.leases!.holder('sync')]).toEqual([null, null])
     team.close()
   }, 60_000)
+})
+
+describe('host.ts without the sync secret', () => {
+  it('refuses to start, naming the variable, and holds nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-host-'))
+    const host = spawn(process.execPath, ['host.ts'], { cwd: HERE, stdio: ['ignore', 'ignore', 'pipe'], env: { PATH: process.env.PATH, HOME: dir, MUSTER_DIR: join(dir, 'board'), MUSTER_CONFIG: join(dir, 'config') } as unknown as NodeJS.ProcessEnv })
+    let output = ''
+    host.stderr!.on('data', (chunk) => (output += chunk))
+    const code = await new Promise<number | null>((resolve) => host.on('exit', (exit) => resolve(exit)))
+    expect([code, output]).toEqual([1, `factory: GITHUB_WEBHOOK_SECRET isn't set, and sync "gh" needs it.\n`])
+    const team = board({ dir: join(dir, 'board') })
+    expect(await team.backend.leases!.holder('watch:factory')).toBeNull()
+    team.close()
+  }, 30_000)
 })
 
 describe('wake.ts', () => {

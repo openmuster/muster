@@ -6,38 +6,34 @@ step in a Vercel sandbox. The card gets a reply when the run starts and a
 summary when it ends. You hear about a card only when a task blocks on a
 decision of yours.
 
-It is a board module for muster's own daemon, configuration beside it, and
-three small scripts. The guide is
+It is a board module for muster's own daemon, a workflow file, and three
+small scripts. The guide is
 [A card queue](../../packages/muster/docs/03-guides/19-a-card-queue.md).
 
 | File | What it is |
 | --- | --- |
-| `board.ts` | The board module: `card-start` for a card labelled `tag.agent=agent`; `needs-me` for a blocked task under `cards/` |
+| `board.ts` | The board module: Linear team `ENG` to the channel `cards`, both ways; `card-start` for a card labelled `tag.agent=agent`; `needs-me` for a blocked task under `cards/` |
 | `workflows.json` | The `card` workflow: spec, work and review, one Vercel worker, `--push` for the work step only |
-| `sync.json` | Linear team `ENG` to the channel `cards`, both ways. Not read with a board module yet: see below |
 | `start.sh` | Marks the card `started` and asks for the `card` workflow, once |
 | `notify.sh` | Tells you a task is blocked: `NOTIFY_CMD`, or a macOS notification |
 | `answer.sh` | Unblocks a blocked task, posts your answer, and starts a worker on the rest of its run |
 
 ```bash
 cp workflows.json ~/.config/muster/
-# then edit it: your repository in workflows.json
+# then edit: your repository in workflows.json, your Linear team's key in board.ts
+export LINEAR_WEBHOOK_SECRET=... LINEAR_API_KEY=lin_api_...   # named in board.ts with env(), never written there
 mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDBOX_URL, not MUSTER_URL
 ```
 
+Point Linear's webhook at `https://<your host>/api/board/webhooks/lin`.
 `board.ts` names the scripts beside it by their full paths, wherever it is
-run from. Remove any `card-start` or `needs-me` left in
-`~/.config/muster/watchers.json` from an earlier copy of this template: a
-watcher in that file and one in the module with the same name is refused.
+run from. If `~/.config/muster/` has a `sync.json` or a `watchers.json`
+from an earlier copy of this template, move anything else in them into a
+module and delete them: `mu serve` refuses a module with a sync beside a
+`sync.json`, and a watcher in `watchers.json` named like one in the module.
 
-TODO: sync moves into `board.ts` once `board({ sync })` lands. Until then
-`mu serve` with a board module doesn't read `sync.json`: it warns that
-nothing in it is synced, and starts anyway. Cards come only from posts on
-the board, and nothing goes back to Linear.
-
-A card posted by hand needs `--no-sync` once Linear is synced, or it opens a
-Linear issue without the label, whose next update takes the label off the
-card:
+A card posted by hand needs `--no-sync`, or it opens a Linear issue without
+the label, whose next update takes the label off the card:
 
 ```bash
 mu post cards "Make the footer show the current year" --label tag.agent=agent --no-sync
@@ -56,5 +52,6 @@ review set `push: false`), that pull request runs your CI on the agent's code,
 and task results go back to the issue as a comment. The spec's result reaches
 the later steps quoted and fenced, as the card does. The guide has the rest.
 
-Covered by tests, with Linear's API and the sandboxes as stand-ins. It has
+Covered by tests, `mu serve --module` with Linear's webhook among them, with
+Linear's API and the sandboxes as stand-ins. It has
 not been run live.
