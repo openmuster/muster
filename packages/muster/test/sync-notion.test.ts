@@ -27,6 +27,7 @@ function fakeNotion() {
   const comments = new Map<string, Comment>()
   const asked: { method: string; path: string; body: any; version: string | null }[] = []
   let made = 0
+  let down: () => boolean = () => false
   const pageJson = (page: Page) => ({
     object: 'page',
     id: page.id,
@@ -47,6 +48,7 @@ function fakeNotion() {
     const id = (raw: string) => raw.replace(/-/g, '')
     let match: RegExpExecArray | null
     if ((match = /^\/pages\/([^/]+)\/markdown$/.exec(path))) {
+      if (down()) return new Response('{}', { status: 500 })
       const page = pages.get(id(match[1]!))
       return page ? Response.json({ object: 'page_markdown', markdown: page.markdown }) : new Response('{}', { status: 404 })
     }
@@ -81,13 +83,13 @@ function fakeNotion() {
     }
     return new Response('{}', { status: 404 })
   }) as typeof fetch
-  return { pages, comments, asked, fetcher }
+  return { pages, comments, asked, fetcher, set markdownDown(check: () => boolean) { down = check } }
 }
 
-function setup(options: { dir?: string } = {}) {
+function setup(options: { dir?: string; secret?: string } = {}) {
   const time = clock()
   const api = fakeNotion()
-  const sync = { nt: notion({ secret: TOKEN, token: 'ntn_token', bot: BOT, databases: { [DB.replace(/-/g, '')]: 'cards/notion' } }) }
+  const sync = { nt: notion({ secret: options.secret ?? TOKEN, token: 'ntn_token', bot: BOT, databases: { [DB.replace(/-/g, '')]: 'cards/notion' } }) }
   const open = () => file({ ...(options.dir ? { dir: options.dir } : { memory: true }), principal: 'local:user:ada', now: time.now, sync, fetch: api.fetcher })
   const backend = open()
   const team = board({ backend })
@@ -112,12 +114,18 @@ const C1 = 'cccc1111-0000-4000-8000-000000000001'
 describe('sync: Notion', () => {
   it("answers Notion's one unsigned request, its verification token, by writing the token for the operator alone, and refuses anything else unsigned", async () => {
     process.env.MUSTER_CONFIG = tempDir()
-    const { backend, threads } = setup()
+    const { backend, threads } = setup({ secret: 'pending' })
     const body = JSON.stringify({ verification_token: TOKEN })
     expect(await backend.syncReceive('nt', { headers: {}, body })).toEqual({ status: 200, body: 'ok' })
     expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)
     expect(statSync(notionTokenFile()).mode & 0o777).toBe(0o600)
     expect(notionTokenFile()).toBe(join(process.env.MUSTER_CONFIG!, 'notion-verification-token'))
+    // Someone else's token, sent after it, is answered the same but never written over the first.
+    expect(await backend.syncReceive('nt', { headers: {}, body: JSON.stringify({ verification_token: 'secret_PlantedByAnyoneElse0123456789' }) })).toEqual({ status: 200, body: 'ok' })
+    expect(readFileSync(notionTokenFile(), 'utf8').trim()).toBe(TOKEN)
+    // A board that has its secret takes nothing unsigned, a verification token included.
+    const configured = setup()
+    expect((await configured.backend.syncReceive('nt', { headers: {}, body })).status).toBe(401)
     // Anything else unsigned, or signed with another secret, is refused, and imports nothing.
     const event = JSON.stringify({ id: 'x', type: 'page.created', entity: { id: P1, type: 'page' } })
     expect((await backend.syncReceive('nt', { headers: {}, body: event })).status).toBe(401)
@@ -185,6 +193,26 @@ describe('sync: Notion', () => {
     expect(await replies()).toEqual([])
   })
 
+  it("a page whose text can't be read now keeps what the board has, and is read again later", async () => {
+    process.env.MUSTER_CONFIG = tempDir()
+    const { hook, page, threads, backend, api } = setup()
+    page(P1)
+    await hook('page.created', { id: P1, type: 'page' })
+    await backend.syncTick()
+    Object.assign(api.pages.get(P1.replace(/-/g, ''))!, { markdown: 'Now with a second paragraph.' })
+    const realFetch = api.fetcher
+    let down = true
+    // The stand-in answers 500 for the page's text while it is down.
+    api.markdownDown = () => down
+    await hook('page.content_updated', { id: P1, type: 'page' })
+    await backend.syncTick()
+    expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nEach stack row shows how many are in it.')
+    down = false
+    await backend.syncTick()
+    expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nNow with a second paragraph.')
+    void realFetch
+  })
+
   it("a reply on the board goes to Notion as a comment on the page, and Notion's echo of it isn't brought back", async () => {
     process.env.MUSTER_CONFIG = tempDir()
     const { hook, page, threads, backend, team, api } = setup()
@@ -212,6 +240,7 @@ describe('sync: Notion', () => {
     first.backend.close()
     first.time.advance(3_600_000)
     const later = first.time.now().toISOString()
+    Object.assign(first.api.pages.get(P1.replace(/-/g, ''))!, { status: 'Done', edited: later, editedBy: 'u-maya' })
     first.page('dddd0000-0000-4000-8000-000000000004', { title: 'Made while the board was down', markdown: 'Arrives whole.', edited: later, by: 'u-maya' })
     first.api.comments.set('c2', { id: 'cccc2222-0000-4000-8000-000000000002', page: P1, text: 'said while you were down', by: 'u-maya', created: later, edited: later })
     const backend = first.open()
@@ -222,6 +251,8 @@ describe('sync: Notion', () => {
     expect(threads.map((thread) => thread.message.text.split('\n')[0]).sort()).toEqual(['Made while the board was down', 'Stacks should show a count'])
     const old = threads.find((thread) => thread.message.text.startsWith('Stacks'))!
     expect((await team.readThread({ id: old.message.id })).replies.map((reply) => reply.text)).toEqual(['said while you were down'])
+    // Its Status moved while the board was down: the thread says so now.
+    expect(old.message.labels.state).toBe('done')
     // Started again with nothing new: the same answer brings in nothing twice.
     await backend.syncTick()
     expect((await team.readChannel({ channel: 'cards/notion' })).threads).toHaveLength(2)

@@ -37,14 +37,17 @@ Notion sends its verification token once, to the webhook's URL, and it has
 to be pasted back into Notion before anything else is sent:
 
 1. Start the board with the sync in its module and `NOTION_WEBHOOK_SECRET`
-   set to anything, such as `pending`.
+   set to `pending`. Only then does the board take Notion's one unsigned
+   request.
 2. In the integration's settings, under Webhooks, subscribe
    `https://<your host>/api/board/webhooks/nt` to page and comment events.
-3. The board writes the token Notion sent to
-   `~/.config/muster/notion-verification-token`, readable by you alone. It
-   is never logged or answered.
+3. The board writes the token Notion sent to `notion-verification-token`
+   in muster's config folder (`~/.config/muster`, or `MUSTER_CONFIG`),
+   readable by you alone. It is never logged or answered, and never
+   written over: the first one stays.
 4. Paste it into Notion's Verify. Anyone can send the board a token, so
-   this is the check: one Notion didn't send fails there. Then set
+   this is the check: one Notion didn't send fails there. If it fails,
+   delete the file and have Notion send its token again. Then set
    `NOTION_WEBHOOK_SECRET` to it and start the board again.
 
 From then on a delivery without Notion's signature for that token is
@@ -64,7 +67,8 @@ refused.
 Notion's webhooks say only what changed, not what it says now. The board
 answers each at once and reads the page or comment from Notion's API on its
 next tick, so what it imports is always what Notion says then, and a late
-delivery brings nothing older. A page's text is cut at 9,000 characters,
+delivery brings nothing older. A read that fails is tried again on later
+ticks, rather than import less than the page says. A page's text is cut at 9,000 characters,
 with a link to the rest.
 
 A page in a database the sync doesn't map is not brought in.

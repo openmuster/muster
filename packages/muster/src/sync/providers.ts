@@ -880,6 +880,9 @@ export type NotionOptions = SyncOptions & {
  */
 export const notion = (options: NotionOptions): Provider => declared('notion', options, notionWith)
 
+/** What `secret` is set to until Notion has sent its verification token: the one time an unsigned request is taken. */
+export const NOTION_PENDING = 'pending'
+
 /** A Notion ID as one form: lowercase, without dashes, so a database named either way is the same one. */
 const notionId = (id: unknown) => String(id ?? '').replace(/-/g, '').toLowerCase()
 
@@ -926,7 +929,15 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
   const selfOf = (who: any) => options.bot !== undefined && who?.id !== undefined && notionId(who.id) === notionId(options.bot)
   /** A page as a thread's first message: its title, a blank line, its text as markdown, cut to what a message holds. */
   const pageText = async (page: Record<string, any>, fetcher: typeof fetch) => {
-    const body = await call(fetcher, `/pages/${page.id}/markdown`).then((answer) => String(answer?.markdown ?? ''), () => '')
+    // Only a page Notion has no text for is empty: any other failure throws, and the event is read again later,
+    // rather than leave the board's copy as its title alone.
+    const body = await call(fetcher, `/pages/${page.id}/markdown`).then(
+      (answer) => String(answer?.markdown ?? ''),
+      (error: unknown) => {
+        if (error instanceof Failure && error.reason === 'platform_404') return ''
+        throw error
+      },
+    )
     const text = `${titleOf(page)}\n\n${body}`.trim()
     return text.length > NOTION_TEXT_MAX ? `${text.slice(0, NOTION_TEXT_MAX)}\n\n… the rest is on Notion: ${String(page.url ?? '')}` : text
   }
@@ -948,17 +959,23 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
     type: 'notion',
     verify({ headers, body }) {
       const signature = headers['x-notion-signature']
-      // The one request Notion can't sign: the token it will sign with, sent once, to be pasted back into Notion.
-      if (signature === undefined && isVerification(body)) return
+      // The one request Notion can't sign: the token it will sign with, sent once, to be pasted back into Notion. Taken
+      // only while the sync waits for it (`secret` is `pending`): once it has its secret, nothing unsigned is.
+      if (signature === undefined && options.secret === NOTION_PENDING && isVerification(body)) return
       if (!same(signature ?? '', `sha256=${hmac(options.secret, body)}`)) throw bad()
     },
     challenge({ headers, body }) {
-      if (headers['x-notion-signature'] !== undefined || !isVerification(body)) return null
-      // Written for the operator alone, never answered or logged. Anyone can send one: a token Notion didn't send
-      // fails when it is pasted into Notion's Verify, so check it there before using it as the secret.
-      const file = notionTokenFile()
-      mkdirSync(dirname(file), { recursive: true })
-      writeFileSync(file, `${JSON.parse(body).verification_token}\n`, { mode: 0o600 })
+      if (headers['x-notion-signature'] !== undefined || options.secret !== NOTION_PENDING || !isVerification(body)) return null
+      // Written for the operator alone, never answered or logged, and never over one already there (nor through a link
+      // put in its place): the first token stays. Anyone can send one, so a token Notion didn't send fails when it is
+      // pasted into Notion's Verify: check it there, or delete the file and have Notion send it again.
+      try {
+        const file = notionTokenFile()
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, `${JSON.parse(body).verification_token}\n`, { mode: 0o600, flag: 'wx' })
+      } catch {
+        // Already written, or it can't be: either way Notion gets its answer, and the file says what came first.
+      }
       return 'ok'
     },
     parse({ body }) {
@@ -968,9 +985,12 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
       const data = payload.data ?? {}
       const author = payload.authors?.[0]
       // Known by Notion's own ID for the event: a retry carries the same one.
-      const base = { id: `notion:${payload.id}`, author: byOf(author), place: '', self: selfOf(author), unread: true as const, ...(typeof payload.timestamp === 'string' ? { updated: payload.timestamp } : {}) }
+      // No `updated`: each is read from Notion when it is imported, so it says what Notion says then, never older, and
+      // Notion's times are to the minute, so two changes in one would read as the second being late.
+      const base = { id: `notion:${payload.id}`, author: byOf(author), place: '', self: selfOf(author), unread: true as const }
+      if (!entity.id) return []
       const page = `page:${notionId(entity.id)}`
-      if (type === 'page.created' || type === 'page.undeleted') return [{ ...base, kind: 'root', thread: page, external: page }]
+      if (type === 'page.created') return [{ ...base, kind: 'root', thread: page, external: page }]
       if (type === 'page.content_updated') return [{ ...base, kind: 'edit', thread: page, external: page }]
       if (type === 'page.properties_updated') return [{ ...base, kind: 'labels', thread: page, external: base.id }]
       if (type === 'page.deleted') return [{ ...base, kind: 'delete', thread: page, external: page }]
@@ -986,27 +1006,20 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
       const place = placeOf(page)
       // A page in a database this sync doesn't map is none of the board's.
       if (place === null) return []
-      const at = typeof page.last_edited_time === 'string' ? page.last_edited_time : event.updated
-      const read: Inbound = { ...event, place, ...(at ? { updated: at } : {}) }
-      // A delete is put down to when Notion sent it: nothing is left on Notion to say when it went.
-      if (event.kind === 'delete') return [{ ...read, ...(event.updated ? { updated: event.updated } : {}) }]
+      const read: Inbound = { ...event, place }
+      if (event.kind === 'delete') return [read]
       if (!event.external.startsWith('comment:')) {
         const text = await pageText(page, fetcher)
         if (event.kind === 'root') return [{ ...read, author: byOf(page.created_by), self: selfOf(page.created_by), text, labels: pageLabels(page) }]
         const parent = { parent: { author: byOf(page.created_by), text, labels: pageLabels(page) } }
-        // Its text now, as an edit of the thread's first message, and its Status now, as a label. The edit carries no
-        // time: it is what Notion says now, so it can't be older than what the board has, and the label, kept under the
-        // same thread, is the one a late event must not undo.
-        const { updated: _, ...untimed } = read
+        // Its text now, as an edit of the thread's first message, and its Status now, as a label.
         return [
-          { ...untimed, kind: 'edit', external: event.thread, author: byOf(page.last_edited_by), self: selfOf(page.last_edited_by), text, ...parent },
+          { ...read, kind: 'edit', external: event.thread, author: byOf(page.last_edited_by), self: selfOf(page.last_edited_by), text, ...parent },
           { ...read, id: `${event.id}:labels`, kind: 'labels', external: `${event.id}:labels`, labels: pageLabels(page), ...parent },
         ]
       }
       const comment = await call(fetcher, `/comments/${event.external.replace(/^comment:/, '')}`)
-      // A comment's own time, not its page's: an edit is newer than the comment it changes, whatever the page did.
-      const changed = typeof comment.last_edited_time === 'string' ? comment.last_edited_time : event.updated
-      return [{ ...read, ...(changed ? { updated: changed } : {}), author: byOf(comment.created_by), self: selfOf(comment.created_by), text: plain(comment.rich_text), parent: await parentOf(page, fetcher) }]
+      return [{ ...read, author: byOf(comment.created_by), self: selfOf(comment.created_by), text: plain(comment.rich_text), parent: await parentOf(page, fetcher) }]
     },
     channelFor(place) {
       const to = databases.get(notionId(place))
@@ -1052,13 +1065,26 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
           const labels = pageLabels(page)
           const edited = String(page.last_edited_time ?? '')
           out.push({ id: `catchup:page:${pageId}`, author: byOf(page.created_by), place: id, self: selfOf(page.created_by), kind: 'root', thread, external: thread, text, labels })
-          // Its text and Status now, in case it was there before and changed while the board was down.
-          out.push({ id: `catchup:edit:${pageId}:${edited}`, author: '', place: id, kind: 'edit', thread, external: thread, text, ...(edited ? { updated: edited } : {}) })
-          out.push({ id: `catchup:state:${pageId}:${edited}`, author: '', place: id, kind: 'labels', thread, external: `catchup:state:${pageId}:${edited}`, labels, ...(edited ? { at: edited, updated: edited } : {}) })
-          const comments = await call(fetcher, `/comments?block_id=${page.id}&page_size=100`)
-          for (const comment of Array.isArray(comments?.results) ? comments.results : []) {
-            if (!(String(comment.created_time ?? '') > since)) continue
-            out.push({ id: `catchup:comment:${notionId(comment.id)}`, author: byOf(comment.created_by), place: id, self: selfOf(comment.created_by), kind: 'reply', thread, external: `comment:${notionId(comment.id)}`, text: plain(comment.rich_text), parent: { author: byOf(page.created_by), text, labels }, ...(comment.last_edited_time ? { updated: String(comment.last_edited_time) } : {}) })
+          // Its text and Status now, in case it was there before and changed while the board was down. Untimed, as a
+          // read is: `at` keeps a label someone set on the board since then.
+          out.push({ id: `catchup:edit:${pageId}:${edited}`, author: byOf(page.last_edited_by), self: selfOf(page.last_edited_by), place: id, kind: 'edit', thread, external: thread, text })
+          out.push({ id: `catchup:state:${pageId}:${edited}`, author: '', place: id, kind: 'labels', thread, external: `catchup:state:${pageId}:${edited}`, labels, ...(edited ? { at: edited } : {}) })
+          const parent = { author: byOf(page.created_by), text, labels }
+          let start: string | undefined
+          for (let read = 0; read < NOTION_CATCHUP_PAGES; read++) {
+            const comments = await call(fetcher, `/comments?block_id=${page.id}&page_size=100${start ? `&start_cursor=${encodeURIComponent(start)}` : ''}`)
+            for (const comment of Array.isArray(comments?.results) ? comments.results : []) {
+              const made = String(comment.created_time ?? '') > since
+              const changed = String(comment.last_edited_time ?? '') > since
+              if (!made && !changed) continue
+              const external = `comment:${notionId(comment.id)}`
+              const common = { author: byOf(comment.created_by), place: id, self: selfOf(comment.created_by), thread, external, text: plain(comment.rich_text), parent }
+              // New since, a reply; changed since, an edit of the one the board has (one it hasn't comes in as a reply).
+              out.push({ ...common, id: `catchup:comment:${notionId(comment.id)}`, kind: 'reply' })
+              if (changed) out.push({ ...common, id: `catchup:comment:${notionId(comment.id)}:${String(comment.last_edited_time)}`, kind: 'edit' })
+            }
+            if (!comments?.has_more || !comments.next_cursor) break
+            start = String(comments.next_cursor)
           }
         }
         if (more) cuts.push(cutShort(pages.map((page) => Date.parse(String(page.last_edited_time))), since, false, 0))
