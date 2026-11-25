@@ -186,9 +186,14 @@ written by an agent that read the card, so the work and review tasks quote it
 the same way, with `{steps.spec.result}`: under a line that says whose it is,
 in a fence nothing in it can close, with `@`, `<`, `>` and Markdown links
 defused. The review quotes the work's summary too. A fence marks what is
-content; it can't stop an agent that is steered anyway. Two things still
+content; it can't stop an agent that is steered anyway. Three things still
 reach a later step unfenced: the work's diff, which the review downloads and
-reads, and anything an agent chooses to read itself with `mu read`.
+reads; anything an agent chooses to read itself with `mu read`; and a later
+task's own text, which an earlier step's agent may edit, since its token may
+post in the run's channel. The board then holds that task as `edited`, and
+`needs-me` pings you: read what changed before you answer it with
+`answer.sh`. A result is quoted once, when the task is first taken: a task
+reopened after a step it quotes was done again keeps the old quote.
 
 ## What goes wrong
 

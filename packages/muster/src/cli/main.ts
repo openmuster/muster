@@ -1510,7 +1510,7 @@ async function filled(run: Run, task: number, owner: string, token: string, team
     await fillResults(run.team, task, owner)
     return null
   } catch (error) {
-    if (!(error instanceof Failure) || error.reason === 'network_error' || error.reason === 'busy') {
+    if (!(error instanceof Failure) || error.reason === 'network_error' || error.reason === 'busy' || error.reason === 'bad_answer') {
       await team.taskRelease({ id: task, token }).catch(() => {})
       throw error
     }
@@ -1724,19 +1724,29 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
       continue
     }
     // Before its sandbox starts: the earlier steps' results quoted into it, and whether it pushes, from what
-    // the daemon made it with. A task whose results couldn't be quoted is failed, and never run.
-    const unfilled = await filled(run, claimed, owner, claimToken, run.team.as(profile))
-    if (unfilled !== null) {
-      run.io.err(`failed   #${claimed}  ${unfilled}`)
-      quietSince = Date.now()
-      worked += 1
-      failed += 1
+    // the daemon made it with. A task whose results couldn't be quoted is failed, and never run. A board that
+    // couldn't answer gets the claim back and is tried again, as a run that couldn't start is.
+    let pushing: boolean
+    try {
+      const unfilled = await filled(run, claimed, owner, claimToken, run.team.as(profile))
+      if (unfilled !== null) {
+        run.io.err(`failed   #${claimed}  ${unfilled}`)
+        quietSince = Date.now()
+        worked += 1
+        failed += 1
+        continue
+      }
+      pushing = await pushesTask(run.team, claimed, owner, push).catch(async (error: unknown) => {
+        await run.team.as(profile).taskRelease({ id: claimed, token: claimToken }).catch(() => {})
+        throw error
+      })
+    } catch (error) {
+      streak += 1
+      if (streak >= START_TRIES) throw error
+      run.io.err(`not done  #${claimed}  ${error instanceof Error ? error.message : String(error)}; trying again`)
+      await sleep(Math.min(1000 * 2 ** (streak - 1), 30_000), run.io.stop)
       continue
     }
-    const pushing = await pushesTask(run.team, claimed, owner, push).catch(async (error: unknown) => {
-      await run.team.as(profile).taskRelease({ id: claimed, token: claimToken }).catch(() => {})
-      throw error
-    })
     let unstarted: (Error & { worker?: 'retry' | 'stop' }) | undefined
     const code = await cloudTask(run, { ...parsed, positionals: [String(claimed)], flags: { ...flags, as: profile, ...(pushing ? { push: true } : {}) } }, where, agent, { claimToken }).catch((error: unknown) => {
       if (error instanceof Error && 'worker' in error) unstarted = error as Error & { worker: 'retry' | 'stop' }

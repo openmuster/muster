@@ -136,7 +136,9 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   set since. A step that completed with no result, or that the task doesn't
   wait for, reads `(No result from step "plan", #43: it completed without
   one.)` or the like. If the filled text is longer than the board takes, the
-  worker fails the task and runs no agent on it. Only your own text names a
+  worker fails the task and runs no agent on it. A result is quoted once,
+  when the task is first taken: reopen a step and redo it, and a task that
+  already quoted it keeps the old quote. Only your own text names a
   result: `{steps.` in an argument, the thread's message or a result is
   written with a lookalike brace, so it is never filled.
 - **The board keeps the request, as a `workflow.requested` event.** It says
