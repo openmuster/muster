@@ -30,6 +30,12 @@ versions are affected.
 - `workflowResult(team, id, owner)`: a workflow step's result for code that
   goes on from it, only when the daemon made the task and the run's own
   worker completed it.
+- `templates/loop`: feedback from Slack, Linear, GitHub, the inspector or
+  your own app becomes a card, triaged by an agent into a title and a spec;
+  work starts on a trusted author's report, or once someone trusted approves;
+  a trusted reply on the card starts another round on the same pull request,
+  and each round's screenshots reach the card. See
+  [A feedback loop](./packages/muster/docs/03-guides/20-a-feedback-loop.md).
 
 ## 0.3.1-alpha.1
 
