@@ -232,6 +232,19 @@ can never start, so it holds nothing open: it is listed as `won't start`.
 The timeout ends only the waiting for a summary. Nothing is canceled, the
 workers keep going, and a task that ends later isn't reported; one still open
 then is listed as `still open`.
+
+A run summed up can go again: reopen a failed task (`mu tasks reopen 44`),
+and a worker still waiting on the run takes it. The daemon then waits for the
+run to settle again, or for the `timeout` to pass since the reopen, and says
+how it went once more, as a new reply:
+
+```text
+implement finished (updated): 3 completed, 0 failed, 0 canceled
+```
+
+It says so once for each reopen, and a daemon that starts again in the
+meantime still says it once. A reopen of a task the run didn't make, or one
+from before the daemon first ran on the board, isn't news to it.
 What a task said is its result or its reason: the first line, cut at 200
 characters. Because a worker, or anyone, wrote that text, the daemon defuses
 it before speaking as itself: `@` becomes a lookalike so it mentions nobody,

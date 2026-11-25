@@ -1000,6 +1000,126 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     expect(await tick()).toEqual({ started: [], refused: [] })
   })
 
+  describe('a run summed up, then reopened', () => {
+    const pipeline: Workflow = { ...trio, steps: [{ key: 'spec', text: 'Spec it' }, { key: 'work', text: 'Do it', needs: ['spec'] }, { key: 'review', text: 'Review it', needs: ['work'] }] }
+    const failedText = (a: number, b: number, c: number) =>
+      [`release finished: 0 completed, 1 failed, 0 canceled, 2 won't start`, `#${a} failed: no access`, `#${b} won't start: blocked by #${a}`, `#${c} won't start: blocked by #${a}`].join('\n')
+    const updatedText = (a: number, b: number, c: number) =>
+      [`release finished (updated): 3 completed, 0 failed, 0 canceled`, `#${a} completed: spec written`, `#${b} completed: done (pr ${PR})`, `#${c} completed: approved`].join('\n')
+    const summaries = (texts: string[]) => texts.filter((text) => text.startsWith('release finished'))
+    /** A pipeline whose first step failed, summed up as failed. */
+    const settledFailed = async () => {
+      const made = await started(pipeline)
+      const [a, b, c] = made.tasks.map((task) => task.id) as [number, number, number]
+      await made.fail(a, 'no access')
+      expect(await made.tick()).toEqual({ started: [], refused: [], reported: [made.seq] })
+      expect(summaries(await made.replies())).toEqual([failedText(a, b, c)])
+      const finish = async (tick: () => Promise<unknown>) => {
+        await made.complete(a, 'spec written')
+        expect(await tick()).toEqual({ started: [], refused: [] })
+        await made.team.label({ id: b, set: { pr: PR } })
+        await made.complete(b, 'done')
+        expect(await tick()).toEqual({ started: [], refused: [] })
+        await made.complete(c, 'approved')
+      }
+      const fresh = () => {
+        const deps = { ...made.deps, runs: openRuns() }
+        return () => runWorkflows(board({ backend: made.team.backend }), [pipeline], deps)
+      }
+      return { ...made, a, b, c, finish, fresh }
+    }
+
+    it('says once how it ended after a failed step was reopened and the run went on to finish', async () => {
+      const { team, root, seq, a, b, c, tick, replies, finish, fresh } = await settledFailed()
+      await team.taskReopen({ id: a })
+      // Going again: nothing is said while any of it is open.
+      expect(await tick()).toEqual({ started: [], refused: [] })
+      await finish(tick)
+      expect(await tick()).toEqual({ started: [], refused: [], updated: [seq] })
+      expect(summaries(await replies())).toEqual([failedText(a, b, c), updatedText(a, b, c)])
+      const update = (await team.readThread({ id: root.id })).replies.at(-1)!
+      expect(update.by).toEqual({ principal: OWNER, profile: 'workflows' })
+      // Said once: more ticks, and a daemon that starts again, say nothing more.
+      expect(await tick()).toEqual({ started: [], refused: [] })
+      expect(await fresh()()).toEqual({ started: [], refused: [] })
+      expect(summaries(await replies())).toHaveLength(2)
+    })
+
+    it('says nothing more when nothing changed after it was summed up', async () => {
+      const { team, as, run, seq, a, b, c, tick, replies, fresh } = await settledFailed()
+      // Elsewhere on the board a task is reopened, and in the run's channel someone else's task is: neither is the run's.
+      const other = await team.taskCreate({ channel: 'work/app', text: 'other' })
+      const held = await team.taskClaim({ id: other.task.id })
+      await team.taskFail({ id: other.task.id, token: held.token, reason: 'no' })
+      await team.taskReopen({ id: other.task.id })
+      const eve = as('local:user:eve')
+      const decoy = await eve.taskCreate({ channel: run, text: 'decoy', labels: { workflow: 'release', request: String(seq) } })
+      const eveHeld = await eve.taskClaim({ id: decoy.task.id })
+      await eve.taskFail({ id: decoy.task.id, token: eveHeld.token, reason: 'no' })
+      await eve.taskReopen({ id: decoy.task.id })
+      for (let i = 0; i < 3; i++) expect(await tick()).toEqual({ started: [], refused: [] })
+      expect(await fresh()()).toEqual({ started: [], refused: [] })
+      expect(summaries(await replies())).toEqual([failedText(a, b, c)])
+    })
+
+    it('says it once when the daemon started again between the summary and the reopen', async () => {
+      const { team, seq, a, b, c, replies, finish, fresh } = await settledFailed()
+      const again = fresh()
+      await team.taskReopen({ id: a })
+      await finish(again)
+      expect(await again()).toEqual({ started: [], refused: [], updated: [seq] })
+      expect(await again()).toEqual({ started: [], refused: [] })
+      expect(await fresh()()).toEqual({ started: [], refused: [] })
+      expect(summaries(await replies())).toEqual([failedText(a, b, c), updatedText(a, b, c)])
+    })
+
+    it('says it once when the daemon started again while the reopened run was still going', async () => {
+      const { team, seq, a, b, c, tick, replies, finish, fresh } = await settledFailed()
+      await team.taskReopen({ id: a })
+      expect(await tick()).toEqual({ started: [], refused: [] })
+      const again = fresh()
+      await finish(again)
+      expect(await again()).toEqual({ started: [], refused: [], updated: [seq] })
+      expect(await fresh()()).toEqual({ started: [], refused: [] })
+      expect(summaries(await replies())).toEqual([failedText(a, b, c), updatedText(a, b, c)])
+    })
+
+    it("doesn't sum a run up again on a restart while another reopened run holds the daemon's place", async () => {
+      const { team, root, seq, a, b, c, tick, replies, finish, fresh, fail } = await settledFailed()
+      // A second run of the same workflow, failed and summed up too.
+      const later = await team.workflowRequest({ name: 'release', on: root.id })
+      expect((await tick()).started).toEqual([later.seq])
+      const [x] = (await team.taskList({ channel: `work/app/release-${later.seq}`, state: 'all' })).tasks
+      await fail(x!.id, 'no access')
+      expect((await tick()).reported).toEqual([later.seq])
+      // The second is reopened and is still going; the first is reopened after it and finishes.
+      await team.taskReopen({ id: x!.id })
+      await team.taskReopen({ id: a })
+      await finish(tick)
+      expect(await tick()).toEqual({ started: [], refused: [], updated: [seq] })
+      // A daemon that starts again reads from before the second run's reopen, and the first's is already answered.
+      expect(await fresh()()).toEqual({ started: [], refused: [] })
+      expect(summaries(await replies()).filter((text) => text.includes(`#${a} `))).toEqual([failedText(a, b, c), updatedText(a, b, c)])
+    })
+
+    it('sums it up as it stands once the timeout has passed since the reopen, if nobody takes it', async () => {
+      const made = await started({ ...pipeline, timeout: '1h' })
+      const [a, b, c] = made.tasks.map((task) => task.id) as [number, number, number]
+      await made.fail(a, 'no access')
+      expect((await made.tick()).reported).toEqual([made.seq])
+      made.time.advance(2 * 60 * 60 * 1000)
+      await made.team.taskReopen({ id: a })
+      made.time.advance(60 * 60 * 1000 - 1)
+      expect(await made.tick()).toEqual({ started: [], refused: [] })
+      made.time.advance(1)
+      expect(await made.tick()).toEqual({ started: [], refused: [], updated: [made.seq] })
+      expect((await made.replies()).at(-1)).toBe(
+        [`release finished (updated): 0 completed, 0 failed, 0 canceled, 3 still open`, `#${a} still open (ready)`, `#${b} still open (waiting)`, `#${c} still open (waiting)`].join('\n'),
+      )
+      expect(await made.tick()).toEqual({ started: [], refused: [] })
+    })
+  })
+
   it('sums up a run whose workflow names no timeout once a day has passed, with what is still open', async () => {
     const { time, seq, tasks, tick, replies } = await started(trio)
     expect(trio.timeout).toBeUndefined()
