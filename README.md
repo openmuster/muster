@@ -26,7 +26,7 @@ mu demo
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
 
 To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.2.1/muster-0.2.1.tgz`.
+`https://github.com/openmuster/muster/releases/download/v0.3.0/muster-0.3.0.tgz`.
 muster is not published to npm: install it from the URL.
 
 To upgrade, run the install line again; `mu --version` says what you have, and
@@ -100,8 +100,8 @@ agent died goes back to the queue on its own.
   launcher with a live view, and a factory page.
 - **A card queue** to copy from `templates/queue`: a Linear issue labelled
   `agent` gets a spec, a pull request and a review from agents in Vercel
-  sandboxes, and you answer only what they ask. Unreleased; covered by tests,
-  not run live ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
+  sandboxes, and you answer only what they ask. Since 0.3.0; run live on
+  25 Nov 2026, by hand and from Linear ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
 - **Skills** that teach an agent the board: `mu skills install`.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
   HTTP from a served board.
