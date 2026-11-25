@@ -5,7 +5,8 @@ import { mount, type MountOptions } from './serve/fetch.ts'
 import { deliver, start, type Delivered, type Host, type StartOptions, type WatchState } from './watch/host.ts'
 import { checkWatchers, type Watch } from './watch/watch.ts'
 import { checkSync, envNames, resolveSync } from './sync/declare.ts'
-import { misuse } from './failure.ts'
+import { checkHooks, IN_CODE, type Hook, type HookOptions } from './daemon/hooks.ts'
+import { Failure, misuse } from './failure.ts'
 import type { Filter } from './core/reads.ts'
 import { VERSION } from './version.ts'
 
@@ -24,6 +25,8 @@ export type DeclaredWatcher = { readonly name: string; readonly tail: Filter; re
 
 /** A platform a handle syncs with, as anyone may read it: its name, its type, and the variables it reads when it starts. */
 export type DeclaredSync = { readonly key: string; readonly type: string; readonly env: readonly string[] }
+/** An outgoing webhook a handle declares: its secret by the name of its variable, never its value. */
+export type DeclaredHook = Readonly<Hook>
 
 export type BoardOptions = FileOptions & {
   /** Where the board lives. Default: `file()` with the options beside it. */
@@ -35,6 +38,11 @@ export type BoardOptions = FileOptions & {
    * in the process you choose.
    */
   watch?: Record<string, Watch>
+  /**
+   * Outgoing webhooks: signed POSTs of what matches each `tail`, as `hooks.json` declares them, with the
+   * secret named by `env()`. Declaring them reads nothing: `start()` reads each secret, and sends.
+   */
+  hooks?: HookOptions[]
   /** How `fetch` serves the board: the path it is mounted at, and the host names it answers for. */
   serve?: MountOptions
 }
@@ -49,12 +57,14 @@ export type Board = { [K in keyof Methods]: Bound<Methods[K]> } & {
   readonly watchers: readonly DeclaredWatcher[]
   /** The platforms this handle syncs with, by name. Their secrets are read by `start()`, or `fetch`'s first request. */
   readonly sync: readonly DeclaredSync[]
+  /** The outgoing webhooks this handle declares, in the order given. `start()` sends them. */
+  readonly hooks: readonly DeclaredHook[]
   /** The same board, writing as one of your profiles. */
   as(profile: string | null): Board
   whoami(): Promise<{ principal: string; profile: string | null; mode: 'file' | 'serve'; where: string }>
   /**
-   * Runs the watchers, and the sync, in this process until stopped, and returns at once. Never await `done` in a
-   * server's startup. Throws, naming it, if a variable a sync names with `env()` isn't set.
+   * Runs the watchers, the sync and the hooks in this process until stopped, and returns at once. Never await
+   * `done` in a server's startup. Throws, naming it, if a variable a sync or a hook names with `env()` isn't set.
    */
   start(options?: StartOptions): Host
   /** Runs each watcher once on what it has not had yet, and says what happened. For tests. */
@@ -77,7 +87,7 @@ const METHODS = [
 
 /** A handle on a board: `board()` is the default board in `~/.muster`, as you. */
 export function board(options: BoardOptions = {}): Board {
-  const { backend: given, as: profile, watch, serve, ...fileOptions } = options
+  const { backend: given, as: profile, watch, hooks: hookOptions, serve, ...fileOptions } = options
   // Checked now, so a bad watcher is the module's mistake, said once. Nothing is opened or started.
   const watchers = checkWatchers(watch)
   const sync = checkSync(fileOptions.sync)
@@ -85,6 +95,11 @@ export function board(options: BoardOptions = {}): Board {
   const syncs: readonly DeclaredSync[] = Object.freeze(Object.entries(sync).map(([key, provider]) => Object.freeze({ key, type: provider.type, env: Object.freeze([...envNames(provider)]) })))
   // Read when the board starts or takes its first request, never on import: a module is read where its secrets aren't.
   const ready = () => void resolveSync(sync)
+  const hooks = checkHooks(hookOptions)
+  // `mu daemon check` takes either by name, and each name is one cursor.
+  const both = hooks.find((hook) => watchers.some((watcher) => watcher.name === hook.name))
+  if (both) throw new Failure('invalid_hook', `A watcher and a hook in ${IN_CODE} are both named "${both.name}".`, { exit: 2, hint: 'Rename one: a name is one watcher or hook.' })
+  const declaredHooks: readonly DeclaredHook[] = Object.freeze(hooks.map((hook) => Object.freeze({ ...hook, tail: structuredClone(hook.tail) })))
   // Where each watcher's reading has got to, shared by start() and deliver() on this handle.
   const states = new Map<string, WatchState>()
   const declared: readonly DeclaredWatcher[] = Object.freeze(watchers.map((watcher) => Object.freeze({ name: watcher.name, tail: structuredClone(watcher.tail), as: watcher.as ?? null })))
@@ -99,6 +114,7 @@ export function board(options: BoardOptions = {}): Board {
       backend,
       watchers: declared,
       sync: syncs,
+      hooks: declaredHooks,
       as: (next: string | null) => make(next),
       async whoami() {
         const me = await who()
@@ -106,7 +122,7 @@ export function board(options: BoardOptions = {}): Board {
       },
       start: (startOptions?: StartOptions) => {
         if (syncs.length) ready()
-        return start(root, watchers, states, startOptions, syncs.length > 0)
+        return start(root, watchers, states, startOptions, syncs.length > 0, hooks)
       },
       deliver: () => deliver(root, watchers, states),
       fetch: served,

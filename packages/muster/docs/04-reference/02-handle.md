@@ -203,6 +203,10 @@ both: declare every watcher on one handle. A watcher named like one in
 `watchers.json` fails with `invalid_watch` at `start()`: the two would share a
 place on the board.
 
+`board({ hooks })` declares [outgoing webhooks](../01-concepts/15-outgoing-webhooks.md#in-a-board-module)
+the same way, each secret named with `env('NAME')`: `start()` reads the
+secrets and sends them, under one lease, `hooks`.
+
 A watcher starts from now: the first time it runs, it takes the board's head
 as its place, and what was posted before wakes nothing. Its place is the
 cursor `watch:<name>`. Each watcher is held by one host at a time, through
