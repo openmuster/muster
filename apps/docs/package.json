@@ -13,7 +13,7 @@
     "deploy:cf": "NEXT_TELEMETRY_DISABLED=1 opennextjs-cloudflare build && opennextjs-cloudflare deploy"
   },
   "dependencies": {
-    "@opennextjs/cloudflare": "1.20.13",
+    "@opennextjs/cloudflare": "1.20.18",
     "fumadocs-core": "^16.19.6",
     "fumadocs-mdx": "^15.6.4",
     "fumadocs-ui": "^16.19.6",
