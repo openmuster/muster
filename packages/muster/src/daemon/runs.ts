@@ -495,10 +495,13 @@ async function reportReopened(team: Board, writer: Board, workflows: Workflow[],
       try {
         await noteReopen(team, owner, going, event)
       } catch (error) {
-        // Read again next tick, from this reopen on.
         why = `reopen ${event.seq}: ${(error as Error).message}`
-        runs.reopensRead = event.seq - 1
-        break reading
+        // The board couldn't answer just now: read again next tick, from this reopen on. Anything else would
+        // be the same next time, so it is passed over rather than holding up every later reopen.
+        if (isTransient(error)) {
+          runs.reopensRead = event.seq - 1
+          break reading
+        }
       }
     }
     runs.reopensRead = Math.max(runs.reopensRead, page.cursor)
@@ -536,8 +539,9 @@ async function noteReopen(team: Board, owner: string, going: Map<number, Reopene
   if (asked === undefined) {
     asked = (await team.events({ after: seq - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
     if (asked?.seq !== seq) return
-    if (`${asked.channel}/${(asked.data as { name?: unknown }).name}-${seq}` !== event.channel) return
   }
+  // The run's own channel, exactly: another channel whose name ends in the same number is someone else's.
+  if (`${asked.channel}/${(asked.data as { name?: unknown }).name}-${seq}` !== event.channel) return
   const id = (event.data as { id?: unknown }).id
   if (typeof id !== 'number') return
   const task = await team.readThread({ id }).catch((error) => {
