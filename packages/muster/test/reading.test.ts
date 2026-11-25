@@ -177,6 +177,24 @@ describe('reading', () => {
     expect((await team.events({ after: 0, filter: { re: root.id } })).events).toHaveLength(9)
   })
 
+  it('the feed keeps only blocks of a kind, or leaves a kind out and keeps everything else', async () => {
+    const { team } = memoryBoard()
+    const parked = (await team.taskCreate({ channel: 'work', text: 'later' })).task
+    const asked = (await team.taskCreate({ channel: 'work', text: 'ask' })).task
+    await team.taskBlock({ id: parked.id, reason: 'not yet', kind: 'backlog' })
+    await team.taskBlock({ id: asked.id, reason: 'which port?' })
+    await team.post({ channel: 'work', text: 'chatter' })
+    const seen = async (kinds: string[]) =>
+      (await team.events({ after: 0, filter: { channel: 'work', kinds } })).events.map((event) => `${event.type}${event.type === 'task.blocked' ? ':' + (event.data as { kind: string }).kind : ''}`)
+    expect(await seen(['needs_input'])).toEqual(['task.blocked:needs_input'])
+    expect(await seen(['backlog', 'needs_input'])).toEqual(['task.blocked:backlog', 'task.blocked:needs_input'])
+    const all = await seen(['!backlog'])
+    expect(all).toContain('task.blocked:needs_input')
+    expect(all).toContain('message.posted')
+    expect(all).not.toContain('task.blocked:backlog')
+    expect(await reason(team.events({ after: 0, filter: { kinds: ['Not A Kind'] } }))).toBe('invalid_kind')
+  })
+
   it('a label filter matches an event if its thread matched before or after it', async () => {
     const { team } = memoryBoard()
     const root = await team.post({ channel: 'dev', text: 'x', labels: { step: 'fix' } })

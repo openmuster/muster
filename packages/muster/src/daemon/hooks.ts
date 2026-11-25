@@ -5,6 +5,7 @@ import { configDir } from '../cli/claims.ts'
 import type { FeedEvent, Filter } from '../core/reads.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
+import { kindsValid } from '../model.ts'
 
 /**
  * An outgoing webhook, from the operator's config file: what to listen for and where to send it. Like
@@ -80,6 +81,7 @@ export function loadHooks(path = hooksPath()): Hook[] {
     if (body !== 'pointer' && body !== 'event') throw new Failure('invalid_config', `"body" of hook "${name}" in ${path} is "pointer" or "event".`)
     const tail = entry?.tail ?? {}
     if (typeof tail !== 'object' || Array.isArray(tail)) throw new Failure('invalid_config', `"tail" of hook "${name}" in ${path} is a filter, as an object.`)
+    if (tail.kinds !== undefined && !kindsValid(tail.kinds)) throw new Failure('invalid_config', `"kinds" of hook "${name}" in ${path} is a list of hold kinds, each with "!" in front to leave it out.`)
     return { name, url: url.href, secret: secret.slice(4), tail, body }
   })
 }

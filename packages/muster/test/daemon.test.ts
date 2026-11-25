@@ -249,6 +249,24 @@ describe('watchers', () => {
     expect((await tick()).woke).toEqual([])
   })
 
+  it('the watcher the person-in-the-loop guide gives is not woken by work parked as backlog', async () => {
+    // The guide's own watchers.json, read as the daemon reads it.
+    const guide = readFileSync(new URL('../docs/03-guides/11-person-in-the-loop.md', import.meta.url), 'utf8')
+    const path = join(tempDir(), 'watchers.json')
+    writeFileSync(path, [...guide.matchAll(/```json\n([\s\S]*?)```/g)].map((block) => block[1]!).find((block) => block.includes('"needs-me"'))!)
+    const [documented] = loadWatchers(path)
+    expect(documented!.tail.kinds).toEqual(['!backlog'])
+    const { team, ran, tick } = harness({ tail: documented!.tail })
+    await tick()
+    const parked = (await team.taskCreate({ channel: 'work/api', text: 'later' })).task
+    await team.taskBlock({ id: parked.id, reason: 'not this week', kind: 'backlog' })
+    expect((await tick()).woke).toEqual([])
+    const asked = (await team.taskCreate({ channel: 'work/api', text: 'ask' })).task
+    await team.taskBlock({ id: asked.id, reason: 'which region?' })
+    expect((await tick()).woke).toHaveLength(1)
+    expect(ran.map((run) => run.command)).toEqual([['wake', String(asked.id)]])
+  })
+
   it('starts from now: what was on the board before the watcher first ran wakes nothing', async () => {
     const { team, ran, tick } = harness({})
     await team.post({ channel: 'work/api', text: 'old news' })
@@ -344,7 +362,7 @@ describe('watchers', () => {
     expect(loadWatchers(path)).toEqual([])
     writeFileSync(path, JSON.stringify({ watchers: [{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }] }))
     expect(loadWatchers(path)).toEqual([{ name: 'lead', tail: { channel: 'work/' }, run: ['wake', '{thread}'] }])
-    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]', '[{"name": "a", "tail": {"for": ""}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": "lead+"}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": 3}, "run": ["x"]}]']) {
+    for (const bad of ['{', '{"watchers": 3}', '[{"name": "Bad Name", "run": ["x"]}]', '[{"name": "a", "run": "sh -c x"}]', '[{"name": "a", "run": ["x"]}, {"name": "a", "run": ["y"]}]', '[{"name": "a", "tail": {"for": ""}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": "lead+"}, "run": ["x"]}]', '[{"name": "a", "tail": {"for": 3}, "run": ["x"]}]', '[{"name": "a", "tail": {"kinds": "backlog"}, "run": ["x"]}]', '[{"name": "a", "tail": {"kinds": ["Backlog"]}, "run": ["x"]}]']) {
       writeFileSync(path, bad)
       expect(() => loadWatchers(path)).toThrow(/watchers\.json|Watcher|watchers/)
     }
@@ -856,6 +874,9 @@ describe('checking a watcher', () => {
     })
     expect(checkWrite(watcher({ re: 12, by: 'ci' }))).toMatchObject({ kind: 'reply', to: 12, as: 'ci' })
     expect(checkWrite(watcher({ channel: 'work/', types: ['message.'] }), { in: 'work/checks' })).toMatchObject({ kind: 'post', channel: 'work/checks' })
+    // Leaving a kind out still lets a message through; keeping only a kind lets nothing but blocks through.
+    expect(checkWrite(watcher({ channel: 'work', kinds: ['!backlog'] }))).toMatchObject({ kind: 'post', channel: 'work' })
+    expect(() => checkWrite(watcher({ channel: 'work', kinds: ['needs_input'] }))).toThrow(/held as needs_input/)
   })
 
   it('writes a message a watcher for a profile matches, on a board where that profile never wrote', async () => {

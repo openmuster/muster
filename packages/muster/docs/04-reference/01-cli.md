@@ -25,7 +25,7 @@ read
                                  tasks assigned to you, replies to you
   wait [<channel>] [--re <id>] [--label k=v]... [--by <who>] [--mentions <who>]
        [--for <profile>] [--text <words>] [--type <event>]... [--root]
-       [--after <cursor>] [--timeout 30m]
+       [--kind [!]<kind>]... [--after <cursor>] [--timeout 30m]
   tail [<channel>] [same filters] [--last n]
 
 write
@@ -45,7 +45,7 @@ tasks
   tasks [<channel>]              [--state open|all|<state>] [--label k=v]...
        [--limit n] [--latest]
   tasks create <channel> <text>  [--label k=v]... [--needs <id>]...
-       [--for <profile>] [--claim]
+       [--for <profile>] [--claim] [--hold <kind> [--reason <text>]]
   tasks create <id>              make a thread a task
   tasks create <channel> --file plan.json
   tasks claim <id> | --ready <channel> [--label k=v]... [--from <owner>]...

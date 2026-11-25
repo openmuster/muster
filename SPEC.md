@@ -145,7 +145,7 @@ States: `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`,
 
 | Command | From | To |
 | --- | --- | --- |
-| `tasks create` | (new) | `ready`, or `waiting` when it `needs` unfinished tasks |
+| `tasks create` | (new) | `ready`, or `waiting` when it `needs` unfinished tasks; `blocked` with `--hold`, in the same write |
 | `tasks claim` | `ready` | `claimed` |
 | `tasks renew` | `claimed` (holder) | `claimed`, lease extended from now |
 | `tasks release` | `claimed` (holder) | `ready` |
@@ -174,6 +174,9 @@ States: `waiting`, `ready`, `claimed`, `blocked`, `completed`, `failed`,
 - **Hold kinds** are free-form `[a-z0-9][a-z0-9_.-]{0,63}`: `needs_input`,
   `awaiting_approval`, or your own. `edited` is reserved: when someone other
   than the owner edits a task's root, the board blocks it with kind `edited`.
+  A hold is not always a question: `backlog` is the convention for work parked
+  for later (`tasks create --hold backlog`). The board treats every kind
+  alike; readers tell them apart with a kind filter (section 6).
 - **Results and reasons** are text of at most 1,000 characters and final.
 - **Second-level status** is not a state. "Awaiting approval" is `blocked` with
   kind `awaiting_approval`. "Tests failed" is `failed` with its reason, or a
@@ -229,8 +232,11 @@ on `claim_lost` stops the command: SIGTERM to the group, SIGKILL after a grace.
   matches, prints it and a `next:` command, and exits 0. A timeout exits 1.
 - `tail` prints every matching event until stopped.
 - Filters: a channel or subtree, `--re <root>`, `--label k=v` (values joined
-  with `|`), `--by`, `--mentions`, `--text`, `--root` (nothing about a reply).
-  An event matches if its thread matched before or after it.
+  with `|`), `--by`, `--mentions`, `--text`, `--root` (nothing about a reply),
+  `--kind`. `--kind k` keeps only `task.blocked` events of kind `k`;
+  `--kind '!k'` drops those and keeps the rest. It reads the kind the event
+  carries, so nothing is stored for it. An event matches if its thread matched
+  before or after it.
 - In file mode `wait` and `tail` poll `MAX(seq)`, from 100 ms rising to 1 s.
 - Search (`read --text`, `mu search`) uses SQLite FTS5.
 - A reader may store its place: `--cursor <name>` keeps the last `seq` it was

@@ -69,7 +69,7 @@ A watcher runs your command when a task blocks. Put it in
   "watchers": [
     {
       "name": "needs-me",
-      "tail": { "channel": "work/", "types": ["task.blocked"] },
+      "tail": { "channel": "work/", "types": ["task.blocked"], "kinds": ["!backlog"] },
       "run": ["/Users/ada/bin/notify.sh", "{thread}"]
     }
   ]
@@ -80,6 +80,32 @@ A watcher runs your command when a task blocks. Put it in
 email. It gets the thread's ID, never the question's text, so nothing a
 stranger wrote ends up in a shell command. See
 [Watchers](../01-concepts/09-watchers.md).
+
+`"kinds": ["!backlog"]` leaves out tasks parked for later (below): they are
+blocked too, but nobody is asking you anything. Try a filter by hand first:
+`mu tail work/ --type task.blocked --kind '!backlog'`.
+
+## Work that isn't for now
+
+Not every blocked task is a question. To write down work no agent should take
+yet, make it held:
+
+```bash steps
+mu tasks create work/payments "Move retries to the new provider." --hold backlog --reason "after the migration"
+mu tasks claim --ready work/payments --as claude || echo "nothing to take"
+```
+
+The claim finds nothing: a `--ready` claim never takes a blocked task. The
+task is made and held in one write, so no agent can claim it in between. When
+its time comes, unblock it like any other:
+
+```bash steps
+mu tasks unblock 8
+mu tasks --state ready
+```
+
+`backlog` is a convention, not a rule: any kind works, and the board treats
+them all alike. Pick one and filter on it.
 
 ## Approvals
 

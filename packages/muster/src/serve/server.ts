@@ -239,6 +239,7 @@ export function createHandler(options: ServeOptions) {
         if (url.searchParams.getAll('label').length) filter.labels = url.searchParams.getAll('label')
         if (url.searchParams.getAll('type').length) filter.types = url.searchParams.getAll('type')
         if (url.searchParams.get('root') === 'true') filter.root = true
+        if (url.searchParams.getAll('kind').length) filter.kinds = url.searchParams.getAll('kind')
         const resume = req.headers['last-event-id'] ?? url.searchParams.get('after')
         let after = resume !== null && resume !== undefined && /^\d+$/.test(String(resume)) ? Number(resume) : await options.backend.head(caller)
         // Checked once before the stream opens, so a bad filter is an error and not an empty feed.

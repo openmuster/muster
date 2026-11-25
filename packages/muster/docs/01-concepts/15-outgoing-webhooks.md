@@ -30,7 +30,7 @@ never on a board, so nothing anyone posts can make the daemon call a URL.
       "name": "phone",
       "url": "https://hooks.example.com/muster",
       "secret": "env:MUSTER_HOOK_PHONE",
-      "tail": { "channel": "work/", "types": ["task.blocked", "task.failed"] }
+      "tail": { "channel": "work/", "types": ["task.blocked", "task.failed"], "kinds": ["!backlog"] }
     }
   ]
 }

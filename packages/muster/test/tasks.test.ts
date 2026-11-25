@@ -223,6 +223,35 @@ describe('tasks', () => {
     expect(await reason(team.taskBlock({ id: task.id, kind: 'Not A Kind' }))).toBe('invalid_kind')
   })
 
+  it('a task made held is never ready: no --ready claim takes it until it is unblocked, to what its needs say', async () => {
+    const { team } = memoryBoard()
+    const first = (await team.taskCreate({ channel: 'work', text: 'first' })).task
+    const later = await team.taskCreate({ channel: 'work', text: 'later', hold: { kind: 'backlog', reason: 'after the launch' } })
+    expect(later.task).toMatchObject({ state: 'blocked', hold: { kind: 'backlog', reason: 'after the launch' }, claim: null })
+    // The board never saw it ready: the feed has its making and its hold, nothing between.
+    const feed = (await team.events({ after: 0, filter: { re: later.task.id, types: ['task.'] } })).events.map((event) => event.type)
+    expect(feed).toEqual(['task.created', 'task.blocked'])
+    expect((await team.as('w').taskClaim({ ready: 'work' })).task.id).toBe(first.id)
+    expect(await reason(team.as('w').taskClaim({ ready: 'work' }))).toBe('nothing_ready')
+    expect(await reason(team.as('w').taskClaim({ id: later.task.id }))).toBe('task_blocked')
+    expect((await team.taskUnblock({ id: later.task.id })).task.state).toBe('ready')
+    expect((await team.as('w').taskClaim({ ready: 'work' })).task.id).toBe(later.task.id)
+
+    const waits = await team.taskCreate({ channel: 'work', text: 'after first', needs: [first.id], hold: { kind: 'backlog' } })
+    expect(waits.task).toMatchObject({ state: 'blocked', hold: { kind: 'backlog' } })
+    expect((await team.taskUnblock({ id: waits.task.id })).task.state).toBe('waiting')
+  })
+
+  it('a task made held takes the kinds block takes, and is not claimed as it is made', async () => {
+    const { team } = memoryBoard()
+    expect(await reason(team.taskCreate({ channel: 'work', text: 't', hold: { kind: 'Not A Kind' } }))).toBe('invalid_kind')
+    expect(await reason(team.taskCreate({ channel: 'work', text: 't', hold: { kind: 'failing' } }))).toBe('reserved_kind')
+    expect(await reason(team.taskCreate({ channel: 'work', text: 't', hold: { kind: 'backlog' }, claim: {} }))).toBe('hold_and_claim')
+    expect((await team.taskList({ channel: 'work', state: 'all' })).tasks).toEqual([])
+    const root = await team.post({ channel: 'work', text: 'a thread first' })
+    expect((await team.taskCreate({ thread: root.id, hold: {} })).task.hold).toMatchObject({ kind: 'needs_input' })
+  })
+
   it('a review that sends work back reopens the completed task as a new round', async () => {
     const { team } = memoryBoard()
     const work = (await team.taskCreate({ channel: 'work', text: 'limiter' })).task

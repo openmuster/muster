@@ -59,8 +59,11 @@ and exits 0.
 - A timeout exits 1 with the reason `timeout`, and the cursor it reached. That
   isn't an answer.
 - Filters: a channel or subtree, `--re <root>`, `--label`, `--by <who>`,
-  `--mentions <who>`, `--for <profile>`, `--text`, `--type`. A type ending in `.` takes every
+  `--mentions <who>`, `--for <profile>`, `--text`, `--type`, `--kind`. A type ending in `.` takes every
   event under it: `task.`.
+- `--kind` is about blocks. `--kind needs_input` keeps only `task.blocked`
+  events of that kind; `--kind '!backlog'` drops blocks of that kind and keeps
+  everything else.
 - An event matches a label filter if its thread matched before it or after it,
   so a task leaving a state is news for a filter on that state.
 

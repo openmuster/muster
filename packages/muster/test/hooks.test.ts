@@ -361,6 +361,12 @@ describe('the hooks file', () => {
     expect(loadHooks(write({ hooks: [good] }))).toEqual([{ name: 'phone', url: 'https://hooks.example.com/in', secret: 'HOOK_SECRET', tail: {}, body: 'pointer' }])
   })
 
+  it('takes a kind filter, and refuses one that is not a list of kinds', () => {
+    expect(loadHooks(write({ hooks: [{ ...good, tail: { types: ['task.blocked'], kinds: ['!backlog'] } }] }))[0]!.tail).toEqual({ types: ['task.blocked'], kinds: ['!backlog'] })
+    expect(refuses(write({ hooks: [{ ...good, tail: { kinds: '!backlog' } }] }))).toMatch(/"kinds" of hook "phone"/)
+    expect(refuses(write({ hooks: [{ ...good, tail: { kinds: ['Not A Kind'] } }] }))).toMatch(/"kinds" of hook "phone"/)
+  })
+
   it('refuses a secret written into the file: it names an environment variable', () => {
     expect(refuses(write({ hooks: [{ ...good, secret: 'hunter2hunter2hunter2' }] }))).toMatch(/"secret" of hook "phone" .* names an environment variable/)
     expect(refuses(write({ hooks: [{ name: 'phone', url: good.url }] }))).toMatch(/names an environment variable/)

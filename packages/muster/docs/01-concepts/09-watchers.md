@@ -58,7 +58,7 @@ nothing anyone posts can make the daemon run a command.
 | Field | What it is |
 | --- | --- |
 | `name` | Lowercase letters, numbers, `.`, `_`, `-`. Its place on the board is kept under this name |
-| `tail` | What to listen for: `channel`, `re`, `labels`, `by`, `mentions`, `for`, `text`, `types`. What `mu tail` takes |
+| `tail` | What to listen for: `channel`, `re`, `labels`, `by`, `mentions`, `for`, `text`, `types`, `kinds`. What `mu tail` takes |
 | `run` | The command, as an array. `{thread}`, `{channel}`, `{seq}` and `{type}` are filled in |
 | `gate` | A command that runs first. If its last line is `{"wake": false}`, `run` doesn't |
 | `as` | The profile the command writes as. Its own writes never wake it |
