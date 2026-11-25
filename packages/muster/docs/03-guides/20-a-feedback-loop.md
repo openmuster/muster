@@ -6,7 +6,7 @@ description: Feedback from Slack, Linear, GitHub or your own app becomes a card;
 ## Who this is for
 
 You build something with agents and want to steer it from wherever you are:
-a report in Slack, a Linear issue, a button in the app itself. Each report
+a report in Slack, a Linear issue, a Notion page, a button in the app itself. Each report
 should become a card with a proper title and spec, the change should come
 back as a pull request with screenshots, and a reply on the card should send
 it round again, on the same pull request, until it is right.
@@ -22,7 +22,7 @@ the sources you sync.
 
 ```mermaid
 flowchart LR
-  S[Slack, Linear, GitHub, app, inspector] -->|a thread| C[card in cards/source, held triage]
+  S[Slack, Linear, GitHub, Notion, app, inspector] -->|a thread| C[card in cards/source, held triage]
   C -->|intake| T[triage run: a title and a spec]
   T -->|promote| R[the spec, a reply on the card]
   R -->|trusted author, or approved=yes| W[card run: spec, work, review]
@@ -34,7 +34,7 @@ flowchart LR
 - **A card is a thread and a task.** Its hold says where it is: `triage`,
   `approval`, `working`, or `edited` when its author changed the report.
 - **Each source has its own channel** under `cards/`: `cards/slack`,
-  `cards/linear`, `cards/github`, `cards/app`. A card's runs are in channels
+  `cards/linear`, `cards/github`, `cards/notion`, `cards/app`. A card's runs are in channels
   under its own, so the card is what Slack and Linear mirror.
 - **The triage agent writes the card.** It reads the report and the
   repository, changes nothing, and completes with a title on the first line,
