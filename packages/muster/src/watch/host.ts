@@ -3,6 +3,7 @@ import type { FeedEvent } from '../core/reads.ts'
 import type { Board } from '../handle.ts'
 import type { Fence } from '../core/deliveries.ts'
 import { loadWatchers, watchersPath } from '../daemon/daemon.ts'
+import { armHooks, hooksFileClash, hostHooks, IN_CODE, type Hook } from '../daemon/hooks.ts'
 import { holderId, holdLease, LEASE_TTL, type Held, type Leases } from '../daemon/lease.ts'
 import { DELIVERY_ATTEMPTS } from '../daemon/watchers.ts'
 import type { Watcher, WatchEvent } from './watch.ts'
@@ -451,6 +452,10 @@ type Running = { host: Host; team: Board; names: string }
 /** The hosts running in this process, by board: kept on `globalThis`, so two copies of a module (as Next.js loads) find each other. */
 const hosts = (): Map<unknown, Running> => ((globalThis as Record<symbol, unknown>)[HOSTS] ??= new Map()) as Map<unknown, Running>
 
+const throwIf = (failure: Failure | null) => {
+  if (failure) throw failure
+}
+
 const namesOf = (watchers: Watcher[]) => watchers.map((watcher) => watcher.name).sort().join(', ') || 'none'
 
 /** A watcher in `watchers.json` and one in code with the same name would share a cursor, and each skip what the other delivered. */
@@ -472,8 +477,8 @@ function refuseClash(watchers: Watcher[]) {
  * handle, or on another copy of the same module (the same watchers), returns the host already running;
  * one with other watchers for a board this process already runs is refused.
  */
-export function start(team: Board, watchers: Watcher[], states: Map<string, WatchState>, options: StartOptions = {}, sync = false): Host {
-  if (watchers.length > 0 || sync) leasesOf(team)
+export function start(team: Board, watchers: Watcher[], states: Map<string, WatchState>, options: StartOptions = {}, sync = false, hooks: readonly Hook[] = []): Host {
+  if (watchers.length > 0 || sync || hooks.length > 0) leasesOf(team)
   if (watchers.length > 0) {
     leasesOf(team)
     deliveriesOf(team)
@@ -481,7 +486,7 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
   const backend = team.backend
   // A board in memory is its own: two of them share a path (":memory:") and nothing else.
   const key = backend.kind === 'file' && backend.where !== ':memory:' ? backend.where : backend
-  const names = namesOf(watchers)
+  const names = [namesOf(watchers), ...hooks.map((hook) => `hook ${hook.name}`)].join(', ')
   const running = hosts().get(key)
   if (running) {
     if (running.team === team || running.names === names) return running.host
@@ -490,6 +495,8 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
     })
   }
   refuseClash(watchers)
+  // Read now, not when the module was imported: a secret that is unset or short stops the host here, named.
+  const armed = hooks.length > 0 ? (throwIf(hooksFileClash()), armHooks([...hooks], process.env, IN_CODE)) : []
   const log = options.log ?? ((line: string) => process.stderr.write(`muster: ${line}\n`))
   const controller = new AbortController()
   const stopNow = () => {
@@ -505,6 +512,8 @@ export function start(team: Board, watchers: Watcher[], states: Map<string, Watc
   )
   // The board's sync, under its own `sync` lease: one host sends to the platforms, whichever runs the watchers.
   if (sync) loops.push(syncLoop(team, leasesOf(team), controller.signal, options, log).catch((error) => log(`stopped   sync  ${(error as Error).message}`)))
+  // The module's hooks, all on one lease: one host sends them, in order.
+  if (armed.length > 0) loops.push(hostHooks(team, armed, controller.signal, { log, ...(options.lease ? { lease: options.lease } : {}) }).catch((error) => log(`stopped   hooks  ${(error as Error).message}`)))
   const done = Promise.all(loops).then(() => {
     options.signal?.removeEventListener('abort', stopNow)
     if (hosts().get(key)?.host === host) hosts().delete(key)

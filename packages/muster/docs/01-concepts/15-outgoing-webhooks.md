@@ -21,7 +21,8 @@ short, sends the event to a URL instead: a service that notifies your phone
 when a task is blocked, a dashboard, an automation tool.
 
 Hooks are yours, like watchers. They live in `~/.config/muster/hooks.json`,
-never on a board, so nothing anyone posts can make the daemon call a URL.
+or in a [board module](#in-a-board-module), never on a board, so nothing
+anyone posts can make the daemon call a URL.
 
 ```json
 {
@@ -47,6 +48,50 @@ never on a board, so nothing anyone posts can make the daemon call a URL.
 The daemon or `mu serve` sends them, so one of the two has to be running, with
 the secret in its environment. On macOS, `mu daemon install --env
 MUSTER_HOOK_PHONE` carries it into the service.
+
+## In a board module
+
+A [board module](../04-reference/02-handle.md#watchers) declares the same
+hooks in code, beside its watchers. `env()` names the variable that holds the
+secret; nothing reads it when the module is imported.
+
+```ts lib/board.ts
+import { board, env } from 'muster'
+
+export const team = board({
+  hooks: [
+    {
+      name: 'phone',
+      url: 'https://hooks.example.com/muster',
+      secret: env('MUSTER_HOOK_PHONE'),
+      tail: { channel: 'work/', types: ['task.blocked', 'task.failed'], kinds: ['!backlog'] },
+    },
+  ],
+})
+```
+
+| `hooks.json` | `board({ hooks })` |
+| --- | --- |
+| `"name": "phone"` | `name: 'phone'` |
+| `"url": "https://..."` | `url: 'https://...'` |
+| `"secret": "env:MUSTER_HOOK_PHONE"` | `secret: env('MUSTER_HOOK_PHONE')` |
+| `"tail": { ... }` | `tail: { ... }`, checked like a watcher's |
+| `"body": "event"` | `body: 'event'` |
+
+What a delivery carries, how it is signed, and what you can count on are the
+same. The rest differs in where it runs:
+
+- **`start()` sends them**, so `mu daemon run` and `mu serve` with the module
+  do, and so does `team.start()` in a process of your own. `start()` reads
+  each secret, and throws naming the variable that is unset or too short.
+  `mu daemon run` then says so and exits 0.
+- **One host sends them all,** under the lease `hooks` in the board's file.
+  Another host started on the same board stands by, and takes over within 30
+  seconds once the first stops. `mu daemon status` shows the holder and how
+  far each hook is behind.
+- **One place for them.** A module with `hooks` beside a `hooks.json` is
+  refused, and so is a hook named like a watcher or a workflow, in the module
+  or in the config files. Move each entry over and delete `hooks.json`.
 
 ## What a delivery carries
 

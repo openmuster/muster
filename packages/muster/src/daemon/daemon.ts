@@ -7,7 +7,7 @@ import type { Board } from '../handle.ts'
 import { forName, kindsValid } from '../model.ts'
 import { holdLease, type Held } from './lease.ts'
 import { syncLoop } from '../sync/host.ts'
-import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
+import { armHooks, hooksFileClash, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
 import { openRuns, runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
 import { loadWorkflows, workflowsPath, type Workflow } from './workflows.ts'
 import { runWatcher, type Deps, type Watcher, type WatchState } from './watchers.ts'
@@ -70,11 +70,12 @@ export function loadDaemonConfig(env: NodeJS.ProcessEnv = process.env, code?: In
   return { watchers, hooks, workflows, arm: () => armHooks(hooks, env) }
 }
 
-/** The watchers a board module declares: where it is, and their names. */
-export type InCode = { path: string; names: readonly string[] }
+/** The watchers a board module declares: where it is, and their names; and its outgoing webhooks' names. */
+export type InCode = { path: string; names: readonly string[]; hooks?: readonly string[] }
 
 /**
- * A module's watcher named like a watcher, a hook or a workflow in the config files. A watcher's name is
+ * A module's watcher or hook named like a watcher, a hook or a workflow in the config files, or hooks in
+ * a module beside a `hooks.json`. A watcher's name is
  * its cursor and its lease, and `mu daemon check` takes any of them by name: one name is one thing.
  */
 export function clashWithCode(code: InCode, config: { watchers?: readonly { name: string }[]; hooks?: readonly { name: string }[]; workflows?: readonly { name: string }[] }): Failure | null {
@@ -83,10 +84,16 @@ export function clashWithCode(code: InCode, config: { watchers?: readonly { name
     ['hook', hooksPath(), config.hooks ?? []],
     ['workflow', workflowsPath(), config.workflows ?? []],
   ] as const
-  for (const name of code.names) {
-    for (const [kind, path, list] of kinds) {
-      if (list.some((entry) => entry.name === name)) {
-        return new Failure('invalid_config', `A watcher in ${code.path} and a ${kind} in ${path} are both named "${name}".`, { hint: `Rename one: a name is one watcher, hook or workflow, whichever file it is in.` })
+  if (code.hooks?.length) {
+    const file = hooksFileClash(code.path)
+    if (file) return file
+  }
+  for (const [mine, names] of [['watcher', code.names], ['hook', code.hooks ?? []]] as const) {
+    for (const name of names) {
+      for (const [kind, path, list] of kinds) {
+        if (list.some((entry) => entry.name === name)) {
+          return new Failure('invalid_config', `A ${mine} in ${code.path} and a ${kind} in ${path} are both named "${name}".`, { hint: `Rename one: a name is one watcher, hook or workflow, whichever file it is in.` })
+        }
       }
     }
   }

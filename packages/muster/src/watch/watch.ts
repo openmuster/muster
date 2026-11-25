@@ -78,17 +78,21 @@ const WATCH_KEYS = new Set(['tail', 'run', 'as', 'timeout', 'coalesce'])
 const FILTER_KEYS = new Set(['channel', 're', 'labels', 'by', 'mentions', 'text', 'types', 'kinds', 'for', 'root'])
 
 const wrong = (name: string, why: string) => new Failure('invalid_watch', `Watcher "${name}" ${why}`, { exit: 2 })
+const wrongWatch = wrong
 
 /** Runs a check that throws a misuse, and says which watcher it was about. */
-function named<T>(name: string, what: string, check: () => T): T {
+function namedWith<T>(name: string, what: string, check: () => T, fail: (name: string, why: string) => Failure = wrong): T {
   try {
     return check()
   } catch (error) {
-    throw wrong(name, `has ${what}: ${(error as Error).message}`)
+    throw fail(name, `has ${what}: ${(error as Error).message}`)
   }
 }
 
-function checkFilter(name: string, tail: unknown): Filter {
+/** Checks a filter given in code. `fail` says whose it is: a watcher's unless told otherwise (a hook's, in `board({ hooks })`). */
+export function checkFilter(name: string, tail: unknown, fail?: (why: string) => Failure): Filter {
+  const wrong = fail ? (_name: string, why: string) => fail(why) : wrongWatch
+  const named = <T>(name: string, what: string, check: () => T) => namedWith(name, what, check, wrong)
   if (tail === null || typeof tail !== 'object' || Array.isArray(tail)) throw wrong(name, 'needs a "tail": what to listen for, such as { channel: "work/" }.')
   const filter = tail as Record<string, unknown>
   for (const key of Object.keys(filter)) if (!FILTER_KEYS.has(key)) throw wrong(name, `has "${key}" in its tail, which isn't a filter. A filter takes ${[...FILTER_KEYS].join(', ')}.`)
@@ -129,7 +133,7 @@ export function checkWatchers(watch: unknown): Watcher[] {
     const tail = checkFilter(name, given.tail)
     if (typeof given.run !== 'function') throw wrong(name, 'needs "run": a function, or command([...]).')
     if (given.as !== undefined && typeof given.as !== 'string') throw wrong(name, 'has an "as" that isn\'t a profile name.')
-    if (given.as !== undefined) named(name, 'an "as" that is not a profile name', () => profileName(given.as as string))
+    if (given.as !== undefined) namedWith(name, 'an "as" that is not a profile name', () => profileName(given.as as string))
     const timeout = given.timeout === undefined ? DEFAULT_TIMEOUT : millis(given.timeout)
     if (timeout === null || timeout < 1 || timeout > DAY) throw wrong(name, 'has a "timeout" that isn\'t a length of time from 1ms to 24h, such as "60s".')
     const coalesce = given.coalesce === undefined ? undefined : millis(given.coalesce)

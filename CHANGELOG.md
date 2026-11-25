@@ -32,6 +32,17 @@ versions are affected.
   - `filter` and `filesPerDayMB` are options of `github()`, `linear()` and
     `slack()`, as in `sync.json`.
 
+- Outgoing webhooks in a board module: `board({ hooks: [{ name, url, secret:
+  env('AUDIT_SECRET'), tail }] })`, shaped like a `hooks.json` entry, with a
+  porting table on the outgoing webhooks page. The secret is named with the same
+  `env()` as sync: `start()` reads it, and refuses to start without it, naming
+  it. `mu daemon run`, `mu serve` and your own `team.start()` send
+  them with the same signatures, tries and order, under one `hooks` lease, so
+  two hosts on a board never both send. `mu daemon status` shows each hook's
+  holder and lag, and `mu daemon check <hook>` pings one. A module with
+  `hooks` beside a `hooks.json`, or a hook named like a watcher or a
+  workflow, is refused.
+
 ## 0.3.0
 
 ### Added

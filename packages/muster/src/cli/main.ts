@@ -17,7 +17,7 @@ import { syncPath } from '../sync/config.ts'
 import { boardPath, file } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
 import { FillRefused, fillResults, pushesTask } from '../daemon/steps.ts'
-import { DROPPED, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
+import { DROPPED, HOOKS_LEASE, IN_CODE, armHooks, hooksPath, loadHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import * as guard from '../daemon/guard.ts'
 import { answer as answerMcp } from './mcp.ts'
@@ -112,6 +112,27 @@ async function moduleWatchers(run: Run) {
   )
 }
 
+/** What a module declares, by name, for the checks against the config files. */
+const declaredIn = (run: Run, module: ModulePath) => ({ path: module.path, names: run.team.watchers.map((watcher) => watcher.name), hooks: run.team.hooks.map((hook) => hook.name) })
+
+/**
+ * Each outgoing webhook a module declares, as `mu daemon status` shows it: where it sends, what it
+ * listens for, which host holds the `hooks` lease, and how far its cursor is behind the board's head.
+ */
+async function moduleHooks(run: Run) {
+  if (run.team.hooks.length === 0) return []
+  const root = (run.team as unknown as Record<symbol, () => Board>)[ROOT]!()
+  const head = await root.head()
+  const held = await root.backend.leases?.holder(HOOKS_LEASE)
+  return Promise.all(
+    run.team.hooks.map(async (hook) => {
+      const place = await root.cursorGet(`hook:${hook.name}`)
+      const behind = place === null ? null : (await root.events({ after: place, filter: hook.tail, limit: LAG_PAGE, through: head })).events.length
+      return { name: hook.name, url: hook.url, tail: hook.tail, body: hook.body, holder: held?.holder ?? null, lag: behind }
+    }),
+  )
+}
+
 /** The most events `mu daemon status` counts behind a watcher's place: past it, it says so with a +. */
 const LAG_PAGE = 500
 
@@ -123,11 +144,12 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: str
   const wanted = parsed.positionals[1]
   if (wanted === undefined) throw misuse('missing_watcher', 'Say which watcher or outgoing webhook: mu daemon check <name>.')
   const module = run.module && !run.module.error ? run.module : null
-  const config = loadDaemonConfig(run.io.env, module ? { path: module.path, names: run.team.watchers.map((watcher) => watcher.name) } : undefined)
-  const hook = config.hooks.find((each) => each.name === wanted)
+  const config = loadDaemonConfig(run.io.env, module ? declaredIn(run, module) : undefined)
+  const declared = module ? run.team.hooks.find((each) => each.name === wanted) : undefined
+  const hook = declared ?? config.hooks.find((each) => each.name === wanted)
   if (hook) {
     // A hook answers nothing on the board, so its check is the delivery itself: signed like a real one, sent from here.
-    const [armed] = armHooks([hook], run.io.env)
+    const [armed] = armHooks([hook], run.io.env, declared ? IN_CODE : hooksPath())
     const started = Date.now()
     const sent = await ping(armed!, { now: () => Date.now(), fetch })
     if (!sent.ok) {
@@ -142,7 +164,7 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: str
   }
   const inCode = run.team.watchers.find((each) => each.name === wanted)
   const watcher = inCode ?? config.watchers.find((each) => each.name === wanted)
-  if (!watcher) throw new Failure('unknown_watcher', `No watcher or outgoing webhook is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${module ? `${module.path} and ` : ''}${watchersPath()}, outgoing webhooks in ${hooksPath()}.` })
+  if (!watcher) throw new Failure('unknown_watcher', `No watcher or outgoing webhook is named "${wanted}".`, { exit: 2, hint: `Watchers are in ${module ? `${module.path} and ` : ''}${watchersPath()}, outgoing webhooks in ${module ? `${module.path} or ` : ''}${hooksPath()}.` })
   const write = checkWrite(watcher, { ...(str(parsed.flags, 'in') !== undefined ? { in: str(parsed.flags, 'in')! } : {}), principal: (await run.team.backend.self(null)).principal })
   const timeout = duration(str(parsed.flags, 'timeout') ?? '5m', 'timeout') * 1000
   // Nothing runs a watcher unless a host holds its lease: `tick` for watchers.json, `watch:<name>` for one
@@ -1047,13 +1069,15 @@ const commands: Record<string, Command> = {
       }
       let watching: Host | null = null
       if (run.module && !run.module.error) {
-        const clash = clashWithCode({ path: run.module.path, names: run.team.watchers.map((watcher) => watcher.name) }, { watchers, hooks, workflows: workflows ?? [] })
+        const clash = clashWithCode(declaredIn(run, run.module), { watchers, hooks, workflows: workflows ?? [] })
         if (clash) {
           run.io.err(`error: ${clash.message}`)
-          run.io.err(`  The module's watchers don't run until that is fixed and the server restarted.`)
+          run.io.err(`  The module's watchers ${run.team.hooks.length ? 'and hooks ' : ''}don't run until that is fixed and the server restarted.`)
+          if (clash.hint) run.io.err(`  ${clash.hint}`)
         } else {
           try {
-            watching = run.team.start({ signal: run.io.stop, log: (line) => run.io.err(line) })
+            // A hook that delivered is not news on a server's error output, as with hooks.json; what failed is.
+            watching = run.team.start({ signal: run.io.stop, log: (line) => (/^sent {6}hook /.test(line) ? undefined : run.io.err(line)) })
           } catch (error) {
             run.io.err(`error: ${(error as Error).message}`)
           }
@@ -1097,7 +1121,7 @@ const commands: Record<string, Command> = {
         let watchers
         let hooks
         let workflows
-        const code = run.module ? { path: run.module.path, names: run.team.watchers.map((watcher) => watcher.name) } : undefined
+        const code = run.module ? declaredIn(run, run.module) : undefined
         try {
           const config = loadDaemonConfig(run.io.env, code)
           watchers = config.watchers
@@ -1115,14 +1139,14 @@ const commands: Record<string, Command> = {
         run.io.out(`watchers  ${watchers.length}`)
         if (run.module) run.io.out(`watching  ${run.team.watchers.length ? run.team.watchers.map((watcher) => watcher.name).join(' ') : 'none'}`)
         if (run.team.sync.length) run.io.out(`syncing   ${run.team.sync.map((each) => each.key).join(' ')}`)
-        if (hooks.length) run.io.out(`hooks     ${hooks.length}`)
+        if (hooks.length + run.team.hooks.length) run.io.out(`hooks     ${hooks.length + run.team.hooks.length}`)
         if (workflows.length) run.io.out(`workflows ${workflows.length}`)
-        // The module's watchers, each on its own lease: another host running one leaves this one standing by.
+        // The module's watchers, each on its own lease, its sync on `sync` and its hooks on `hooks`: another host running one leaves this one standing by.
         let host: Host | null = null
         try {
           host = run.module ? run.team.start({ signal: run.io.stop, log: run.io.out }) : null
         } catch (error) {
-          // A sync secret that isn't set: a restart can't fix it, so a clean exit leaves the service stopped.
+          // A sync's or a hook's secret that isn't set: a restart can't fix it, so a clean exit leaves the service stopped.
           if (!(error instanceof Failure)) throw error
           run.io.err(`error: ${error.message}`)
           if (error.hint) run.io.err(`  ${error.hint}`)
@@ -1138,8 +1162,8 @@ const commands: Record<string, Command> = {
             run.io.out('another process already ticks for this board')
             // With a module's watchers to run it stays up, and keeps asking for the tick: when the process
             // that has it stops, this one ticks, so schedules, hooks and workflows never go unrun.
-            if (run.team.watchers.length > 0 || run.team.sync.length > 0) {
-              run.io.out('standing by: its watchers run here, and it ticks when the other stops')
+            if (run.team.watchers.length > 0 || run.team.sync.length > 0 || run.team.hooks.length > 0) {
+              run.io.out(`standing by: its ${run.team.watchers.length ? 'watchers' : run.team.sync.length ? 'sync' : 'hooks'} run${run.team.watchers.length ? '' : 's'} here, and it ticks when the other stops`)
               while (ended === 'held' && !run.io.stop.aborted) ended = await tick()
             }
           }
@@ -1193,13 +1217,14 @@ const commands: Record<string, Command> = {
         const kept = guard.readGuard(guardAt)
         const recent = kept.starts.filter((at) => run.now() - at < guard.RESTART_WINDOW).length
         const loaded = run.module && !run.module.error ? run.module : null
-        const { watchers, hooks } = loadDaemonConfig(run.io.env, loaded ? { path: loaded.path, names: run.team.watchers.map((watcher) => watcher.name) } : undefined)
+        const { watchers, hooks } = loadDaemonConfig(run.io.env, loaded ? declaredIn(run, loaded) : undefined)
         const running = launchd.loaded(name)
         const watching = loaded ? await moduleWatchers(run) : []
         // The module's sync, by name, and which host holds its lease. Its secrets aren't read: status runs where they aren't.
         const syncHolder = loaded && run.team.sync.length ? ((await run.team.backend.leases?.holder('sync'))?.holder ?? null) : null
         const syncing = loaded ? run.team.sync.map((each) => ({ key: each.key, type: each.type, env: each.env, holder: syncHolder })) : []
-        const module = run.module ? { path: run.module.path, ...(run.module.error ? { error: run.module.error.toJSON() } : {}), watchers: watching, sync: syncing } : null
+        const sending = loaded ? await moduleHooks(run) : []
+        const module = run.module ? { path: run.module.path, ...(run.module.error ? { error: run.module.error.toJSON() } : {}), watchers: watching, sync: syncing, ...(sending.length ? { hooks: sending } : {}) } : null
         // A module watcher nothing holds is declared and not running: the module may be fine, and nothing hosts it.
         const idle = watching.filter((watcher) => watcher.holder === null)
         return print(run, { installed: running, parked: kept.parked ? { ...kept.parked, retry: guard.retryAt(kept.parked) } : null, starts: recent, module, watchers: watchers.map((watcher) => watcher.name), hooks: hooks.map((hook) => hook.name) }, () =>
@@ -1209,7 +1234,8 @@ const commands: Record<string, Command> = {
             ...(run.module ? [`module    ${run.module.path}${run.module.error ? `  not loaded: ${run.module.error.message}` : ''}`] : []),
             ...watching.map((watcher) => `watch     ${watcher.name}  ${tailText(watcher.tail)}${watcher.as ? `  as ${watcher.as}` : ''}  ${watcher.holder ? `held by ${watcher.holder}` : 'not running'}  ${watcher.lag === null ? 'not started' : `lag ${watcher.lag}${watcher.lag >= LAG_PAGE ? '+' : ''}`}`),
             ...syncing.map((each) => `sync      ${each.key}  ${each.type}${each.env.length ? `  reads ${each.env.join(' ')}` : ''}  ${each.holder ? `held by ${each.holder}` : 'not running'}`),
-            ...(idle.length ? [`warning   declared but not started: ${idle.map((watcher) => watcher.name).join(' ')}. Run mu daemon run or mu serve with this module, or start() it in your own process.`] : []),
+            ...sending.map((hook) => `hook      ${hook.name}  ${new URL(hook.url).host}  ${tailText(hook.tail)}  ${hook.holder ? `held by ${hook.holder}` : 'not running'}  ${hook.lag === null ? 'not started' : `lag ${hook.lag}${hook.lag >= LAG_PAGE ? '+' : ''}`}`),
+            ...(idle.length || (sending.length && !sending[0]!.holder) ? [`warning   declared but not started: ${[...idle.map((watcher) => watcher.name), ...(sending.length && !sending[0]!.holder ? sending.map((hook) => hook.name) : [])].join(' ')}. Run mu daemon run or mu serve with this module, or start() it in your own process.`] : []),
             `watchers  ${watchers.length ? watchers.map((watcher) => watcher.name).join(' ') : 'none'}  ${watchersPath()}`,
             `hooks     ${hooks.length ? hooks.map((hook) => hook.name).join(' ') : 'none'}  ${hooksPath()}`,
           ].join('\n'),

@@ -6,6 +6,9 @@ import type { FeedEvent, Filter } from '../core/reads.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { kindsValid } from '../model.ts'
+import { isEnv, nameOf, type Env } from '../config/env.ts'
+import { checkFilter } from '../watch/watch.ts'
+import { holdLease, LEASE_TTL, type Held } from './lease.ts'
 
 /**
  * An outgoing webhook, from the operator's config file: what to listen for and where to send it. Like
@@ -62,32 +65,84 @@ export function loadHooks(path = hooksPath()): Hook[] {
   if (!Array.isArray(list)) throw new Failure('invalid_config', `${path} needs a "hooks" array.`)
   const names = new Set<string>()
   return list.map((entry: Partial<Hook> | null, index) => {
-    const name = entry?.name
-    if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(name)) throw new Failure('invalid_config', `Hook ${index + 1} in ${path} needs a "name" of lowercase letters, numbers, ".", "_" and "-".`)
-    if (names.has(name)) throw new Failure('invalid_config', `Two hooks in ${path} are named "${name}".`)
-    names.add(name)
-    let url: URL
-    try {
-      url = new URL(String(entry?.url))
-    } catch {
-      throw new Failure('invalid_config', `Hook "${name}" in ${path} needs a "url".`)
-    }
-    // A delivery can carry what the board says, and a signature proves who sent it, not that nobody read it.
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) throw new Failure('invalid_config', `Hook "${name}" in ${path} needs an https URL. Plain http is only for this machine.`)
-    if (url.username || url.password) throw new Failure('invalid_config', `Hook "${name}" in ${path} has a password in its URL. The signature is how a receiver knows it is you.`)
     const secret = entry?.secret
-    if (typeof secret !== 'string' || !/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(secret)) throw new Failure('invalid_config', `"secret" of hook "${name}" in ${path} names an environment variable: "env:NAME".`)
-    const body = entry?.body ?? 'pointer'
-    if (body !== 'pointer' && body !== 'event') throw new Failure('invalid_config', `"body" of hook "${name}" in ${path} is "pointer" or "event".`)
-    const tail = entry?.tail ?? {}
-    if (typeof tail !== 'object' || Array.isArray(tail)) throw new Failure('invalid_config', `"tail" of hook "${name}" in ${path} is a filter, as an object.`)
-    if (tail.kinds !== undefined && !kindsValid(tail.kinds)) throw new Failure('invalid_config', `"kinds" of hook "${name}" in ${path} is a list of hold kinds, each with "!" in front to leave it out.`)
-    return { name, url: url.href, secret: secret.slice(4), tail, body }
+    const hook = checkHook(entry, index, names, { where: path, fail: (why) => new Failure('invalid_config', why), filter: (name, tail) => {
+      if (typeof tail !== 'object' || tail === null || Array.isArray(tail)) throw new Failure('invalid_config', `"tail" of hook "${name}" in ${path} is a filter, as an object.`)
+      if ((tail as Filter).kinds !== undefined && !kindsValid((tail as Filter).kinds)) throw new Failure('invalid_config', `"kinds" of hook "${name}" in ${path} is a list of hold kinds, each with "!" in front to leave it out.`)
+      return tail as Filter
+    } })
+    if (typeof secret !== 'string' || !/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(secret)) throw new Failure('invalid_config', `"secret" of hook "${hook.name}" in ${path} names an environment variable: "env:NAME".`)
+    return { ...hook, secret: secret.slice(4) }
   })
 }
 
+/** An outgoing webhook as `board({ hooks })` takes it: a `hooks.json` entry, with its secret named by `env()`. */
+export type HookOptions = {
+  name: string
+  url: string
+  /** The environment variable that holds the signing secret: `env('AUDIT_SECRET')`. Read when the host starts. */
+  secret: Env
+  /** What to send: a filter like `mu tail`'s. Left out, every event. */
+  tail?: Filter
+  /** What a delivery carries. Default `pointer`. */
+  body?: 'pointer' | 'event'
+}
+
+const HOOK_KEYS = new Set(['name', 'url', 'secret', 'tail', 'body'])
+/** Where a module's hooks are, as their errors say. */
+export const IN_CODE = 'board({ hooks })'
+
+/** Hooks in code and a `hooks.json` at once would be two lists of one thing, sent by two hosts under two leases: refused. */
+export function hooksFileClash(where = IN_CODE): Failure | null {
+  if (!existsSync(hooksPath())) return null
+  return new Failure('invalid_config', `${where} declares outgoing webhooks, and ${hooksPath()} is there too.`, { hint: "Keep hooks in one place: move each entry into board({ hooks }), with secret: env('NAME') for \"env:NAME\", and delete hooks.json." })
+}
+
+/**
+ * Checks the hooks given to `board()` when it is called, by the rules `hooks.json` keeps, so a bad one
+ * is the module's mistake, said once with its name. The secret is kept as the name of its variable.
+ */
+export function checkHooks(hooks: unknown): Hook[] {
+  if (hooks === undefined) return []
+  const fail = (why: string) => new Failure('invalid_hook', why, { exit: 2 })
+  if (!Array.isArray(hooks)) throw fail("`hooks` is a list of outgoing webhooks: [{ name, url, secret: env('NAME'), tail }].")
+  const names = new Set<string>()
+  return hooks.map((entry: unknown, index) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw fail(`Hook ${index + 1} in ${IN_CODE} is not an object: { name, url, secret, tail }.`)
+    const hook = checkHook(entry as Partial<Hook>, index, names, { where: IN_CODE, fail, filter: (name, tail) => checkFilter(name, tail, (why) => fail(`Hook "${name}" ${why}`)) })
+    for (const key of Object.keys(entry)) if (!HOOK_KEYS.has(key)) throw fail(`Hook "${hook.name}" in ${IN_CODE} has "${key}", which a hook doesn't take. It takes ${[...HOOK_KEYS].join(', ')}.`)
+    const secret = (entry as { secret?: unknown }).secret
+    if (!isEnv(secret)) throw fail(`"secret" of hook "${hook.name}" in ${IN_CODE} names an environment variable with env(): secret: env('${typeof secret === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(secret) ? secret : 'NAME'}'). The secret itself is never in the module.`)
+    return { ...hook, secret: nameOf(secret) }
+  })
+}
+
+type Rules = { where: string; fail: (why: string) => Failure; filter: (name: string, tail: unknown) => Filter }
+
+/** What a hook needs wherever it is declared: a name of its own, a URL that keeps what it carries private, a filter and a body. */
+function checkHook(entry: Partial<Hook> | null, index: number, names: Set<string>, rules: Rules): Omit<Hook, 'secret'> {
+  const { where, fail } = rules
+  const name = entry?.name
+  if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(name)) throw fail(`Hook ${index + 1} in ${where} needs a "name" of lowercase letters, numbers, ".", "_" and "-".`)
+  if (names.has(name)) throw fail(`Two hooks in ${where} are named "${name}".`)
+  names.add(name)
+  let url: URL
+  try {
+    url = new URL(String(entry?.url))
+  } catch {
+    throw fail(`Hook "${name}" in ${where} needs a "url".`)
+  }
+  // A delivery can carry what the board says, and a signature proves who sent it, not that nobody read it.
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) throw fail(`Hook "${name}" in ${where} needs an https URL. Plain http is only for this machine.`)
+  if (url.username || url.password) throw fail(`Hook "${name}" in ${where} has a password in its URL. The signature is how a receiver knows it is you.`)
+  const body = entry?.body ?? 'pointer'
+  if (body !== 'pointer' && body !== 'event') throw fail(`"body" of hook "${name}" in ${where} is "pointer" or "event".`)
+  const tail = rules.filter(name, entry?.tail ?? {})
+  return { name, url: url.href, tail, body }
+}
+
 /** Reads each hook's secret from the environment. One that is missing or short is a config error, not an unsigned send. */
-export function armHooks(hooks: Hook[], env: NodeJS.ProcessEnv = process.env, path = hooksPath()): ArmedHook[] {
+export function armHooks(hooks: Hook[], env: NodeJS.ProcessEnv = process.env, path: string = hooksPath()): ArmedHook[] {
   return hooks.map((hook) => {
     const key = env[hook.secret]
     if (!key) throw new Failure('invalid_config', `${hook.secret} isn't set, and hook "${hook.name}" in ${path} signs with it.`)
@@ -188,4 +243,89 @@ export async function runHook(team: Board, hook: ArmedHook, state: HookState, de
   }
   if (reached > cursor) await team.cursorSet(name, reached)
   return out
+}
+
+/** The lease a board module's hooks are sent under: one host sends them all, so each goes out once, in order. */
+export const HOOKS_LEASE = 'hooks'
+
+export type HostHooksOptions = {
+  log: (line: string) => void
+  /** The `hooks` lease, in milliseconds: how long it lasts unrenewed, how often it is renewed, how often a waiting host looks. */
+  lease?: { ttl?: number; every?: number; wait?: number }
+  /** Milliseconds between passes. */
+  interval?: number
+  deps?: Partial<HookDeps>
+}
+
+/**
+ * Sends a board module's hooks while this process holds the `hooks` lease, and stands by while another
+ * holds it, ready to take over when that one stops renewing. Each pass is `runHook` for each hook, in
+ * the order given: the same deliveries, signatures, tries and order as hooks the daemon sends from
+ * `hooks.json`. Nothing it meets ends it but a stop.
+ */
+export async function hostHooks(team: Board, hooks: ArmedHook[], stop: AbortSignal, options: HostHooksOptions): Promise<void> {
+  const leases = team.backend.leases
+  if (!leases || hooks.length === 0) return
+  const { log } = options
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      if (stop.aborted) return resolve()
+      const timer = setTimeout(done, ms)
+      function done() {
+        clearTimeout(timer)
+        stop.removeEventListener('abort', done)
+        resolve()
+      }
+      stop.addEventListener('abort', done)
+    })
+  const deps: HookDeps = { now: () => Date.now(), fetch, ...options.deps }
+  // What each hook has been through since this host started, and the notes it wrote: kept across leases, as the daemon keeps them across ticks.
+  const states = new Map<string, HookState>()
+  const notes = new Set<number>()
+  let said = ''
+  const fail = (error: unknown) => {
+    const message = (error as Error).message
+    if (message !== said) log(`error     hooks  ${message}`)
+    said = message
+  }
+  while (!stop.aborted) {
+    let held: Held | null = null
+    try {
+      held = await holdLease(leases, HOOKS_LEASE, { ...options.lease, sleep, stop })
+    } catch (error) {
+      fail(error)
+      await sleep(1000)
+      continue
+    }
+    if (!held) {
+      // Another host sends them. Look again once its lease could have lapsed.
+      await sleep(options.lease?.ttl ?? LEASE_TTL)
+      continue
+    }
+    try {
+      while (!stop.aborted) {
+        if (held.lost()) {
+          log('lost      hooks  another host sends them now')
+          break
+        }
+        for (const hook of hooks) {
+          if (stop.aborted || held.lost()) break
+          let state = states.get(hook.name)
+          if (!state) states.set(hook.name, (state = { attempts: 0, retryAt: -Infinity }))
+          try {
+            const result = await runHook(team, hook, state, deps, notes)
+            said = ''
+            if (result.sent.length) log(`sent      hook ${hook.name}  ${result.sent.length}`)
+            if (result.failed.length) log(`failed    hook ${hook.name}  at ${result.failed[0]}  ${result.why}`)
+            if (result.dropped.length) log(`dropped   hook ${hook.name}  ${result.dropped.join(' ')}  ${result.why}`)
+          } catch (error) {
+            fail(error)
+          }
+        }
+        await sleep(options.interval ?? 1000)
+      }
+    } finally {
+      await held.release()
+    }
+  }
 }
