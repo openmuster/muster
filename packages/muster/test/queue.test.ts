@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -19,12 +19,15 @@ const sign = (body: string) => createHmac('sha256', SECRET).update(body).digest(
  * daemon tick as `mu serve` runs it. Watcher commands are real subprocesses running the template's scripts
  * through a `mu` that is this CLI; only Linear's API and the cloud workers are stand-ins.
  */
-function setup(options: { mu?: string } = {}) {
+function setup(options: { mu?: (dir: string) => string } = {}) {
   const dir = tempDir()
   const bin = join(dir, 'bin')
   mkdirSync(bin)
-  writeFileSync(join(bin, 'mu'), options.mu ?? `#!/bin/sh\nexec ${process.execPath} ${BIN} "$@"\n`)
+  writeFileSync(join(bin, 'mu'), options.mu?.(dir) ?? `#!/bin/sh\nexec ${process.execPath} ${BIN} "$@"\n`)
   chmodSync(join(bin, 'mu'), 0o755)
+  // This machine's workflows.json, which answer.sh reads its workers' settings from.
+  mkdirSync(join(dir, 'config'))
+  copyFileSync(join(queue, 'workflows.json'), join(dir, 'config', 'workflows.json'))
   const sent: { query: string; variables: any }[] = []
   // What Linear's API lists on catching up: issues and comments changed since a time, all on one page.
   const listed = { issues: [] as Record<string, any>[], comments: [] as Record<string, any>[] }
@@ -260,7 +263,7 @@ describe('the queue template: a card starts a run', () => {
   }, 30_000)
 
   it('leaves the label and says so once, off Linear, when the request fails', async () => {
-    const mu = `#!/bin/sh\nif [ "$1" = workflow ]; then echo 'error: the board is busy' >&2; exit 1; fi\nexec ${process.execPath} ${BIN} "$@"\n`
+    const mu = () => `#!/bin/sh\nif [ "$1" = workflow ]; then echo 'error: the board is busy' >&2; exit 1; fi\nexec ${process.execPath} ${BIN} "$@"\n`
     const { team, lin, tick, requests, ran, sent } = setup({ mu })
     await tick()
     await lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
@@ -276,5 +279,83 @@ describe('the queue template: a card starts a run', () => {
     expect(said[0]!.noSync).toBe(true)
     expect(said[0]!.text).toContain(`mu label ${thread.message.id} --unset started`)
     expect(sent.filter((each) => each.query.includes('commentCreate'))).toEqual([])
+  }, 30_000)
+})
+
+describe('the queue template: a blocked task', () => {
+  /**
+   * A card's run with its spec task claimed by a worker and blocked on a question. `mu run` is the stand-in for
+   * a sandbox: it notes how it was called and claims the task, after another worker when TAKEN is set.
+   */
+  async function blocked() {
+    const mu = (dir: string) =>
+      `#!/bin/sh\nif [ "$1" = run ]; then\n  printf '%s\\n' "$*" >> ${dir}/runs.txt\n  if [ -n "\${TAKEN:-}" ]; then ${process.execPath} ${BIN} tasks claim "$2" --as agent-1 >/dev/null; fi\n  exec ${process.execPath} ${BIN} tasks claim "$2" --as stand-in --json\nfi\nexec ${process.execPath} ${BIN} "$@"\n`
+    const made = setup({ mu })
+    await made.tick()
+    await made.lin({ type: 'Issue', action: 'create', data: issue({ labels: [{ name: 'Agent' }] }) })
+    await made.tick()
+    const run = `cards/card-${(await made.requests())[0]!.seq}`
+    const tasks = (await made.team.taskList({ channel: run, state: 'all' })).tasks
+    const spec = tasks.find((task) => task.labels.role === 'spec')!
+    const claimed = await made.team.as('agent-1').taskClaim({ id: spec.id })
+    await made.team.as('agent-1').taskBlock({ id: spec.id, token: claimed.token, kind: 'needs_input', reason: 'SSO or password first? -> SSO, I recommend it' })
+    const answer = (args: string[], env: Record<string, string> = {}) =>
+      new Promise<{ code: number; stdout: string; stderr: string }>((done) =>
+        execFile(join(queue, 'answer.sh'), args, { env: { ...watcherEnv({}, [], made.daemonEnv), ...env } }, (error, stdout, stderr) => done({ code: error ? Number(error.code) : 0, stdout, stderr })),
+      )
+    const runs = () => (existsSync(join(made.dir, 'runs.txt')) ? readFileSync(join(made.dir, 'runs.txt'), 'utf8') : '')
+    return { ...made, spec, tasks, answer, runs }
+  }
+  const notified = (dir: string) => (existsSync(join(dir, 'notified.txt')) ? readFileSync(join(dir, 'notified.txt'), 'utf8') : '')
+
+  it("pings you with the task's ID and nothing it says, through NOTIFY_CMD", async () => {
+    const { dir, tick, spec } = await blocked()
+    await tick()
+    expect(notified(dir)).toBe(`card task ${spec.id} is blocked. Read it: mu read ${spec.id}. Answer: answer.sh ${spec.id} <text>\n`)
+  }, 30_000)
+
+  it('pings nobody for a task blocked outside cards/', async () => {
+    const { dir, team, tick } = setup()
+    await tick()
+    const { task } = await team.taskCreate({ channel: 'ops', text: 'rotate the keys' })
+    await team.taskBlock({ id: task.id, kind: 'needs_input', reason: 'which keys?' })
+    await tick()
+    expect(notified(dir)).toBe('')
+  }, 30_000)
+
+  it('answers: your reply on the task, the task unblocked, and a sandbox worker on it with the workflow\'s settings', async () => {
+    const { team, spec, answer, runs } = await blocked()
+    const done = await answer([String(spec.id), 'SSO first'])
+    expect(done).toMatchObject({ code: 0, stdout: `answered #${spec.id}, and ran it\n` })
+    expect(runs()).toBe(`run ${spec.id} --runner vercel --agent claude --as agent-answer --repo https://github.com/your-org/your-repo --push --timeout 45m --json\n`)
+    const thread = await team.readThread({ id: spec.id })
+    expect(thread.replies.map((reply) => [reply.text, reply.by.profile])).toContainEqual(['SSO first', null])
+    expect(thread.task).toMatchObject({ state: 'claimed', claim: { by: expect.objectContaining({ profile: 'stand-in' }) } })
+  }, 30_000)
+
+  it("counts a worker of the run taking the task first as done", async () => {
+    const { team, spec, answer } = await blocked()
+    const done = await answer([String(spec.id), 'SSO first'], { TAKEN: '1' })
+    expect(done).toMatchObject({ code: 0, stdout: `answered #${spec.id}; a worker of its run took it first\n` })
+    expect((await team.readThread({ id: spec.id })).task).toMatchObject({ state: 'claimed', claim: { by: expect.objectContaining({ profile: 'agent-1' }) } })
+  }, 30_000)
+
+  it("passes the board's refusal on when run as a profile: only the owner with none may unblock the run's tasks", async () => {
+    const { team, spec, answer, runs } = await blocked()
+    const done = await answer([String(spec.id), 'SSO first'], { MUSTER_PROFILE: 'me' })
+    expect(done.code).not.toBe(0)
+    expect(done.stderr).toContain("isn't yours to change")
+    expect((await team.readThread({ id: spec.id })).task!.state).toBe('blocked')
+    expect(runs()).toBe('')
+  }, 30_000)
+
+  it('says a task that is not blocked is not, and does nothing to it', async () => {
+    const { team, tasks, answer, runs } = await blocked()
+    const work = tasks.find((task) => task.labels.role === 'work')!
+    const done = await answer([String(work.id), 'go on'])
+    expect(done.code).toBe(1)
+    expect(done.stderr).toBe(`task ${work.id} is waiting, not blocked: nothing done\n`)
+    expect((await team.readThread({ id: work.id })).replies).toEqual([])
+    expect(runs()).toBe('')
   }, 30_000)
 })
