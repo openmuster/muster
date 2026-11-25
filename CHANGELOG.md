@@ -3,6 +3,17 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Added
+
+- Sync with Notion: `notion({ secret, token, databases })` maps a database to
+  a channel. A page is a thread (its title and text, its Status the `state`
+  label) and its comments are replies, both ways; edits and deletes follow,
+  and a board that was down catches up. Notion's webhooks say only what
+  changed, so each is read from Notion's API on the ticker, after the webhook
+  is answered. See [Notion](./packages/muster/docs/02-sync/05-notion.md).
+
 ## 0.3.1-alpha.1
 
 ### Added

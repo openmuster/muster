@@ -36,6 +36,11 @@ export type Inbound = {
    * (a retry, or one held up) and is skipped. Without it, an event is applied in the order it arrived.
    */
   updated?: string
+  /**
+   * A platform whose webhooks say only what changed, not what it now says (Notion's), marks the event `unread`:
+   * its provider's `read` fills it in on the ticker, before it is imported, while the webhook was answered at once.
+   */
+  unread?: true
   /** Whether the app itself wrote it: its own echoes are never imported. */
   self?: boolean
   /**
@@ -101,6 +106,11 @@ export type ProviderExtras = {
   filesPerDay?: number
   /** Fetches a file an event named, from the platform's own file host only. Throws a Failure: `file_refused` is final. */
   download?(file: Remote, fetcher: typeof fetch, limit: Limit): Promise<{ bytes: Buffer; type?: string }>
+  /**
+   * Reads what an `unread` event is about from the platform: the events to import in its place, none to drop it.
+   * Runs on the ticker; a throw is tried again on a later tick, a few times.
+   */
+  read?(event: Inbound, fetcher: typeof fetch): Promise<Inbound[]>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */
   filter?(text: string): string | null
 }

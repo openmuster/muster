@@ -1,4 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { Failure } from '../failure.ts'
 import { channelPath } from '../model.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
@@ -845,6 +848,241 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
         }
       }
       return { external: `${channel}:${made.ts}`, ...(target.threadExternal === null ? { thread: `${channel}:${made.ts}` } : {}), ...(uploaded.length ? { files: uploaded.map((file) => file.id) } : {}) }
+    },
+  }
+}
+
+/** Catch-up reads at most this many pages of each Notion database, of 100 each. */
+const NOTION_CATCHUP_PAGES = 10
+/** The most of a page a thread's first message holds: the rest is on Notion, a link away. */
+const NOTION_TEXT_MAX = 9_000
+/** Notion takes at most 2,000 characters in one rich text item, and 100 items in a comment. */
+const NOTION_RICH_MAX = 2_000
+
+export type NotionOptions = SyncOptions & {
+  /** The integration's own bot user ID, so what it writes isn't imported back. */
+  bot?: string
+  /**
+   * A Notion database to a board channel, by its data source ID (or, on an older workspace, the database's own ID),
+   * with or without dashes. Two-way unless `mirror: false`.
+   */
+  databases: Record<string, string | { channel: string; mirror?: boolean }>
+  api?: string
+  /** The `Notion-Version` its API is asked with. */
+  version?: string
+}
+
+/**
+ * Notion: each page of a mapped database is a thread, its title and text the first message and its Status the
+ * `state` label, and its comments are replies, both ways. Notion's webhooks say only what changed, so each event
+ * is read from Notion's API on the ticker before it is imported. `secret` is the subscription's verification
+ * token, which Notion signs every delivery with.
+ */
+export const notion = (options: NotionOptions): Provider => declared('notion', options, notionWith)
+
+/** A Notion ID as one form: lowercase, without dashes, so a database named either way is the same one. */
+const notionId = (id: unknown) => String(id ?? '').replace(/-/g, '').toLowerCase()
+
+/** Where a Notion subscription's one-time verification token is written for the operator, and nowhere else. */
+export const notionTokenFile = () => join(process.env.MUSTER_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'muster'), 'notion-verification-token')
+
+function notionWith(options: Resolved<NotionOptions>): Provider {
+  const api = (options.api ?? 'https://api.notion.com/v1').replace(/\/$/, '')
+  const databases = new Map(Object.entries(options.databases).map(([id, to]) => [notionId(id), to]))
+  const call = (fetcher: typeof fetch, path: string, init: { method?: string; body?: unknown } = {}) => {
+    if (!options.token) throw new Failure('platform_refused', 'The Notion sync has no token to read Notion with.')
+    return send(fetcher, `${api}${path}`, {
+      method: init.method ?? 'GET',
+      headers: { authorization: `Bearer ${options.token}`, 'notion-version': options.version ?? '2026-03-11', ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    })
+  }
+  const plain = (rich: unknown) => (Array.isArray(rich) ? rich.map((each: any) => String(each?.plain_text ?? each?.text?.content ?? '')).join('') : '')
+  /** Text as Notion's rich text, in items it takes, as much of it as a comment can hold. */
+  const rich = (text: string) => {
+    const out: { text: { content: string } }[] = []
+    for (let at = 0; at < text.length && out.length < 100; at += NOTION_RICH_MAX) out.push({ text: { content: text.slice(at, at + NOTION_RICH_MAX) } })
+    return out.length ? out : [{ text: { content: ' ' } }]
+  }
+  /** The database a page is in, as this sync names it: its data source, or its database on an older workspace. */
+  const placeOf = (page: Record<string, any>) => {
+    const parent = page.parent ?? {}
+    for (const id of [parent.data_source_id, parent.database_id]) if (id && databases.has(notionId(id))) return notionId(id)
+    return null
+  }
+  const titleOf = (page: Record<string, any>) => {
+    for (const property of Object.values(page.properties ?? {}) as any[]) if (property?.type === 'title') return plain(property.title).trim()
+    return ''
+  }
+  /** Its Status, or a select called Status, as the thread's `state` label. */
+  const stateOf = (page: Record<string, any>) => {
+    for (const [name, property] of Object.entries(page.properties ?? {}) as [string, any][]) {
+      const value = property?.type === 'status' ? property.status?.name : property?.type === 'select' && /^status$/i.test(name) ? property.select?.name : undefined
+      if (typeof value === 'string' && value) return slug(value)
+    }
+    return undefined
+  }
+  const byOf = (who: any) => String(who?.id ?? '')
+  const selfOf = (who: any) => options.bot !== undefined && who?.id !== undefined && notionId(who.id) === notionId(options.bot)
+  /** A page as a thread's first message: its title, a blank line, its text as markdown, cut to what a message holds. */
+  const pageText = async (page: Record<string, any>, fetcher: typeof fetch) => {
+    const body = await call(fetcher, `/pages/${page.id}/markdown`).then((answer) => String(answer?.markdown ?? ''), () => '')
+    const text = `${titleOf(page)}\n\n${body}`.trim()
+    return text.length > NOTION_TEXT_MAX ? `${text.slice(0, NOTION_TEXT_MAX)}\n\n… the rest is on Notion: ${String(page.url ?? '')}` : text
+  }
+  const pageLabels = (page: Record<string, any>) => {
+    const state = stateOf(page)
+    return { kind: 'page', ...(typeof page.url === 'string' ? { ref: page.url.slice(0, 256) } : {}), ...(state ? { state } : {}) }
+  }
+  /** What a page is now, as the first message of a thread the board may not have yet. */
+  const parentOf = async (page: Record<string, any>, fetcher: typeof fetch) => ({ author: byOf(page.created_by), text: await pageText(page, fetcher), labels: pageLabels(page) })
+  const isVerification = (body: string) => {
+    try {
+      const parsed = JSON.parse(body)
+      return parsed !== null && typeof parsed === 'object' && Object.keys(parsed).length === 1 && typeof parsed.verification_token === 'string' && /^secret_[A-Za-z0-9]{10,200}$/.test(parsed.verification_token)
+    } catch {
+      return false
+    }
+  }
+  return {
+    type: 'notion',
+    verify({ headers, body }) {
+      const signature = headers['x-notion-signature']
+      // The one request Notion can't sign: the token it will sign with, sent once, to be pasted back into Notion.
+      if (signature === undefined && isVerification(body)) return
+      if (!same(signature ?? '', `sha256=${hmac(options.secret, body)}`)) throw bad()
+    },
+    challenge({ headers, body }) {
+      if (headers['x-notion-signature'] !== undefined || !isVerification(body)) return null
+      // Written for the operator alone, never answered or logged. Anyone can send one: a token Notion didn't send
+      // fails when it is pasted into Notion's Verify, so check it there before using it as the secret.
+      const file = notionTokenFile()
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, `${JSON.parse(body).verification_token}\n`, { mode: 0o600 })
+      return 'ok'
+    },
+    parse({ body }) {
+      const payload = JSON.parse(body) as Record<string, any>
+      const type = String(payload.type ?? '')
+      const entity = payload.entity ?? {}
+      const data = payload.data ?? {}
+      const author = payload.authors?.[0]
+      // Known by Notion's own ID for the event: a retry carries the same one.
+      const base = { id: `notion:${payload.id}`, author: byOf(author), place: '', self: selfOf(author), unread: true as const, ...(typeof payload.timestamp === 'string' ? { updated: payload.timestamp } : {}) }
+      const page = `page:${notionId(entity.id)}`
+      if (type === 'page.created' || type === 'page.undeleted') return [{ ...base, kind: 'root', thread: page, external: page }]
+      if (type === 'page.content_updated') return [{ ...base, kind: 'edit', thread: page, external: page }]
+      if (type === 'page.properties_updated') return [{ ...base, kind: 'labels', thread: page, external: base.id }]
+      if (type === 'page.deleted') return [{ ...base, kind: 'delete', thread: page, external: page }]
+      if (type.startsWith('comment.') && data.page_id) {
+        const kind = type === 'comment.created' ? 'reply' : type === 'comment.updated' ? 'edit' : type === 'comment.deleted' ? 'delete' : null
+        if (kind) return [{ ...base, kind, thread: `page:${notionId(data.page_id)}`, external: `comment:${notionId(entity.id)}` }]
+      }
+      return []
+    },
+    async read(event, fetcher) {
+      const pageId = event.thread.replace(/^page:/, '')
+      const page = await call(fetcher, `/pages/${pageId}`)
+      const place = placeOf(page)
+      // A page in a database this sync doesn't map is none of the board's.
+      if (place === null) return []
+      const at = typeof page.last_edited_time === 'string' ? page.last_edited_time : event.updated
+      const read: Inbound = { ...event, place, ...(at ? { updated: at } : {}) }
+      // A delete is put down to when Notion sent it: nothing is left on Notion to say when it went.
+      if (event.kind === 'delete') return [{ ...read, ...(event.updated ? { updated: event.updated } : {}) }]
+      if (!event.external.startsWith('comment:')) {
+        const text = await pageText(page, fetcher)
+        if (event.kind === 'root') return [{ ...read, author: byOf(page.created_by), self: selfOf(page.created_by), text, labels: pageLabels(page) }]
+        const parent = { parent: { author: byOf(page.created_by), text, labels: pageLabels(page) } }
+        // Its text now, as an edit of the thread's first message, and its Status now, as a label. The edit carries no
+        // time: it is what Notion says now, so it can't be older than what the board has, and the label, kept under the
+        // same thread, is the one a late event must not undo.
+        const { updated: _, ...untimed } = read
+        return [
+          { ...untimed, kind: 'edit', external: event.thread, author: byOf(page.last_edited_by), self: selfOf(page.last_edited_by), text, ...parent },
+          { ...read, id: `${event.id}:labels`, kind: 'labels', external: `${event.id}:labels`, labels: pageLabels(page), ...parent },
+        ]
+      }
+      const comment = await call(fetcher, `/comments/${event.external.replace(/^comment:/, '')}`)
+      // A comment's own time, not its page's: an edit is newer than the comment it changes, whatever the page did.
+      const changed = typeof comment.last_edited_time === 'string' ? comment.last_edited_time : event.updated
+      return [{ ...read, ...(changed ? { updated: changed } : {}), author: byOf(comment.created_by), self: selfOf(comment.created_by), text: plain(comment.rich_text), parent: await parentOf(page, fetcher) }]
+    },
+    channelFor(place) {
+      const to = databases.get(notionId(place))
+      const channel = typeof to === 'string' ? to : to?.channel
+      return channel ? channelPath(channel) : null
+    },
+    placeFor(channel) {
+      for (const [id, to] of databases) if ((typeof to === 'string' ? to : to.channel) === channel) return id
+      return null
+    },
+    mirrors(place) {
+      const to = databases.get(notionId(place))
+      return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
+    },
+    async update(external, text, _place, fetcher) {
+      if (!external.startsWith('comment:')) return
+      await call(fetcher, `/comments/${external.slice('comment:'.length)}`, { method: 'PATCH', body: { rich_text: rich(text) } })
+    },
+    async remove(external, _place, fetcher) {
+      if (!external.startsWith('comment:')) return
+      await call(fetcher, `/comments/${external.slice('comment:'.length)}`, { method: 'DELETE' })
+    },
+    async catchUp(since, fetcher) {
+      if (!options.token) return []
+      const out: Inbound[] = []
+      const cuts: { resume: string; skipped?: string }[] = []
+      for (const id of databases.keys()) {
+        const pages: Record<string, any>[] = []
+        let cursor: string | undefined
+        let more = false
+        for (let read = 0; read < NOTION_CATCHUP_PAGES; read++) {
+          const answer = await call(fetcher, `/data_sources/${id}/query`, { method: 'POST', body: { filter: { timestamp: 'last_edited_time', last_edited_time: { after: since } }, sorts: [{ timestamp: 'last_edited_time', direction: 'ascending' }], page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) } })
+          if (!Array.isArray(answer?.results)) throw new Failure('platform_refused', 'Notion did not list the database\'s pages.')
+          pages.push(...answer.results.filter((each: any) => each?.object === 'page'))
+          more = Boolean(answer.has_more && answer.next_cursor)
+          if (!more) break
+          cursor = String(answer.next_cursor)
+        }
+        for (const page of pages) {
+          const pageId = notionId(page.id)
+          const thread = `page:${pageId}`
+          const text = await pageText(page, fetcher)
+          const labels = pageLabels(page)
+          const edited = String(page.last_edited_time ?? '')
+          out.push({ id: `catchup:page:${pageId}`, author: byOf(page.created_by), place: id, self: selfOf(page.created_by), kind: 'root', thread, external: thread, text, labels })
+          // Its text and Status now, in case it was there before and changed while the board was down.
+          out.push({ id: `catchup:edit:${pageId}:${edited}`, author: '', place: id, kind: 'edit', thread, external: thread, text, ...(edited ? { updated: edited } : {}) })
+          out.push({ id: `catchup:state:${pageId}:${edited}`, author: '', place: id, kind: 'labels', thread, external: `catchup:state:${pageId}:${edited}`, labels, ...(edited ? { at: edited, updated: edited } : {}) })
+          const comments = await call(fetcher, `/comments?block_id=${page.id}&page_size=100`)
+          for (const comment of Array.isArray(comments?.results) ? comments.results : []) {
+            if (!(String(comment.created_time ?? '') > since)) continue
+            out.push({ id: `catchup:comment:${notionId(comment.id)}`, author: byOf(comment.created_by), place: id, self: selfOf(comment.created_by), kind: 'reply', thread, external: `comment:${notionId(comment.id)}`, text: plain(comment.rich_text), parent: { author: byOf(page.created_by), text, labels }, ...(comment.last_edited_time ? { updated: String(comment.last_edited_time) } : {}) })
+          }
+        }
+        if (more) cuts.push(cutShort(pages.map((page) => Date.parse(String(page.last_edited_time))), since, false, 0))
+      }
+      return cuts.length ? { events: out, ...soonest(cuts) } : out
+    },
+    async deliver(message, target, fetcher, read) {
+      // Notion's file uploads aren't sent yet: each file is named in the text, and stays on the board.
+      const lines = message.attachments.map((file) => (read(file.id) ? noteOut(file.name, 'the Notion sync sends no files yet') : noteOut(file.name, 'the board no longer has it')))
+      if (target.threadExternal === null) {
+        // A thread started on the board is a new page in the database, its first line the title.
+        const source = await call(fetcher, `/data_sources/${target.place}`)
+        const title = Object.entries(source?.properties ?? {}).find(([, property]: [string, any]) => property?.type === 'title')?.[0]
+        if (!title) throw new Failure('platform_refused', 'Notion did not say which property is the database\'s title.')
+        const [first, ...rest] = message.text.split('\n')
+        const body = withLines(rest.join('\n').trim(), lines)
+        const made = await call(fetcher, '/pages', { method: 'POST', body: { parent: { data_source_id: target.place }, properties: { [title]: { title: rich(first!.slice(0, NOTION_RICH_MAX)) } }, children: body ? [{ object: 'block', type: 'paragraph', paragraph: { rich_text: rich(body) } }] : [] } })
+        if (!made?.id) throw new Failure('platform_refused', 'Notion did not make the page.')
+        const thread = `page:${notionId(made.id)}`
+        return { external: thread, thread, labels: pageLabels(made) }
+      }
+      const made = await call(fetcher, '/comments', { method: 'POST', body: { parent: { page_id: target.threadExternal.replace(/^page:/, '') }, rich_text: rich(withLines(message.text, lines)) } })
+      if (!made?.id) throw new Failure('platform_refused', 'Notion did not make the comment.')
+      return { external: `comment:${notionId(made.id)}` }
     },
   }
 }
