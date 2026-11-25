@@ -272,6 +272,83 @@ answer printed by a child it left behind is heard.
 returns `{ delivered, failed, held }`, for tests. Call it once before the
 writes a test makes, so the watchers have their place.
 
+## Mounting it in a web app
+
+`team.fetch` takes a web `Request` and returns a `Response`: what `mu serve`
+serves for this board, from the same code. That covers the routes in
+[the HTTP reference](./03-http.md), the live feed, `health`, and webhooks for
+the handle's `sync`. Every request needs a token, and the key is the one
+`mu serve` uses, so a token from `mu token create` works on both and
+`mu token revoke` stops it on both. That key is kept in muster's config
+folder, so the app must run with the same `HOME` or `MUSTER_CONFIG` as the
+`mu` that made the token. There is no mode without a token.
+
+```ts app/api/board/[...path]/route.ts
+import { team } from '@/lib/board'
+
+export const GET = team.fetch, POST = team.fetch
+```
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `serve.base` | `/api/board` | The path it is mounted at. Anything outside it gets 404, including `/api/board` when the base is another path |
+| `serve.hosts` | `MUSTER_ALLOW_HOSTS` | Host names it answers for besides `127.0.0.1`, `localhost` and `[::1]`, like `mu serve --allow-host`. A request for any other `Host`, or with none, gets 403. List every name the app is reached by, preview domains included |
+| `serve.log` | standard error | Where a request that failed for a reason other than the board's own rules is described, for the owner |
+
+```ts lib/board.ts
+import { board } from 'muster'
+
+export const team = board({ serve: { base: '/team/board', hosts: ['board.example.com'] } })
+```
+
+It opens nothing until its first request. It serves only a board on this
+machine: on a handle for a board at a URL, every request gets 403. MCP over
+HTTP, `tokenExchange` and requests to join are not served here: those stay
+with `mu serve`. It runs only in Node, never on an edge runtime, because the
+board is a SQLite file. With Next.js, keep `serverExternalPackages: ['muster']`
+in `next.config.ts`, so the process has one copy of muster. If the app has a
+`proxy.ts` (or `middleware.ts`), leave the board's routes out of its
+`matcher`: Next.js reads a body that passes through it into memory and cuts
+it at 10 MB, under the board's limit for a file.
+
+### Running the watchers beside it
+
+In production, run the watchers in a process of their own: a `host.ts` that
+imports the same `team` and calls `team.start()`. A board's file is shared
+between processes, so the app and the host each open it.
+
+For development only, Next.js can start them in its own process:
+
+```ts instrumentation.ts
+export async function register() {
+  // Only in Node. With a static import an edge route builds, then fails on every request.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { team } = await import('./lib/board')
+    const host = team.start() // never await host.done here: the server would never start
+    for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130]] as const) {
+      process.once(signal, () => {
+        host.stop()
+        void host.done.finally(() => process.exit(code))
+      })
+    }
+  }
+}
+```
+
+The caveats, which are why this is for development only:
+
+- An edit to a watcher, `lib/board.ts` or `instrumentation.ts` reaches the
+  routes but not the running watchers, until the dev server restarts.
+- Watchers run on the same thread as the pages and read the board
+  synchronously, so a long catch-up delays requests.
+- Stopping cleanly needs `NEXT_MANUAL_SIG_HANDLE=1 next start`, and never
+  happens under `next dev`. Without it a run in flight can be delivered again
+  after a restart.
+- Next.js loads `instrumentation.ts` and the routes as separate copies of
+  `lib/board.ts`. `start()` keeps what it runs on `globalThis`, so a second
+  copy finds the host already running. `team.fetch` keeps nothing between
+  requests: its token list is in the board's file, so both copies agree.
+
 ## The rest
 
 | Method | For |

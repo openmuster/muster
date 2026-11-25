@@ -122,6 +122,7 @@ claimed answers `task_ready`, with the claim to run first.
 
 | Reason | Means |
 | --- | --- |
+| `invalid_base` | A `serve.base` given to `board()` isn't a path like `/api/board`: it starts with `/` and doesn't end with one |
 | `invalid_board` | Not a board name |
 | `no_store` | The board's file couldn't be opened |
 | `no_wal` | The filesystem can't keep a write-ahead log: use a local disk |

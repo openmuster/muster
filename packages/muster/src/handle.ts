@@ -1,6 +1,7 @@
 import { file, type FileOptions } from './backend/file.ts'
 import type { Backend } from './backend/types.ts'
 import type { Caller } from './model.ts'
+import { mount, type MountOptions } from './serve/fetch.ts'
 import { deliver, start, type Delivered, type Host, type StartOptions, type WatchState } from './watch/host.ts'
 import { checkWatchers, type Watch } from './watch/watch.ts'
 
@@ -14,6 +15,8 @@ export type BoardOptions = FileOptions & {
    * in the process you choose.
    */
   watch?: Record<string, Watch>
+  /** How `fetch` serves the board: the path it is mounted at, and the host names it answers for. */
+  serve?: MountOptions
 }
 
 type Bound<F> = F extends (caller: Caller, ...rest: infer A) => infer T ? (...rest: A) => T : never
@@ -29,6 +32,11 @@ export type Board = { [K in keyof Methods]: Bound<Methods[K]> } & {
   start(options?: StartOptions): Host
   /** Runs each watcher once on what it has not had yet, and says what happened. For tests. */
   deliver(): Promise<Delivered>
+  /**
+   * What `mu serve` serves for this board, as a web `Request → Response` handler: its routes, the live feed,
+   * webhooks for its sync, every request held to a token. `export const GET = team.fetch, POST = team.fetch`.
+   */
+  fetch(request: Request): Promise<Response>
   close(): void
 }
 
@@ -42,12 +50,14 @@ const METHODS = [
 
 /** A handle on a board: `board()` is the default board in `~/.muster`, as you. */
 export function board(options: BoardOptions = {}): Board {
-  const { backend: given, as: profile, watch, ...fileOptions } = options
+  const { backend: given, as: profile, watch, serve, ...fileOptions } = options
   // Checked now, so a bad watcher is the module's mistake, said once. Nothing is opened or started.
   const watchers = checkWatchers(watch)
   // Where each watcher's reading has got to, shared by start() and deliver() on this handle.
   const states = new Map<string, WatchState>()
   const backend = given ?? file(fileOptions)
+  // Opens nothing until its first request.
+  const served = mount(backend, { ...serve, ...(fileOptions.now ? { now: fileOptions.now } : {}) })
   let root: Board
   const make = (as: string | null): Board => {
     let caller: Promise<Caller> | null = null
@@ -61,6 +71,7 @@ export function board(options: BoardOptions = {}): Board {
       },
       start: (startOptions?: StartOptions) => start(root, watchers, states, startOptions),
       deliver: () => deliver(root, watchers, states),
+      fetch: served,
       close: () => backend.close(),
     } as Record<string, unknown>
     for (const name of METHODS) {

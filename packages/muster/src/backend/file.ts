@@ -85,6 +85,7 @@ export function file(options: FileOptions = {}): Backend {
   }
   const ctx = (): Context => ({ db: open(), now: options.now ?? (() => new Date()), alive: options.alive ?? sameProcess })
   /** The board's list of the tokens it made: a table in the board itself. */
+  const signingKey = () => options.key ?? boardKey(where())
   const registry = (): Registry => options.tokens ?? dbRegistry(open(), () => (options.now ?? (() => new Date()))().getTime())
   const principal = options.principal ?? `local:user:${userInfo().username.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`
 
@@ -108,6 +109,7 @@ export function file(options: FileOptions = {}): Backend {
       return { principal, profile: profile === null ? null : profileName(profile) }
     },
     registry,
+    signingKey,
     leases: {
       take: async (request) => leases.take(ctx(), request),
       renew: async (request) => leases.renew(ctx(), request),
@@ -130,14 +132,14 @@ export function file(options: FileOptions = {}): Backend {
         const joins = dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime())
         const join = joins.pending(request.code)
         if (Object.keys(request.can ?? {}).length === 0) throw misuse('invalid_token', 'Say what the agent may do: --can <channel>=read,post.')
-        const made = mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, { profile: join.profile, can: request.can, ttl: request.ttl, ...(request.noSync ? { noSync: true } : {}) }, (options.now ?? (() => new Date()))().getTime())
+        const made = mintToken(signingKey(), registry(), { principal, claims: null }, { profile: join.profile, can: request.can, ttl: request.ttl, ...(request.noSync ? { noSync: true } : {}) }, (options.now ?? (() => new Date()))().getTime())
         return { join: joins.answer(join.code, made.token), record: made.record }
       },
       deny: async (request) => ({ join: dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()).answer(request.code, null) }),
     },
     // On the board's own machine the caller is its owner, who may make any token.
     tokens: {
-      create: async (request) => mintToken(options.key ?? boardKey(where()), registry(), { principal, claims: null }, request, (options.now ?? (() => new Date()))().getTime()),
+      create: async (request) => mintToken(signingKey(), registry(), { principal, claims: null }, request, (options.now ?? (() => new Date()))().getTime()),
       list: async () => ({ tokens: registry().list((options.now ?? (() => new Date()))().getTime()) }),
       revoke: async (request) => {
         if (!registry().revoke(request.id)) throw new Failure('not_found', 'No such token.')

@@ -232,6 +232,9 @@ export function createHandler(options: ServeOptions) {
         return send(res, 200, { ok: { join: store.answer(join.code, made.token), record: made.record } })
       }
       if (route === 'feed' && req.method === 'GET') {
+        // Listened for before anything is awaited: a client that leaves while the feed is opening ends it too.
+        let open = true
+        req.on('close', () => (open = false))
         // A live feed: every matching event after a cursor, as it happens. `id:` is the cursor to come back with.
         const filter: Record<string, unknown> = {}
         for (const key of ['channel', 'by', 'mentions', 'text'] as const) if (url.searchParams.get(key)) filter[key] = url.searchParams.get(key)
@@ -245,9 +248,8 @@ export function createHandler(options: ServeOptions) {
         // Checked once before the stream opens, so a bad filter is an error and not an empty feed.
         await options.backend.events(caller, { after, filter, limit: 1 })
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
+        if (!open) return res.end()
         res.write(`: connected\n\n`)
-        let open = true
-        req.on('close', () => (open = false))
         let quiet = 0
         while (open) {
           // The token is asked about on every turn, so a feed ends when its token is revoked or runs out.
@@ -258,6 +260,7 @@ export function createHandler(options: ServeOptions) {
           }
           const page = await options.backend.events(caller, { after, filter })
           after = page.cursor
+          // Written without waiting for a slow reader to drain: what it hasn't read yet is held in memory, unbounded.
           for (const event of page.events) res.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
           quiet = page.events.length ? 0 : quiet + 1
           // A comment now and then keeps a quiet connection from being closed by whatever sits between.

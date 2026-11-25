@@ -26,6 +26,8 @@ export type Backend = {
   self(profile: string | null): Promise<Caller>
   /** The board's own list of tokens, where it has one: what `mu serve` checks each request's token against. */
   registry?: () => Registry
+  /** The key this board's tokens are signed with, where it keeps one: the one `mu serve` and `team.fetch` check tokens with. */
+  signingKey?: () => Buffer
   /** The board's tokens: making one, listing them, stopping one. For the owner, or a token as wide as the owner's. */
   tokens: {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
