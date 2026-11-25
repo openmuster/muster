@@ -81,6 +81,17 @@ Only one process ticks for a board. If `mu serve` is already running for it,
 the daemon says so and exits, and the other way round `mu serve` serves and
 leaves the ticking to the daemon.
 
+Whichever ticks holds the board's `tick` lease, a row in the board's own file
+that it renews every 5 seconds. A second process that finds the lease held
+watches it for a few seconds: if the holder renews, the second says so and
+exits. If it doesn't (the daemon was killed, and launchd has just restarted
+it), its lease lapses within 30 seconds and the new process takes over. So a
+crash costs at most half a minute of ticking, and no lock file is left to
+clear.
+
+A board at a URL is ticked by the server it is on: `mu daemon run` against
+one says so and exits 0. Run the daemon, or `mu serve`, on that machine.
+
 ## Other systems
 
 The daemon is a plain foreground command, `mu daemon run`. Under systemd or

@@ -5,6 +5,7 @@ import type { Context } from '../core/context.ts'
 import { messageFor } from '../core/context.ts'
 import * as blocks from '../core/blocks.ts'
 import * as files from '../core/files.ts'
+import * as leases from '../core/leases.ts'
 import * as messages from '../core/messages.ts'
 import * as reads from '../core/reads.ts'
 import * as schedules from '../core/schedules.ts'
@@ -106,6 +107,12 @@ export function file(options: FileOptions = {}): Backend {
       return { principal, profile: profile === null ? null : profileName(profile) }
     },
     registry,
+    leases: {
+      take: async (request) => leases.take(ctx(), request),
+      renew: async (request) => leases.renew(ctx(), request),
+      release: async (request) => leases.release(ctx(), request),
+      holder: async (name) => leases.holder(ctx(), name),
+    },
     joinStore: () => dbJoins(open(), () => (options.now ?? (() => new Date()))().getTime()),
     // On the board's own machine the caller is its owner: they answer requests to join.
     joins: {

@@ -5,7 +5,7 @@ import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { forName } from '../model.ts'
-import { takeLock } from './lock.ts'
+import { holdLease, type Held } from './lease.ts'
 import { armHooks, hooksPath, loadHooks, runHook, type ArmedHook, type Hook, type HookDeps, type HookState } from './hooks.ts'
 import { openRuns, runWorkflows, spawnWorker, type Ran, type RunDeps } from './runs.ts'
 import { loadWorkflows, workflowsPath, type Workflow } from './workflows.ts'
@@ -86,8 +86,11 @@ export const spawnCommand: Deps['spawn'] = (command, env, allow) =>
 
 export type DaemonOptions = {
   team: Board
-  /** The lock file: one per board, shared with `mu serve`, so only one process ticks. */
-  lock: string
+  /**
+   * The `tick` lease, in the board's own file and shared with `mu serve`, so only one process ticks:
+   * how long it lasts unrenewed and how often it is renewed, in milliseconds. Shorter in tests.
+   */
+  lease?: { ttl?: number; every?: number }
   watchers: Watcher[]
   /** Outgoing webhooks, with their secrets already read. */
   hooks?: ArmedHook[]
@@ -145,12 +148,12 @@ export async function tickOnce(team: Board, watchers: Watcher[], states: Map<str
 }
 
 /**
- * The board's ticker: schedules and watchers, until told to stop. Returns 'held' at once when another
- * process already ticks for this board.
+ * The board's ticker: schedules and watchers, until told to stop, while this process holds the board's
+ * `tick` lease. Returns 'held' when another process ticks for this board, or takes over from this one.
  */
 export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'held'> {
-  const lock = takeLock(options.lock)
-  if (!lock) return 'held'
+  const leases = options.team.backend.leases
+  if (!leases) throw new Failure('forbidden', `The board at ${options.team.backend.where} is ticked by the server it is on.`, { hint: 'Run the daemon on that machine, or mu serve there.' })
   const deps: Deps & HookDeps = { now: () => Date.now(), spawn: spawnCommand, fetch, ...options.deps }
   const states = new Map<string, WatchState>()
   const hooks: Hooks = { list: options.hooks ?? [], states: new Map(), deps }
@@ -167,6 +170,12 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
         }
         options.stop.addEventListener('abort', done)
       }))
+  // Taken before the first tick, and failing like opening the board would: a board that can't be opened
+  // is a start that failed, as it was with a lock file. A holder that is alive means another process
+  // ticks; one that has died (this daemon, before launchd restarted it) is waited out, then replaced.
+  const lease: Held | null = await holdLease(leases, 'tick', { ...options.lease, sleep, stop: options.stop })
+  // Told to stop while it waited is a stop, not another process ticking.
+  if (!lease) return options.stop.aborted ? 'stopped' : 'held'
   const began = deps.now()
   let steadied = !options.steady
   // Ticks that failed in a row, and the last error said: the same error is logged once, then at 2, 4, 8... in a row.
@@ -174,6 +183,12 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
   let said = ''
   try {
     while (!options.stop.aborted) {
+      // Lost only when someone else took it, after this process went longer than a lease without renewing
+      // (a machine asleep, a board too busy to write): two tickers at once is what the lease is for.
+      if (lease.lost()) {
+        options.log('lost      the tick lease: another process ticks for this board now')
+        return 'held'
+      }
       try {
         const did = await tickOnce(options.team, options.watchers, states, deps, hooks, workflows)
         failing = 0
@@ -212,6 +227,6 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
     }
     return 'stopped'
   } finally {
-    lock.release()
+    await lease.release()
   }
 }

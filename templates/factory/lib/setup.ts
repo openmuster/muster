@@ -20,9 +20,10 @@ const read = (path: string): unknown => {
 
 /**
  * What a factory needs, checked against what is on this machine now: a watcher that wakes the agent,
- * a platform to hear from, and something running the two. Each step says what to run when it isn't done.
+ * a platform to hear from, and something running the two (`ticking`: whether a process holds the
+ * board's `tick` lease). Each step says what to run when it isn't done.
  */
-export function setup(options: { config: string; board: string; channel: string }): Step[] {
+export function setup(options: { config: string; ticking: boolean; channel: string }): Step[] {
   const watchersFile = join(options.config, 'watchers.json')
   const parsed = read(watchersFile) as { watchers?: { name?: string; tail?: { channel?: string }; run?: string[] }[] } | { name?: string }[] | null
   const watchers = Array.isArray(parsed) ? parsed : (parsed?.watchers ?? [])
@@ -30,7 +31,7 @@ export function setup(options: { config: string; board: string; channel: string 
   const command = watcher?.run?.[0]
   const sync = read(join(options.config, 'sync.json')) as Record<string, { type?: string }> | null
   const platforms = Object.entries(sync ?? {}).map(([key, entry]) => `${key} (${entry.type ?? 'unknown'})`)
-  const ticking = existsSync(`${options.board}.tick.lock`)
+  const ticking = options.ticking
   return [
     {
       name: 'a watcher wakes the agent',

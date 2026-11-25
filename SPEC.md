@@ -247,7 +247,13 @@ Exit codes: 0 success, 1 failure (a `wait` that timed out included), 2 misuse,
 
 Specified as they are built: see `docs/`. Their rules in brief:
 
-- **Daemon**: one ticker under a file lock. Schedules keep a ledger of fired
+- **Daemon**: one ticker per board, holding the board's `tick` lease: a row
+  in the board's file (`leases`: name, holder, epoch, expiry, bookkeeping
+  outside the log) taken in one `BEGIN IMMEDIATE`, so of N processes taking
+  it exactly one does. The holder renews it every 5 seconds; a lease not
+  renewed for 30 seconds lapses and the next taker gets it with a higher
+  epoch. A process that finds it held waits while it may be lapsing, and
+  gives up once it sees the holder renew. Schedules keep a ledger of fired
   slots; after downtime, one catch-up per schedule within half its period.
   Watchers come from config, wake with a pointer, and advance their cursor only
   after delivery. Outgoing webhooks come from config too: one signed POST per

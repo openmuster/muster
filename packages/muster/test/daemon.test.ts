@@ -5,11 +5,10 @@ import { basename, dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FAILING_PAUSE, loadWatchers, runDaemon, tickOnce } from '../src/daemon/daemon.ts'
 import { plist } from '../src/daemon/launchd.ts'
-import { takeLock } from '../src/daemon/lock.ts'
 import { checkWrite } from '../src/daemon/check.ts'
 import { DELIVERY_ATTEMPTS, SLOWEST, gateSaysNo, type Deps, type Watcher, type WatchState } from '../src/daemon/watchers.ts'
 import { RESTART_LIMIT, RESTART_WINDOW, STEADY_AFTER, STOPPED_FOR, begin, ended, guardPath, readGuard, reset, retryAt, steady } from '../src/daemon/guard.ts'
-import { board } from '../src/index.ts'
+import { board, file, listen, mint } from '../src/index.ts'
 import { BIN, cli, cliStart, clock, memoryBoard, reason, tempDir } from './helpers.ts'
 
 const MIN = 60_000
@@ -361,21 +360,53 @@ describe('watchers', () => {
 })
 
 describe('the daemon', () => {
-  it('one process ticks per board: a second gets "held", and a lock left by a dead process is taken over', async () => {
-    const dir = tempDir()
-    const lock = join(dir, 'main.db.tick.lock')
-    const first = takeLock(lock)
-    expect(first).not.toBeNull()
-    expect(takeLock(lock)).toBeNull()
-    const { team } = memoryBoard()
+  it('one process ticks per board: a second gets "held" while the holder renews, and takes over once it stops', async () => {
+    const { team, time } = memoryBoard()
+    const leases = team.backend.leases!
+    const other = await leases.take({ name: 'tick', holder: 'other', ttl: 30_000 })
+    // The other holder renews while this one waits: it is alive, and this one gives up at once.
+    let looks = 0
+    const renewing = async () => {
+      looks += 1
+      time.advance(1000)
+      await leases.renew({ name: 'tick', holder: 'other', epoch: other.epoch, ttl: 30_000 })
+    }
+    expect(await runDaemon({ team, watchers: [], stop: new AbortController().signal, log: () => {}, sleep: renewing })).toBe('held')
+    expect(looks).toBe(1)
+    // Now it has stopped renewing (killed, say): the daemon waits out its lease, then ticks.
     const stop = new AbortController()
-    expect(await runDaemon({ team, lock, watchers: [], stop: stop.signal, log: () => {} })).toBe('held')
-    first!.release()
-    expect(existsSync(lock)).toBe(false)
-    writeFileSync(lock, JSON.stringify({ pid: 999_999, start: 'Thu Jan  1 00:00:00 1970' }))
-    const taken = takeLock(lock)
-    expect(taken).not.toBeNull()
-    taken!.release()
+    let during: Awaited<ReturnType<typeof leases.holder>> = null
+    const waiting = async (ms: number) => {
+      time.advance(ms)
+      during = await leases.holder('tick')
+      if (during && during.holder !== 'other') stop.abort()
+    }
+    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: () => {}, sleep: waiting })).toBe('stopped')
+    expect(during).toMatchObject({ epoch: other.epoch + 1, holder: expect.not.stringMatching(/^other$/) })
+    // Stopped, it lets go, so the next one needn't wait.
+    expect(await leases.holder('tick')).toBeNull()
+  })
+
+  it('a daemon that finds its lease taken over while it ran stops ticking and says so', async () => {
+    const { team, time } = memoryBoard()
+    const leases = team.backend.leases!
+    const stop = new AbortController()
+    const log: string[] = []
+    let ticks = 0
+    const sleep = async () => {
+      ticks += 1
+      if (ticks === 1) {
+        // Asleep past its lease, and someone took it meanwhile: the next renewal finds it gone.
+        time.advance(31_000)
+        expect(await leases.take({ name: 'tick', holder: 'usurper', ttl: 30_000 })).toMatchObject({ held: true })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      if (ticks > 3) stop.abort()
+    }
+    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: (line) => log.push(line), sleep, lease: { every: 5 } })).toBe('held')
+    expect([ticks, log]).toEqual([1, ['lost      the tick lease: another process ticks for this board now']])
+    // What it lost stays the other's.
+    expect(await leases.holder('tick')).toMatchObject({ holder: 'usurper' })
   })
 
   it('mu daemon run sends a due schedule, runs a watcher from the config file, and stops cleanly on SIGTERM', async () => {
@@ -396,8 +427,46 @@ describe('the daemon', () => {
     expect(ended.code).toBe(0)
     expect(readFileSync(marker, 'utf8')).toBe('2\n')
     expect(JSON.parse((await cli(dir, ['read', 'general', '--json'])).stdout).threads.map((thread: { message: { text: string } }) => thread.message.text)).toContain('due now')
-    expect(existsSync(join(dir, 'board', 'main.db.tick.lock'))).toBe(false)
-  }, 20_000)
+    // Stopped cleanly, it let go of the ticker: the next daemon needn't wait out its lease.
+    const after = file({ dir: join(dir, 'board') })
+    expect(await after.leases!.holder('tick')).toBeNull()
+    after.close()
+  }, 40_000)
+
+  it('tells a live ticker from a dead one without ps: a second daemon on a machine with no ps finds the first ticking', async () => {
+    const dir = tempDir()
+    // A PATH with nothing on it: no ps, as in a slim container image. Node is started by its full path.
+    const bare = tempDir()
+    await cli(dir, ['post', 'general', 'board exists'])
+    const daemon = cliStart(dir, ['daemon', 'run'], { PATH: bare })
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    const second = await cli(dir, ['daemon', 'run'], { env: { PATH: bare } })
+    daemon.child.kill('SIGTERM')
+    expect((await daemon.done).code).toBe(0)
+    expect([second.code, second.stdout]).toEqual([0, expect.stringMatching(/another process already ticks for this board/)])
+  }, 40_000)
+
+  it('stopped while it waits for the lease, it stops: it never says another process ticks', async () => {
+    const { team } = memoryBoard()
+    await team.backend.leases!.take({ name: 'tick', holder: 'other', ttl: 30_000 })
+    const stop = new AbortController()
+    const sleep = async () => stop.abort()
+    expect(await runDaemon({ team, watchers: [], stop: stop.signal, log: () => {}, sleep })).toBe('stopped')
+  })
+
+  it('mu daemon run on a board at a URL says the server ticks it and exits 0, so a service manager leaves it stopped', async () => {
+    const dir = tempDir()
+    const key = Buffer.alloc(32, 7)
+    const server = await listen({ backend: file({ dir: join(dir, 'served') }), key })
+    try {
+      const token = mint(key, { sub: 'local:user:ada', profile: null, exp: Math.floor(Date.now() / 1000) + 3600 })
+      const run = await cli(dir, ['daemon', 'run'], { env: { MUSTER_URL: server.url, MUSTER_TOKEN: token } })
+      expect(run.code).toBe(0)
+      expect(run.stderr).toMatch(/^error: The board at .* is ticked by the server it is on\.\n/)
+    } finally {
+      await server.close()
+    }
+  })
 
   it('a broken watchers file makes the daemon say so and exit 0, so a service manager leaves it stopped', async () => {
     const dir = tempDir()
@@ -603,7 +672,6 @@ describe('the restart guard', () => {
     const run = (team: ReturnType<typeof memoryBoard>['team'], now: () => number) =>
       runDaemon({
         team,
-        lock: join(tempDir(), 'main.db.tick.lock'),
         watchers: [],
         stop: stop.signal,
         log: (line) => log.push(line),
@@ -826,6 +894,8 @@ describe('checking a watcher', () => {
     expect(run.code).toBe(1)
     expect(JSON.parse(run.stderr).error.reason).toBe('no_ticker')
     expect(JSON.parse((await cli(dir, ['read', 'work', '--json'])).stdout).threads).toEqual([])
+    // It looked, and took nothing: the first ticker to come gets the lease's first epoch.
+    expect(await file({ dir: join(dir, 'board') }).leases!.take({ name: 'tick', holder: 'next', ttl: 1000 })).toMatchObject({ held: true, epoch: 1 })
   })
 
   it('reports who answered when the command wakes something that replies', async () => {
