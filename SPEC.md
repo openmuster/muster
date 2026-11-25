@@ -275,6 +275,11 @@ Specified as they are built: see `docs/`. Their rules in brief:
   gives up once it sees the holder renew. Schedules keep a ledger of fired
   slots; after downtime, one catch-up per schedule within half its period.
   It sends schedules and starts registered workflows (`workflows.json`).
+- **Hosts**: a host is a process that calls a board module's `start()`:
+  `mu daemon run`, `mu serve`, or your own. Each role it runs has a lease in
+  the board's file (`watch:<name>`, `sync`, `hooks`; `tick` only for the
+  daemon and `mu serve`), so any number of hosts can run one module and each
+  role has one holder. Importing a module opens nothing and reads no secret.
 - **Watchers** are declared in a board module (`board({ watch })`) and run in
   a loop each, wherever `start()` is called (`mu daemon run`, `mu serve`, or
   your own process), each under its own lease `watch:<name>`;

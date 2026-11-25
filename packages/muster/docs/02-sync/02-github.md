@@ -5,19 +5,22 @@ description: Issues, pull requests, comments, reviews and CI results as threads 
 
 ## Map repositories
 
-```json
-{
-  "gh": {
-    "type": "github",
-    "secret": "env:GITHUB_WEBHOOK_SECRET",
-    "token": "env:GITHUB_TOKEN",
-    "bot": "your-app[bot]",
-    "repos": {
-      "acme/web": { "issues": "web/issues", "pulls": "web/prs", "mirror": true },
-      "acme/api": "api"
-    }
-  }
-}
+```ts board.ts
+import { board, env, github } from 'muster'
+
+export default board({
+  sync: {
+    gh: github({
+      secret: env('GITHUB_WEBHOOK_SECRET'),
+      token: env('GITHUB_TOKEN'),
+      bot: 'your-app[bot]',
+      repos: {
+        'acme/web': { issues: 'web/issues', pulls: 'web/prs', mirror: true },
+        'acme/api': 'api',
+      },
+    }),
+  },
+})
 ```
 
 A repository maps to one channel, or to one for issues and one for pull
@@ -70,7 +73,7 @@ it, so wire it only for repositories whose labels you trust.
 
 ## What goes back
 
-Nothing, unless the repository sets `"mirror": true`. With it:
+Nothing, unless the repository sets `mirror: true`. With it:
 
 - A reply in a synced thread is posted as a comment.
 - A thread posted in the repository's `issues` channel opens an issue. Its
@@ -99,7 +102,8 @@ Files don't sync with GitHub:
    Workflow runs.
 4. Point the webhook at `https://<host>/api/board/webhooks/gh` with content
    type `application/json`, and set a secret.
-5. Put the secret's name in `sync.json`, and the token's if anything goes back.
+5. Name the secret in the board module's `github()` with `env()`, and the
+   token too if anything goes back. Restart what runs the module.
 
 ## Catching up
 

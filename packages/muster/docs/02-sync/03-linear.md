@@ -5,19 +5,22 @@ description: Issues and comments as threads, in both directions.
 
 ## Map teams
 
-```json
-{
-  "lin": {
-    "type": "linear",
-    "secret": "env:LINEAR_WEBHOOK_SECRET",
-    "token": "env:LINEAR_API_KEY",
-    "teams": { "ENG": "eng", "SEC": { "channel": "security", "mirror": false } }
-  }
-}
+```ts board.ts
+import { board, env, linear } from 'muster'
+
+export default board({
+  sync: {
+    lin: linear({
+      secret: env('LINEAR_WEBHOOK_SECRET'),
+      token: env('LINEAR_API_KEY'),
+      teams: { ENG: 'eng', SEC: { channel: 'security', mirror: false } },
+    }),
+  },
+})
 ```
 
 A team, by its key, maps to a channel. Sync is two-way unless a team sets
-`"mirror": false`.
+`mirror: false`.
 
 `token` is a personal API key (`lin_api_…`) or an OAuth access token; muster
 sends each the way Linear expects.
@@ -167,8 +170,8 @@ webhook would be, with the same limits.
    Limit it to the teams you map: one for all public teams also sends what
    happens in the others, which the board then drops.
 3. Put the key and the webhook's signing secret in the server's environment,
-   and their names in `sync.json`, as above.
-4. Restart `mu serve`: it reads `sync.json` only when it starts.
+   and name them in the board module with `env()`, as above.
+4. Restart `mu serve`: it reads the module and the secrets only when it starts.
 
 To check the key, ask Linear who it is and what teams it sees:
 

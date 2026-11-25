@@ -50,11 +50,11 @@ cp templates/queue/workflows.json ~/.config/muster/
 Then edit the copy: `repo` is your repository's https address. In
 `board.ts`, `ENG` is your Linear team's key. `board.ts` stays in
 `templates/queue`, and names the scripts beside it by their full paths,
-wherever it is run from. If `~/.config/muster/` has a `sync.json` or a
-`watchers.json` from an earlier copy of this template, move anything else in
-them into a module and delete them: `mu serve` refuses a module with a sync
-beside a `sync.json`, and a watcher in `watchers.json` named like one in the
-module.
+wherever it is run from. If `~/.config/muster/` has a `watchers.json`,
+`sync.json` or `hooks.json` from an earlier copy of this template, move
+anything else in them into a board module and delete them: those files are no
+longer read, and `mu serve` refuses to start while one is there
+([Porting](../04-reference/07-porting.md)).
 
 Put the settings in the environment `mu serve` starts with, and give it the
 module. It runs the module's sync, its watchers and the workflow, and the

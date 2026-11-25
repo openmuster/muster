@@ -63,6 +63,17 @@ versions are affected.
   - `mu daemon status` no longer has `watchers` and `hooks` lists in its
     `--json`: what a module declares is under `module`.
 
+### Docs
+
+- The docs, guides and skills declare watchers, sync and outgoing webhooks
+  in a board module, and a new page,
+  [The board module and hosts](./packages/muster/docs/01-concepts/17-board-module.md),
+  says where a module is found and what runs it.
+  [Porting](./packages/muster/docs/04-reference/07-porting.md) maps every
+  field of `watchers.json`, `sync.json` and `hooks.json` to the module. Every
+  TypeScript block the docs show is type-checked against muster, and every
+  board module among them is loaded by `mu`, in a test.
+
 ### Changed
 
 - A watcher in a board module whose runs keep failing, across threads, slows

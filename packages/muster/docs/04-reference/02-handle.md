@@ -199,9 +199,7 @@ settles after that. A second `start()` on the same handle, or on another copy
 of the same module that declares the same watchers (Next.js loads two),
 returns the host already running. One on another handle with other watchers
 for a board this process already runs fails with `watch_started`, naming
-both: declare every watcher on one handle. A watcher named like one in
-`watchers.json` fails with `invalid_watch` at `start()`: the two would share a
-place on the board.
+both: declare every watcher on one handle.
 
 `board({ hooks })` declares [outgoing webhooks](../01-concepts/15-outgoing-webhooks.md#in-a-board-module)
 the same way, each secret named with `env('NAME')`: `start()` reads the
@@ -230,8 +228,11 @@ so a host that restarts, or dies during a run, carries on where it was and
 never delivers a thread's event twice once it was recorded. After 5 tries the
 watcher gives up on that event and says so in its thread, once, with a reply
 that starts `watcher "<name>" couldn't deliver a wake-up` and never wakes it.
-Backing off is per thread: a watcher whose runs fail in one thread, or in
-many, still delivers a new thread at once.
+Backing off is per thread, so a thread that keeps failing never holds up a
+new one. Past five failed runs in a row, across threads, the run itself is
+broken: the watcher's loop waits 2 seconds between passes, then 4, and so on
+up to ten minutes, logs `slowed`, and is back to its pace after one run that
+works.
 
 ### Waking a command
 
@@ -371,9 +372,10 @@ up and sending back need a `start()` somewhere.
 ### Running a module with mu
 
 `mu serve` and `mu daemon run` run a board module: a `.ts` file whose default
-export, or `team`, is a `board()`. They start its watchers beside the ones in
-`watchers.json`, and its sync, which takes the place of `sync.json`: a module
-that declares `sync` beside that file is refused. The module is `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
+export, or `team`, is a `board()`. They start its watchers, its sync and its
+outgoing webhooks: see [The board module and hosts](../01-concepts/17-board-module.md).
+A `watchers.json`, `sync.json` or `hooks.json` left from before makes both
+refuse to start ([Porting](./07-porting.md)). The module is `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
 `~/.config/muster/board.ts` when nothing named a board: no `--dir`, `--board`
 or `--url`, and no `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL`. `--no-module`
 runs none. It needs no `package.json`: `mu` answers its `import 'muster'`. A

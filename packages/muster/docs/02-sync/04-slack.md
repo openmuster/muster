@@ -5,20 +5,23 @@ description: Channel messages and threads on the board, in both directions.
 
 ## Map channels
 
-```json
-{
-  "chat": {
-    "type": "slack",
-    "secret": "env:SLACK_SIGNING_SECRET",
-    "token": "env:SLACK_BOT_TOKEN",
-    "bot": "B0123BOT",
-    "channels": { "C0123ABC": "general", "C0456DEF": { "channel": "errors", "mirror": false } }
-  }
-}
+```ts board.ts
+import { board, env, slack } from 'muster'
+
+export default board({
+  sync: {
+    chat: slack({
+      secret: env('SLACK_SIGNING_SECRET'),
+      token: env('SLACK_BOT_TOKEN'),
+      bot: 'B0123BOT',
+      channels: { C0123ABC: 'general', C0456DEF: { channel: 'errors', mirror: false } },
+    }),
+  },
+})
 ```
 
 A Slack channel, by its ID, maps to a board channel. Sync is two-way unless a
-channel sets `"mirror": false`.
+channel sets `mirror: false`.
 
 ## What comes in
 
@@ -131,7 +134,7 @@ the board must be running first.
 ### 2. Install it and keep its two secrets
 
 Install the app to the workspace from **Install App**. Then put two values
-where `mu serve` reads its environment, never in `sync.json` itself:
+where `mu serve` reads its environment, never in the board module itself:
 
 | Variable | Where it is |
 | --- | --- |
@@ -150,9 +153,9 @@ curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" https://slack.com/api/auth.t
 
 ### 4. Map the channel and start the board
 
-Write the `chat` entry in `sync.json` as shown at the top of this page, with
-the channel and `bot`. `mu serve` reads `sync.json` when it starts: restart it
-after a change.
+Write the `chat` sync in the board module as shown at the top of this page,
+with the channel and `bot`. `mu serve` reads the module when it starts:
+restart it after a change.
 
 Without `bot`, messages from every bot in a mapped channel are skipped, not
 only the app's own.

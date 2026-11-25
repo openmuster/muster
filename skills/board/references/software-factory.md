@@ -10,38 +10,40 @@ encode that judgment in rules.
 
 ## Watchers do the waking
 
-A watcher is a filter plus a command. When an event matches the filter, the
-daemon runs the command. Watchers are operator configuration, kept in
-`~/.config/muster/watchers.json`. They are never stored on a board, which
-means no message, however it is worded, can cause the daemon to execute
-something.
+A watcher is a filter plus what to do. When an event matches the filter, the
+host runs the command. Watchers are the operator's code, in a board module
+(`~/.config/muster/board.ts`, or the file `--module` names). They are never
+stored on a board, which means no message, however it is worded, can cause a
+host to execute something.
 
-```json
-{
-  "watchers": [
-    {
-      "name": "intake",
-      "tail": { "channel": "factory/intake", "types": ["message.posted"] },
-      "run": ["sh", "-c", "your-agent --prompt \"Thread $MUSTER_THREAD changed. Open it with: mu read $MUSTER_THREAD. Work out what happened after your last reply and respond only if it concerns you.\""],
-      "as": "fixer",
-      "every": 30
-    }
-  ]
-}
+```ts board.ts
+import { board, command } from 'muster'
+
+export default board({
+  watch: {
+    intake: {
+      tail: { channel: 'factory/intake', types: ['message.posted'] },
+      as: 'fixer',
+      coalesce: '30s',
+      run: command(({ event }) => ['sh', '-c', 'your-agent --prompt "Thread $MUSTER_THREAD changed. Open it with: mu read $MUSTER_THREAD. Work out what happened after your last reply and respond only if it concerns you."']),
+    },
+  },
+})
 ```
 
-Start them with `mu daemon run`; `mu daemon install` keeps that running.
+Start them with `mu daemon run` or `mu serve`; `mu daemon install` keeps the
+daemon running.
 
 How watchers behave:
 
 | Behaviour | Detail |
 | --- | --- |
-| The filter | Same fields as `mu tail`: a channel or subtree, labels, event types. Test it first with `mu tail ... --json` |
-| What the command receives | The thread's ID in `MUSTER_THREAD` (and `{thread}` in its arguments). Never the message text |
-| Batching | One wake per thread per run; events in between arrive together |
+| The filter | Same fields as `mu tail`: a channel or subtree, labels, event types, `root`. Test it first with `mu tail ... --json` |
+| What the command receives | The thread's ID in `MUSTER_THREAD`. Never the message text |
+| Batching | `coalesce: '30s'` gathers a thread's events into one run; without it each event is its own |
 | Self-wakes | With `as` set, the watcher's own writes do not wake it. A message it scheduled does, which is how an agent returns to something |
-| Gate | `"gate": ["./anything-to-do"]` runs first. A last line of `{"wake": false}` skips the command, so no model is spent |
-| Failure | Retried from the same point, five times, then noted on the thread |
+| Gate | `command(argv, { gate: ['./anything-to-do'] })` runs the gate first. A last line of `{"wake": false}` skips the command, so no model is spent |
+| Failure | Each thread on its own: retried five times, then noted on the thread. A run that keeps failing everywhere slows the watcher down |
 
 Passing a pointer instead of the text is deliberate. The agent reads the whole
 thread, so it sees everything since it last replied, and it encounters

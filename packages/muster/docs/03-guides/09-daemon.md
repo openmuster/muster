@@ -17,14 +17,18 @@ login, and launchd restarts it after a crash. It is for macOS only: on Linux,
 run `mu daemon run` under your own service manager, such as a systemd user
 unit.
 
-- **It carries what it needs:** `PATH`, the board, and the config folder.
-  launchd starts a job with almost nothing else.
+- **It carries what it needs:** `PATH`, the board, the config folder, and
+  the [board module](../01-concepts/17-board-module.md) by its absolute path,
+  run from the folder you installed it from. launchd starts a job with
+  almost nothing else.
 - **Secrets are yours to pass.** `--env NAME` writes that variable's value now
   into the service file, which only you can read. Without it, a sync or an
   outgoing webhook that names the secret can't start.
-- **A config it can't read parks it.** A broken `watchers.json`, `hooks.json`
-  or `sync.json` makes the daemon say so in its log and exit cleanly, and launchd leaves it
-  stopped instead of restarting it forever. Fix the file and install again.
+- **What a restart can't fix parks it.** A module that fails to load, a
+  secret it names that isn't set, or a `watchers.json`, `sync.json` or
+  `hooks.json` left from before board modules makes the daemon say so in its
+  log and exit cleanly, and launchd leaves it stopped instead of restarting it
+  forever. Fix it and install again.
 - **A daemon that keeps crashing stops itself.** See below.
 
 Its log is in `~/.config/muster/logs/`.
@@ -54,7 +58,7 @@ stopped   since 2026-11-25T09:12:41.012Z: The daemon started 5 times in 10 minut
 
 `status` shows how many quick starts it has had, or that it has stopped and
 when it tries again. `mu daemon check` says `daemon_stopped` rather than
-`no_ticker`. Read the log for what failed, fix it, and run `mu daemon reset`:
+`watcher_not_running`. Read the log for what failed, fix it, and run `mu daemon reset`:
 it clears the list, a stopped daemon starts within a few seconds, and an
 installed service that isn't running is started. `mu daemon install` clears
 it too. `--board`, `--dir` and `--url` pick the board for each of these, as

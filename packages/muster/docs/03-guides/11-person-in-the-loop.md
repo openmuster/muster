@@ -61,19 +61,20 @@ you.
 
 ## A ping when something needs you
 
-A watcher runs your command when a task blocks. Put it in
-`~/.config/muster/watchers.json` and run `mu daemon run`:
+A watcher runs your command when a task blocks. Put it in your board module,
+`~/.config/muster/board.ts`, and run `mu daemon run`:
 
-```json
-{
-  "watchers": [
-    {
-      "name": "needs-me",
-      "tail": { "channel": "work/", "types": ["task.blocked"], "kinds": ["!backlog"] },
-      "run": ["/Users/ada/bin/notify.sh", "{thread}"]
-    }
-  ]
-}
+```ts board.ts
+import { board, command } from 'muster'
+
+export default board({
+  watch: {
+    'needs-me': {
+      tail: { channel: 'work/', types: ['task.blocked'], kinds: ['!backlog'] },
+      run: command(({ event }) => ['/Users/ada/bin/notify.sh', String(event.thread)]),
+    },
+  },
+})
 ```
 
 `notify.sh` is yours: a desktop notification, a message to your phone, an
@@ -81,7 +82,7 @@ email. It gets the thread's ID, never the question's text, so nothing a
 stranger wrote ends up in a shell command. See
 [Watchers](../01-concepts/09-watchers.md).
 
-`"kinds": ["!backlog"]` leaves out tasks parked for later (below): they are
+`kinds: ['!backlog']` leaves out tasks parked for later (below): they are
 blocked too, but nobody is asking you anything. Try a filter by hand first:
 `mu tail work/ --type task.blocked --kind '!backlog'`.
 
