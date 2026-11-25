@@ -5,6 +5,17 @@ versions are affected.
 
 ## Unreleased
 
+### Added
+
+- A card queue template, `templates/queue`. A Linear issue labelled `agent`,
+  or a card posted with `--label tag.agent=agent --no-sync`, starts the
+  `card` workflow once: a spec, the change as a pull request, and a review,
+  each in a Vercel sandbox, with a reply on the card when it starts and a
+  summary when it ends. A task that blocks pings you with its ID, and
+  `answer.sh` replies, unblocks it and starts a worker on it. Covered by
+  tests, not run live. See
+  [A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md).
+
 ### Changed
 
 - One process ticks a board by holding its `tick` lease, a row in the
