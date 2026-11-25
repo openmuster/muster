@@ -59,7 +59,7 @@ beforeAll(async () => {
     cwd: HERE,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...env, HOME: dir, NEXT_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, ...env, HOME: dir, NEXT_TELEMETRY_DISABLED: '1', ALLOW_HOSTS: 'board.example.test' },
   })
   let output = ''
   server.stdout!.on('data', (chunk) => (output += chunk))
@@ -98,4 +98,25 @@ describe('the factory route, built and started', () => {
     expect([feed.status, feed.type]).toEqual([200, 'text/event-stream'])
     expect(feed.body).toContain('"text":"first"')
   })
+
+  it('answers for the names in ALLOW_HOSTS, and refuses any other', async () => {
+    const authorization = `Bearer ${token}`
+    // The page and the board's routes take the same names: ALLOW_HOSTS reaches team.fetch, not only proxy.ts.
+    const named = await ask('/api/board/head', { headers: { authorization, host: 'board.example.test' } })
+    expect(named.status).toBe(200)
+    for (const host of ['evil.example', 'board.example.test.evil.example']) {
+      const refused = await ask('/api/board/head', { headers: { authorization, host } })
+      expect([host, refused.status, JSON.parse(refused.body).error.reason]).toEqual([host, 403, 'forbidden'])
+    }
+    // The page itself is still behind proxy.ts.
+    expect((await ask('/', { method: 'GET', headers: { host: 'evil.example' } })).status).toBe(403)
+  })
+
+  it('takes a file as large as the board does, past the size Next.js holds a body to by default', async () => {
+    // 20 MB of file, about 27 MB of request: over Next's 10 MB for a body read before a proxy, under the board's 36 MB.
+    const bytes = Buffer.alloc(20 * 1024 * 1024, 7)
+    const put = await ask('/api/board/filePut', { headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: { args: [{ name: 'big.bin', data: bytes.toString('base64') }] } })
+    expect(put.status).toBe(200)
+    expect(JSON.parse(put.body).ok.size).toBe(bytes.length)
+  }, 30_000)
 })

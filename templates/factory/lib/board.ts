@@ -8,8 +8,10 @@ let handle: Board | null = null
 export function team(): Board {
   if (handle) return handle
   const url = process.env.MUSTER_URL
-  // `/api/board` answers for the names the page does (`proxy.ts`), and for no other.
-  const hosts = (process.env.ALLOW_HOSTS ?? '').split(',').map((name) => name.trim()).filter(Boolean)
-  handle = url ? board({ backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) }) : board({ serve: { hosts } })
+  // `/api/board` answers for the names the page does (ALLOW_HOSTS, as `proxy.ts` reads it), and for no other.
+  // Where ALLOW_HOSTS isn't set, it takes `mu serve`'s MUSTER_ALLOW_HOSTS.
+  const allowed = process.env.ALLOW_HOSTS
+  const serve = allowed === undefined ? {} : { hosts: allowed.split(',').map((name) => name.trim()).filter(Boolean) }
+  handle = url ? board({ backend: http({ url, token: process.env.MUSTER_TOKEN ?? '' }) }) : board({ serve })
   return handle
 }

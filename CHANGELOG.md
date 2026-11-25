@@ -86,6 +86,9 @@ versions are affected.
 
 ### Fixed
 
+- A feed (`GET /api/board/feed`) whose client left while it was still
+  opening is now closed. Before, `mu serve` went on reading the board for it
+  every half second until the client's token ran out.
 - Linear: a change to an issue made before sync was set up, such as the label
   `agent`, now starts its thread from the update, with the issue's title,
   description and labels, and then applies the change. Before, the webhook

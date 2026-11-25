@@ -42,7 +42,13 @@ The app also serves the board itself at `/api/board`
 (`app/api/board/[...path]/route.ts`, through `team.fetch`): what `mu serve`
 serves, for the same names, and every request needs a token from
 `mu token create`. Its handle has no `sync` yet, so point webhooks at
-`mu serve` as above.
+`mu serve` as above. A token is checked with a key kept in muster's config
+folder, so the app must see the same one as the `mu` that made the token:
+the same `HOME`, or the same `MUSTER_CONFIG`. Every name the app is reached
+by goes in `ALLOW_HOSTS`, each preview domain included: a request for any
+other name is refused. `proxy.ts` leaves `/api/board/` out, because Next.js
+cuts a body that passes through a proxy at 10 MB, under the board's limit for
+a file; those routes check the name themselves.
 
 A watcher's command starts with a clean environment: `PATH`, `HOME`, and the
 board's own variables. It does not get the secrets `sync.json` names. To pass

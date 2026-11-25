@@ -46,11 +46,14 @@ async function* chunks(body: ReadableStream<Uint8Array> | null): AsyncGenerator<
   }
 }
 
+/** The answer to a request that failed for a reason only the owner should read: the same as `mu serve`'s. */
+const failed = () => Response.json({ error: { reason: 'internal', message: 'The board failed to answer. Whoever runs it can see why in its output.' }, exit: 1 }, { status: 500, headers: { 'cache-control': 'no-store' } })
+
 /**
  * `mu serve`'s own handler, answering a web `Request`. Nothing is answered differently: the request is
  * handed to the same code, under the path that code knows, and what it writes becomes the `Response`.
  */
-export function toFetch(handler: Handler, base: string): (request: Request) => Promise<Response> {
+export function toFetch(handler: Handler, base: string, log: (line: string) => void): (request: Request) => Promise<Response> {
   return (request) => {
     const url = new URL(request.url)
     // Only what is under the base reaches the board's routes. Anything else is given a path that answers 404
@@ -58,14 +61,20 @@ export function toFetch(handler: Handler, base: string): (request: Request) => P
     const path = url.pathname.startsWith(base + '/') ? MOUNT + url.pathname.slice(base.length) : '/'
     const headers: Record<string, string> = {}
     request.headers.forEach((value, name) => (headers[name] = value))
-    // The name the client asked for. Where a runtime leaves the header out, the URL is what it was asked as.
-    headers.host ??= url.host
+    // The name is the `Host` the client sent. A request without one is refused, as `mu serve` refuses it: the
+    // URL's host is whatever the runtime rebuilt it with, not what the client asked for.
     const events = new EventEmitter()
+    let left = false
     const req = {
       method: request.method,
       url: path + url.search,
       headers,
-      on: (name: string, listener: () => void) => events.on(name, listener),
+      on(name: string, listener: () => void) {
+        // A client that left before this was listened for has still left.
+        if (name === 'close' && left) queueMicrotask(listener)
+        else events.on(name, listener)
+        return req
+      },
       // Read as it comes, so the handler's limits stop a large body while it is arriving.
       [Symbol.asyncIterator]: () => chunks(request.body),
     }
@@ -73,6 +82,7 @@ export function toFetch(handler: Handler, base: string): (request: Request) => P
     let controller!: ReadableStreamDefaultController<Uint8Array>
     let closed = false
     const gone = () => {
+      left = true
       if (closed) return
       closed = true
       events.emit('close')
@@ -85,9 +95,9 @@ export function toFetch(handler: Handler, base: string): (request: Request) => P
       cancel: gone,
     })
     request.signal?.addEventListener('abort', () => {
-      if (closed) return
+      const open = !closed
       gone()
-      controller.error(new Error('The request was aborted.'))
+      if (open) controller.error(new Error('The request was aborted.'))
     })
     const write = (chunk: unknown) => {
       if (closed || chunk === undefined || chunk === null) return
@@ -117,8 +127,8 @@ export function toFetch(handler: Handler, base: string): (request: Request) => P
       }
       handler(req as unknown as IncomingMessage, res as unknown as ServerResponse).catch((error: unknown) => {
         // The handler answers every failure itself; this is only if it couldn't.
-        resolve(Response.json({ error: { reason: 'internal', message: 'The board failed to answer. Whoever runs it can see why in its output.' }, exit: 1 }, { status: 500 }))
-        console.error(`error  ${request.method} ${url.pathname}: ${error instanceof Error ? error.message : String(error)}`)
+        resolve(failed())
+        log(`error  ${request.method} ${url.pathname}: ${error instanceof Error ? error.message : String(error)}`)
       })
     })
   }
@@ -130,6 +140,7 @@ export function toFetch(handler: Handler, base: string): (request: Request) => P
  */
 export function mount(backend: Backend, options: MountOptions & { now?: () => Date } = {}): (request: Request) => Promise<Response> {
   const base = checkBase(options.base)
+  const log = options.log ?? ((line: string) => console.error(line))
   let served: ((request: Request) => Promise<Response>) | null = null
   const make = () => {
     const key = backend.signingKey?.()
@@ -140,7 +151,16 @@ export function mount(backend: Backend, options: MountOptions & { now?: () => Da
     }
     const hosts = options.hosts ?? (process.env.MUSTER_ALLOW_HOSTS ?? '').split(',').map((name) => name.trim()).filter(Boolean)
     const now = options.now
-    return toFetch(createHandler({ backend, key, hosts, log: options.log ?? ((line) => console.error(line)), ...(now ? { now: () => now().getTime() } : {}) }), base)
+    return toFetch(createHandler({ backend, key, hosts, log, ...(now ? { now: () => now().getTime() } : {}) }), base, log)
   }
-  return (request) => (served ??= make())(request)
+  return async (request) => {
+    try {
+      served ??= make()
+    } catch (error) {
+      // Such as a key file it can't read: said to the owner, never to the caller, and tried again next request.
+      log(`error  ${request.method} ${new URL(request.url).pathname}: ${error instanceof Error ? error.message : String(error)}`)
+      return failed()
+    }
+    return served(request)
+  }
 }
