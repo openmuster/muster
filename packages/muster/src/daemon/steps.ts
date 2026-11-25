@@ -51,6 +51,31 @@ async function workersResult(team: Board, id: number, owner: string, workers: st
   return claimed !== undefined && worker(completed.by) && claimed.by.profile === completed.by.profile && worker(claimed.by) && (claimed.data as { narrowed?: unknown }).narrowed !== true
 }
 
+/**
+ * A workflow step's result, for code that goes on from it (a board module's watcher, say): only when the
+ * daemon made the task, as `<owner>+workflows`, and the run's own worker completed it, as a step's result is
+ * checked before it is quoted into the next step. With it, the run it belongs to: the workflow and step as
+ * the daemon made them, and the thread and message the run was asked on, from the board's record of the
+ * request. Null for anything else: a task someone else made, one an agent completed with its sandbox's
+ * token, one not completed. Labels count for nothing here, so a relabelled task is read as it was made.
+ */
+export async function workflowResult(team: Board, id: number, owner: string): Promise<{ workflow: string; step: string; request: number; thread: number; on: number; result: string | null } | null> {
+  const made = await madeLabels(team, id, owner)
+  const workflow = made?.workflow
+  const step = made?.[STEP_LABEL]
+  const request = Number(made?.request)
+  if (workflow === undefined || step === undefined || !Number.isSafeInteger(request) || request < 1) return null
+  const read = await team.readThread({ id }).catch(() => null)
+  if (read?.task?.state !== 'completed') return null
+  if (!(await workersResult(team, id, owner, made?.[WORKERS_LABEL]))) return null
+  const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
+  if (asked === undefined || asked.seq !== request || asked.thread === null || (asked.data as { name?: unknown }).name !== workflow) return null
+  // A run is made in `<channel>/<workflow>-<request>`, under the channel it was asked in: anything else isn't this request's run.
+  if (read.message.channel !== `${asked.channel}/${workflow}-${request}`) return null
+  const on = (asked.data as { on?: unknown }).on
+  return { workflow, step, request, thread: asked.thread, on: typeof on === 'number' ? on : asked.thread, result: read.task.result }
+}
+
 /** Why a task's results can't be filled in. `edited`: its text isn't the daemon's any more; `writer`: this caller can't write as the daemon. */
 export class FillRefused extends Failure {
   readonly why: 'edited' | 'writer'

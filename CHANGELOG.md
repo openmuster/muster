@@ -23,6 +23,13 @@ versions are affected.
   - Cloudflare: deploy the current `templates/cloudflare-runner`. A Worker
     deployed before this clones the default branch, and a second round's
     run is stopped with `runner_too_old` rather than replace the first.
+- `{on.text}` in a workflow step: the very message the run was asked on, a
+  reply as often as not, quoted and fenced as `{thread.text}` is. A message
+  deleted since, or edited after the request, starts no run
+  (`asked_message_changed`).
+- `workflowResult(team, id, owner)`: a workflow step's result for code that
+  goes on from it, only when the daemon made the task and the run's own
+  worker completed it.
 
 ## 0.3.1-alpha.1
 
