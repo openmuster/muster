@@ -75,6 +75,33 @@ export async function openPullRequest(options: {
   throw new Failure('pull_request_failed', `GitHub didn't open a pull request for ${options.head}: HTTP ${made.status}.`, { hint: 'The branch is pushed: open one by hand. A 403 or 404 usually means the token may not write pull requests on this repository.' })
 }
 
+const COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+const BRANCH_NAME = /^(?!-)(?!HEAD$)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/
+
+/**
+ * Where a task's work stands on GitHub, read from this machine before its sandbox starts: the repository's
+ * default branch, which a pull request is opened against, and the commit `branch` is at, or null when there
+ * is no such branch yet. A task worked before carries on from that commit rather than from the default branch,
+ * so a second round adds to the first instead of replacing it.
+ */
+export async function branchState(options: { repo: { slug: string }; token: string; branch: string; api?: string; fetch?: typeof fetch }): Promise<{ defaultBranch: string; head: string | null }> {
+  const doFetch = options.fetch ?? fetch
+  const api = (options.api ?? 'https://api.github.com').replace(/\/$/, '')
+  const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster', 'x-github-api-version': '2022-11-28' }
+  const failed = (what: string) => new Failure('push_failed', `Reading ${what} of ${options.repo.slug} on GitHub failed, so the run wasn't started.`, { hint: 'The GitHub App needs Contents: read on the repository.' })
+  const repo = await doFetch(`${api}/repos/${options.repo.slug}`, { headers, signal: AbortSignal.timeout(30_000) }).catch(() => null)
+  if (!repo?.ok) throw failed('the default branch')
+  const defaultBranch = ((await repo.json().catch(() => null)) as { default_branch?: unknown } | null)?.default_branch
+  if (typeof defaultBranch !== 'string' || !BRANCH_NAME.test(defaultBranch)) throw failed('the default branch')
+  const ref = await doFetch(`${api}/repos/${options.repo.slug}/git/ref/heads/${options.branch.split('/').map(encodeURIComponent).join('/')}`, { headers, signal: AbortSignal.timeout(30_000) }).catch(() => null)
+  if (ref?.status === 404) return { defaultBranch, head: null }
+  if (!ref?.ok) throw failed(options.branch)
+  const head = (await ref.json().catch(() => null)) as { ref?: unknown; object?: { sha?: unknown } } | null
+  // A ref that isn't exactly this branch, or a commit ID that isn't one, is no answer.
+  if (head?.ref !== `refs/heads/${options.branch}` || typeof head.object?.sha !== 'string' || !COMMIT.test(head.object.sha)) throw failed(options.branch)
+  return { defaultBranch, head: head.object.sha }
+}
+
 /** The most a sandbox's changes may weigh, as a bundle. */
 export const BUNDLE_MAX = 50 * 1024 * 1024
 
@@ -101,10 +128,15 @@ const run = promisify(execFile)
  * held anything the agent wrote but the bundle: the commit it started from is fetched, the bundle is
  * checked against it and fetched, and the result pushed. The token reaches git through its environment,
  * not its arguments, so no process listing shows it.
+ *
+ * The push only moves the branch from where it was when the run started (`expect`, or no branch at all when
+ * that is null) to a commit that carries on from `base`: a branch someone moved in the meantime, or a change
+ * that doesn't build on where its checkout started, is refused (`push_conflict`) and nothing is overwritten.
  */
-export async function pushBundle(options: { repo: { slug: string }; token: string; bundle: Buffer; base: string; branch: string; remote?: string }): Promise<void> {
+export async function pushBundle(options: { repo: { slug: string }; token: string; bundle: Buffer; base: string; branch: string; expect: string | null; remote?: string }): Promise<void> {
   // Each of these reaches git as an argument: none may look like an option, and the bundle is held to its size here too.
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(options.base)) throw new Failure('push_failed', "The commit the checkout started from isn't a commit ID.")
+  if (!COMMIT.test(options.base)) throw new Failure('push_failed', "The commit the checkout started from isn't a commit ID.")
+  if (options.expect !== null && !COMMIT.test(options.expect)) throw new Failure('push_failed', `Where ${options.branch} was when the run started isn't a commit ID.`)
   if (!/^mu\/task-\d+$/.test(options.branch)) throw new Failure('push_failed', `${options.branch} isn't a branch mu run pushes.`)
   if (options.bundle.length > BUNDLE_MAX) throw new Failure('push_failed', `The agent's changes are over ${BUNDLE_MAX / 1024 / 1024} MB as a bundle: nothing was pushed.`)
   const dir = await mkdtemp(join(tmpdir(), 'mu-push-'))
@@ -124,11 +156,20 @@ export async function pushBundle(options: { repo: { slug: string }; token: strin
     await git('init', '-q', '--bare')
     await git('fetch', '-q', '--depth=1', '--end-of-options', remote, options.base)
     await writeFile(join(dir, 'mu.bundle'), options.bundle)
-    await git('bundle', 'verify', '-q', join(dir, 'mu.bundle'))
+    // The change builds on where the checkout started, or it would drop what was on the branch before it: a bundle
+    // that needs commits other than that one doesn't verify here, and one that does must lead on from it.
+    const notBuilt = () => new Failure('push_conflict', `The agent's change doesn't build on the commit its checkout started from, so ${options.branch} was left as it was.`, { hint: 'Read the task thread, then run the task again.' })
+    if (!(await git('bundle', 'verify', '-q', join(dir, 'mu.bundle')).then(() => true, () => false))) throw notBuilt()
     await git('fetch', '-q', '--end-of-options', join(dir, 'mu.bundle'), 'HEAD:refs/mu/head')
-    await git('push', '-q', '-f', '--end-of-options', remote, `refs/mu/head:refs/heads/${options.branch}`)
+    if (!(await git('merge-base', '--is-ancestor', options.base, 'refs/mu/head').then(() => true, () => false))) throw notBuilt()
+    // Moved only from where it was when the run started: an empty expectation means it must not exist yet.
+    await git('push', '-q', `--force-with-lease=refs/heads/${options.branch}:${options.expect ?? ''}`, '--end-of-options', remote, `refs/mu/head:refs/heads/${options.branch}`)
   } catch (error) {
+    if (error instanceof Failure) throw error
     const said = String((error as { stderr?: string }).stderr ?? (error as Error).message).replaceAll(options.token, '[REDACTED]').trim().split('\n').slice(-2).join(' ')
+    if (/stale info|\[rejected\]|non-fast-forward|fetch first|already exists/.test(said)) {
+      throw new Failure('push_conflict', `${options.branch} moved on GitHub while the agent worked, so it was left as it was: ${said}`, { hint: 'Read the branch and the task thread, then run the task again: it starts from where the branch is now.' })
+    }
     throw new Failure('push_failed', `Pushing ${options.branch} failed: ${said}`, { hint: 'The token needs Contents: write on the repository.' })
   } finally {
     await rm(dir, { recursive: true, force: true })
