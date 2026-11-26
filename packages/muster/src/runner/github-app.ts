@@ -6,7 +6,7 @@ import { Failure } from '../failure.ts'
 export type GithubApp = { id: string; key: KeyObject }
 
 /** What an installation token may do on the one repository it is made for. */
-export type Permissions = Partial<Record<'contents' | 'pull_requests' | 'metadata', 'read' | 'write'>>
+export type Permissions = Partial<Record<'contents' | 'pull_requests' | 'issues' | 'metadata', 'read' | 'write'>>
 
 /**
  * The App from the environment: `GITHUB_APP_ID`, and its private key in `GITHUB_APP_KEY_FILE` (a path)

@@ -7,6 +7,38 @@ versions are affected.
 
 ### Added
 
+- Slack sync can show a thread being worked on with Slack's own "Working…":
+  `slack({ agent: true, … })`, for a Slack app declared an agent. While a
+  workflow run on a synced thread is open, the board sets the thread's agent
+  session to `processing`, and to `active` once the run's summary is posted;
+  the run's `started …` reply is then not posted to Slack. Not yet run
+  against a live workspace. See
+  [Show a thread being worked on](./packages/muster/docs/02-sync/04-slack.md#show-a-thread-being-worked-on).
+
+- Linear sync can comment as an app of its own: `linear({ clientId:
+  env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), … })` in
+  place of `token`, for an OAuth application with client credentials tokens
+  turned on. The board asks Linear for the app's token and renews it, so
+  comments and issues are by the app and not by whoever owns a personal API
+  key. `templates/loop` now uses it. Not yet run against a live workspace.
+  See [Who the comments are by](./packages/muster/docs/02-sync/03-linear.md#who-the-comments-are-by).
+
+- GitHub sync can comment as a GitHub App: `github({ appId: env('GITHUB_APP_ID'),
+  appKey: env('GITHUB_APP_KEY_FILE'), … })` in place of `token`. Comments,
+  edits, deletes and catch-up then use a token the board makes for each
+  repository, so what the sync writes is by the App and not by whoever owns
+  a personal token. The App needs write on Issues (and on Pull requests where
+  those are mapped). `templates/loop` now uses the App its workers push with.
+  See [Who the comments are by](./packages/muster/docs/02-sync/02-github.md#who-the-comments-are-by).
+
+- A run's `started <workflow>: …` reply keeps up with the run: once a task is
+  taken, the daemon edits it to say where each task is (`#42 completed, #43
+  claimed, #44 waiting`), and labels it `progress=open` while the run works
+  and `progress=done` once it is summed up. Synced threads on Slack, GitHub
+  and Notion show the one comment changing; Linear keeps it as first written.
+  The summary is still a reply of its own. Runs started before this keep
+  their reply as it is. See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
+
 - Another round on the same pull request: a `--push` task run again after it
   pushed, reopened with `--round` or answered after it blocked, starts its
   sandbox on `mu/task-<id>` and adds to it, so the pull request stays the

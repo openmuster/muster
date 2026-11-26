@@ -268,7 +268,8 @@ export function label(ctx: Context, caller: Caller, request: LabelRequest): Mess
         by: byOf(caller),
         channel: message.channel,
         thread: message.thread,
-        data: { id: message.id, set, unset, before: message.labels },
+        // Said when the caller is held to the board, as an edit says it: what sync shows of a label then leaves it out.
+        data: { id: message.id, set, unset, before: message.labels, ...(caller.noSync ? { noSync: true } : {}) },
       })
       return { answer: findMessage(ctx.db, message.id)!, ref: message.id }
     },

@@ -2,11 +2,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { Failure } from '../failure.ts'
+import { Failure, misuse } from '../failure.ts'
 import { channelPath } from '../model.ts'
+import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
-import { declared, type Resolved, type SyncOptions } from './declare.ts'
-import { SEND_MS, type Inbound, type Provider, type Received, type Remote } from './types.ts'
+import { declared, type Resolved, type Secret, type SyncOptions } from './declare.ts'
+import { SEND_MS, type Inbound, type Provider, type Received, type Remote, type WorkingStep } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -75,20 +76,70 @@ function cutShort(times: number[], since: string, inclusive: boolean, step: numb
 }
 
 export type GitHubOptions = SyncOptions & {
+  /**
+   * A GitHub App's numeric ID, with `appKey`: what the sync sends is then written by the App, not by whoever
+   * owns `token`, and no `token` is needed. `env('NAME')`.
+   */
+  appId?: Secret
+  /** The App's private key: the PEM itself, or the path to its `.pem` file. `env('NAME')`. */
+  appKey?: Secret
   /** The app's own login, so its comments aren't imported back. */
   bot?: string
   /** A repo to a channel, or to a channel for issues and one for pulls. `mirror` sends board replies back. */
   repos: Record<string, string | { issues?: string; pulls?: string; mirror?: boolean }>
   api?: string
+  /** The clock an App's tokens are kept by. */
+  now?: () => number
 }
 
 /**
  * GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors.
- * `token` is one that may comment, needed only where a repo mirrors.
+ * `token` is one that may comment, needed only where a repo mirrors; `appId` and `appKey` name a GitHub App
+ * to comment as instead.
  */
-export const github = (options: GitHubOptions): Provider => declared('github', options, githubWith)
+export const github = (options: GitHubOptions): Provider => {
+  if ((options.appId === undefined) !== (options.appKey === undefined)) throw misuse('invalid_sync', 'A github sync needs "appId" and "appKey" together: the App\'s ID and its private key.')
+  return declared('github', options, githubWith, ['appId', 'appKey'])
+}
+
+/** How long before an App's token runs out a new one is made: no request goes out with one about to end. */
+const APP_TOKEN_MARGIN_MS = 5 * 60_000
 
 function githubWith(options: Resolved<GitHubOptions>): Provider {
+  const api = options.api ?? 'https://api.github.com'
+  let app: GithubApp | undefined
+  if (options.appId !== undefined && options.appKey !== undefined) {
+    try {
+      app = githubApp({ GITHUB_APP_ID: options.appId, [options.appKey.includes('-----BEGIN') ? 'GITHUB_APP_PRIVATE_KEY' : 'GITHUB_APP_KEY_FILE']: options.appKey })
+    } catch (error) {
+      throw new Failure('invalid_config', `A github sync's App can't be used: ${(error as Error).message}`, { hint: '"appId" is the App\'s numeric ID, and "appKey" its private key or the path to it.' })
+    }
+  }
+  /**
+   * The App's token for each repository, kept until it is about to run out, and asked for once however many
+   * requests wait on it. One that couldn't be made is asked for again by the next request.
+   */
+  const tokens = new Map<string, Promise<{ token: string; expiresAt: string }>>()
+  const mint = (repo: string, fetcher: typeof fetch, now: number) => {
+    const [owner, name] = repo.split('/') as [string, string]
+    const to = options.repos[repo]
+    // What the sync does there: comments on issues, and on pull requests where it brings those in.
+    const pulls = typeof to === 'string' || (typeof to === 'object' && to.pulls !== undefined)
+    const made = installationToken(app!, { owner, name, slug: repo }, { issues: 'write', metadata: 'read', ...(pulls ? { pull_requests: 'write' as const } : {}) }, { api, fetch: fetcher, now })
+    tokens.set(repo, made)
+    made.catch(() => tokens.get(repo) === made && tokens.delete(repo))
+    return made
+  }
+  /** What a request to `repo` is signed with: the App's token for it when there is an App, or else `token`. */
+  const bearer = async (repo: string, fetcher: typeof fetch): Promise<string> => {
+    if (!app) return `Bearer ${options.token}`
+    const now = (options.now ?? Date.now)()
+    const held = tokens.get(repo) ?? mint(repo, fetcher, now)
+    let token = await held
+    // About to run out: a new one, made once, whoever else was waiting on the old one.
+    if (Date.parse(token.expiresAt) - now < APP_TOKEN_MARGIN_MS) token = await (tokens.get(repo) === held ? mint(repo, fetcher, now) : tokens.get(repo)!)
+    return `Bearer ${token.token}`
+  }
   // GitHub has no API that attaches a file to an issue or a comment: each file is named, and stays on the board.
   const named = (message: { text: string; attachments: { name: string; size: number }[] }, text: string) => withLines(text, message.attachments.map((file) => noteOut(`${file.name} (${sizeOf(file.size)})`, 'GitHub takes no uploads, it is on the board')))
   /**
@@ -200,16 +251,17 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
     },
     async update(external, text, place, fetcher) {
       if (!external.startsWith('comment:')) return
-      await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${place.split('|')[0]}/issues/comments/${external.slice(8)}`, { method: 'PATCH', headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }, body: JSON.stringify({ body: text }) })
+      const repo = place.split('|')[0]!
+      await send(fetcher, `${api}/repos/${repo}/issues/comments/${external.slice(8)}`, { method: 'PATCH', headers: { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }, body: JSON.stringify({ body: text }) })
     },
     async remove(external, place, fetcher) {
       if (!external.startsWith('comment:')) return
-      await fetcher(`${options.api ?? 'https://api.github.com'}/repos/${place.split('|')[0]}/issues/comments/${external.slice(8)}`, { method: 'DELETE', headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' } })
+      const repo = place.split('|')[0]!
+      await fetcher(`${api}/repos/${repo}/issues/comments/${external.slice(8)}`, { method: 'DELETE', headers: { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'user-agent': 'muster' } })
     },
     async catchUp(since, fetcher) {
-      if (!options.token) return []
+      if (!options.token && !app) return []
       const out: Inbound[] = []
-      const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
       const cuts: { resume: string; skipped?: string }[] = []
       const when = (list: any[]) => list.map((each) => Date.parse(String(each.updated_at)))
       /**
@@ -217,13 +269,14 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
        * read so far, not by its number: something changed during the read moves to the end, not past a page already
        * read. Only a whole page changed in the same second goes by number, and that may run a few pages past the cap.
        */
-      const read = async (path: string) => {
+      const read = async (repo: string, path: string) => {
+        const headers = { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'user-agent': 'muster' }
         const out: any[] = []
         let from = since
         let page = 1
         for (let asked = 1; asked <= GITHUB_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; asked++) {
           if (asked > GITHUB_CATCHUP_PAGES && page === 1) break
-          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
+          const got = (await send(fetcher, `${api}/repos/${repo}/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
           // Not a list is not "nothing changed": refused, the next catch-up asks from the same point.
           if (!Array.isArray(got)) throw new Failure('platform_refused', 'GitHub did not answer with a list.')
           out.push(...got)
@@ -240,7 +293,7 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
       }
       for (const repo of Object.keys(options.repos)) {
         // Issues and pull requests first, so a comment on one opened while the board was down lands in its thread.
-        const items = await read(`${repo}/issues?state=all&`)
+        const items = await read(repo, 'issues?state=all&')
         const parents = new Map<string, Inbound['parent']>()
         for (const item of items) {
           const isPull = item.pull_request !== undefined
@@ -253,7 +306,7 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
           const filedNow = filing(item)
           out.push({ ...root, author: '', self: false, ...(item.updated_at ? { at: String(item.updated_at) } : {}), id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state!, ...filedNow.labels }, owns: filedNow.owns })
         }
-        const comments = await read(`${repo}/issues/comments?`)
+        const comments = await read(repo, 'issues/comments?')
         for (const comment of comments) {
           const number = String(comment.issue_url ?? '').split('/').pop()
           const isPull = String(comment.html_url ?? '').includes('/pull/')
@@ -266,21 +319,22 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
     },
     mirrors(place) {
       const { to } = mapping(place)
-      return typeof to === 'object' && to.mirror === true && options.token !== undefined
+      return typeof to === 'object' && to.mirror === true && (options.token !== undefined || app !== undefined)
     },
     async deliver(message, target, fetcher) {
-      const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }
+      const headersFor = async (repo: string) => ({ authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' })
       if (target.threadExternal === null) {
         // A thread started on the board opens an issue: its first line is the title.
         const repo = target.place.split('|')[0]!
+        const headers = await headersFor(repo)
         const [title, ...rest] = message.text.split('\n')
-        const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
+        const made = await send(fetcher, `${api}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
         return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${made.number}` } }
       }
-      const [repo, number] = target.threadExternal.split('#')
-      const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/${number}/comments`, {
+      const [repo, number] = target.threadExternal.split('#') as [string, string]
+      const made = await send(fetcher, `${api}/repos/${repo}/issues/${number}/comments`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' },
+        headers: await headersFor(repo),
         body: JSON.stringify({ body: named(message, message.text) }),
       })
       return { external: `comment:${made.id}` }
@@ -293,6 +347,18 @@ const LINEAR_CATCHUP_PAGES = 10
 const LINEAR_CATCHUP_PAGE = 50
 
 export type LinearOptions = SyncOptions & {
+  /**
+   * An OAuth application's client ID, with `clientSecret`: the sync then asks Linear for the app's own token
+   * (the client-credentials grant, turned on for the app in Linear), so what it sends is written by the app
+   * and not by whoever owns `token`, and no `token` is needed. `env('NAME')`.
+   */
+  clientId?: Secret
+  /** The application's client secret. `env('NAME')`. */
+  clientSecret?: Secret
+  /** What the app's token may do. Changing it ends the app's earlier tokens in the workspace. */
+  scopes?: readonly string[]
+  /** The clock the app's token is kept by. */
+  now?: () => number
   /** The app's own user ID, so its comments aren't imported back. */
   bot?: string
   /** A team key to a channel. Two-way unless `mirror: false`. */
@@ -301,10 +367,39 @@ export type LinearOptions = SyncOptions & {
 }
 
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
-export const linear = (options: LinearOptions): Provider => declared('linear', options, linearWith)
+export const linear = (options: LinearOptions): Provider => {
+  if ((options.clientId === undefined) !== (options.clientSecret === undefined)) throw misuse('invalid_sync', 'A linear sync needs "clientId" and "clientSecret" together: the OAuth application\'s own.')
+  return declared('linear', options, linearWith, ['clientId', 'clientSecret'])
+}
+
+/** What an app's token may do unless the module says: read what comes in, and write the comments and issues that go back. */
+const LINEAR_SCOPES = ['read', 'write'] as const
 
 function linearWith(options: Resolved<LinearOptions>): Provider {
   const team = (place: string) => options.teams[place]
+  const api = options.api ?? 'https://api.linear.app/graphql'
+  const app = options.clientId !== undefined && options.clientSecret !== undefined ? { id: options.clientId, secret: options.clientSecret } : undefined
+  /** Whether the sync has something to send and read with: a token, or an app to ask for one. */
+  const signed = options.token !== undefined || app !== undefined
+  /**
+   * The app's own token: asked for once, kept until it is about to run out (thirty days, and Linear gives no
+   * refresh token, so the next one is asked for the same way), and asked for again after one Linear refused.
+   */
+  let appToken: Promise<{ token: string; until: number }> | undefined
+  const askToken = (fetcher: typeof fetch) => {
+    const now = (options.now ?? Date.now)()
+    const asked = send(fetcher, new URL('/oauth/token', api).href, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'client_credentials', scope: (options.scopes ?? LINEAR_SCOPES).join(','), client_id: app!.id, client_secret: app!.secret }).toString(),
+    }).then((answer) => {
+      if (typeof answer?.access_token !== 'string' || !answer.access_token) throw new Failure('platform_refused', `Linear made no token for the app${typeof answer?.error_description === 'string' ? `: ${answer.error_description.slice(0, 200)}` : ''}.`)
+      return { token: answer.access_token as string, until: now + (Number(answer.expires_in) || 0) * 1000 }
+    })
+    appToken = asked
+    asked.catch(() => appToken === asked && (appToken = undefined))
+    return asked
+  }
   /**
    * What an issue is filed under, as the webhook says it: its labels, its assignee, its priority and its
    * project. Linear leaves an empty assignee or project out rather than sending `null`, so one that is
@@ -335,8 +430,14 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
   /** An issue as the API lists it, in the shape its webhook has: its labels are a list there, not a page of one. */
   const listed = (issue: Record<string, any>) => (Array.isArray(issue.labels?.nodes) ? { ...issue, labels: issue.labels.nodes } : issue)
   let organization: Promise<string> | undefined
-  // A personal API key goes as it is; an OAuth token is a bearer token.
-  const authorization = () => {
+  // The app's token when there is an app. Or else `token`: a personal API key goes as it is, an OAuth token is a bearer token.
+  const authorization = async (fetcher: typeof fetch) => {
+    if (app) {
+      const held = appToken
+      let got = await (held ?? askToken(fetcher))
+      if (got.until - (options.now ?? Date.now)() < APP_TOKEN_MARGIN_MS) got = await (appToken === held || !appToken ? askToken(fetcher) : appToken)
+      return `Bearer ${got.token}`
+    }
     const token = options.token!
     return token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
   }
@@ -346,8 +447,16 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
     const once = found.filter((file, index) => found.findIndex((other) => other.url === file.url) === index)
     return once.length ? once : undefined
   }
-  const postAs = (query: string, variables: unknown, fetcher: typeof fetch) => {
-    return send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+  const postAs = async (query: string, variables: unknown, fetcher: typeof fetch) => {
+    const ask = async () => send(fetcher, api, { method: 'POST', headers: { authorization: await authorization(fetcher), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
+    try {
+      return await ask()
+    } catch (error) {
+      // The app's token was ended early (its secret rotated, its scopes changed): a new one, and once more.
+      if (!app || !(error instanceof Failure) || error.reason !== 'platform_401') throw error
+      appToken = undefined
+      return ask()
+    }
   }
   /** An issue as a thread's first message, as its webhook would have brought it, in the state it is in now. */
   const rootOf = (issue: Record<string, any>, id: string): Inbound => {
@@ -417,13 +526,13 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
     },
     mirrors(place) {
       const to = team(place)
-      return options.token !== undefined && to !== undefined && !(typeof to === 'object' && to.mirror === false)
+      return signed && to !== undefined && !(typeof to === 'object' && to.mirror === false)
     },
     async download(file, fetcher, limit) {
-      if (!options.token) throw refused('no token to fetch it with')
+      if (!signed) throw refused('no token to fetch it with')
       // Linear lists no uploads for a comment, so a link is all there is, and anyone who can comment writes it. The
       // key fetches only what its own workspace holds: the first part of an upload's path is the workspace's ID.
-      organization ??= send(fetcher, options.api ?? 'https://api.linear.app/graphql', { method: 'POST', headers: { authorization: authorization(), 'content-type': 'application/json' }, body: JSON.stringify({ query: '{ organization { id } }' }) }).then((answer) => {
+      organization ??= postAs('{ organization { id } }', undefined, fetcher).then((answer) => {
         const id = answer?.data?.organization?.id
         if (typeof id !== 'string' || !id) throw new Failure('platform_refused', 'Linear did not say which workspace the key is for.')
         return id
@@ -434,10 +543,10 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
       })
       const path = URL.canParse(file.url) ? new URL(file.url).pathname.split('/')[1] : undefined
       if (path !== workspace) throw refused("not an upload of this board's Linear workspace")
-      return fetchFile(fetcher, file.url, { hosts: ['uploads.linear.app'], headers: { authorization: authorization() }, limit })
+      return fetchFile(fetcher, file.url, { hosts: ['uploads.linear.app'], headers: { authorization: await authorization(fetcher) }, limit })
     },
     async catchUp(since, fetcher) {
-      if (!options.token) return []
+      if (!signed) return []
       const keys = Object.keys(options.teams)
       if (keys.length === 0) return []
       const refused = (field: string, answer: any) => new Failure('platform_refused', `Linear did not list ${field}: ${String(answer?.errors?.[0]?.message ?? 'no data').slice(0, 200)}`)
@@ -561,9 +670,17 @@ export type SlackOptions = SyncOptions & {
   bot?: string
   /** A Slack channel ID to a board channel. Two-way unless `mirror: false`. */
   channels: Record<string, string | { channel: string; mirror?: boolean }>
+  /**
+   * The Slack app is declared an agent: a thread being worked on shows Slack's own "Working…" under it, in
+   * place of a progress message. Needs the app's agent feature turned on in Slack, which can't be turned off again.
+   */
+  agent?: boolean
   api?: string
   now?: () => number
 }
+
+/** How often Slack is told a thread is still being worked on: it stops showing it an hour after it was last told. */
+const SLACK_WORKING_TTL_MS = 50 * 60_000
 
 /**
  * Requests one catch-up tick makes for what was posted while down, shared by the mapped channels, each getting at
@@ -742,6 +859,27 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
       const [channel, ts] = external.split(':')
       await send(fetcher, `${base}/chat.update`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts, text }) })
     },
+    ...(options.agent
+      ? {
+          workingTtl: SLACK_WORKING_TTL_MS,
+          /**
+           * Slack's agent session for the thread, which it makes on the first call and finds again by the channel
+           * and the thread's first message: `processing` shows "Working…", told again whenever the work says
+           * something new, so the hour Slack shows it for starts over, and `active` ends it. Slack shows no
+           * words of ours there, and a message the app posts doesn't end it, so the end is always said.
+           */
+          async working(target: { place: string; threadExternal: string }, step: WorkingStep, _now: { text: string; state: unknown }, fetcher: typeof fetch) {
+            const [channel, ts] = target.threadExternal.split(':')
+            const answer = await send(fetcher, `${base}/agents.sessions.setStatus`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' },
+              body: JSON.stringify({ channel_id: channel, thread_ts: ts, status: step === 'end' ? 'active' : 'processing' }),
+            })
+            if (answer.ok !== true) throw new Failure(`slack_${answer.error ?? 'error'}`, `Slack refused the status: ${answer.error ?? 'unknown'}.`)
+            return null
+          },
+        }
+      : {}),
     async remove(external, _place, fetcher) {
       const [channel, ts] = external.split(':')
       await send(fetcher, `${base}/chat.delete`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts }) })
