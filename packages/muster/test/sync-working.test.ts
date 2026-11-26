@@ -188,7 +188,12 @@ describe('sync: a thread being worked on, shown on a platform that can show it',
     // Synced in, from a place that takes nothing back.
     await begin(await thread('C777', '1700000000.000900'))
     // On a thread that does show, but said with noSync.
-    await daemon.reply({ to: await thread(), text: 'started card: 1 tasks in general/card-3', labels: { progress: 'open' }, noSync: true })
+    const shown = await thread()
+    await daemon.reply({ to: shown, text: 'started card: 1 tasks in general/card-3', labels: { progress: 'open' }, noSync: true })
+    // And one said with noSync, then edited and only then labelled, by a caller that may sync: still the board's alone.
+    const kept = await daemon.reply({ to: shown, text: 'for the board only', noSync: true })
+    await daemon.edit({ id: kept.id, text: 'for the board only, edited' })
+    await daemon.label({ id: kept.id, set: { progress: 'open' } })
     await backend.syncTick()
     expect(steps()).toEqual([])
   })

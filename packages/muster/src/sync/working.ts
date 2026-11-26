@@ -23,6 +23,8 @@ type Row = { thread: number; message: number; active: number; text: string; stat
  * latest edit, by a caller not held to the board. Null when it was posted held to the board, or is gone.
  */
 function syncedText(ctx: Context, thread: number, message: number, upTo: number): string | null {
+  // A message posted held to the board stays there whoever edits it afterwards, as it does for deliveries.
+  if (ctx.db.raw.prepare('select 1 from messages where id = ? and deleted = 0 and no_sync = 0').get(message) === undefined) return null
   const rows = ctx.db.raw.prepare("select * from events where thread = ? and seq <= ? and type in ('message.posted', 'message.edited', 'message.deleted') order by seq desc").all(thread, upTo) as Parameters<typeof toEvent>[0][]
   for (const row of rows) {
     const event = toEvent(row)
