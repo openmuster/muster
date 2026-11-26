@@ -37,6 +37,34 @@ export function routeFor(from: string, href: string, docsRoot = 'packages/muster
   return `/docs${slugs.length ? `/${slugs.join('/')}` : ''}${anchor}`
 }
 
+/**
+ * A page's Markdown made for reading off the site: links to other pages go to their `.md` here (the
+ * text is captured before the site's remark rules rewrite them), and headings drop the `[#id]` anchors
+ * Fumadocs adds. Code blocks are left exactly as written.
+ */
+export function forAgents(markdown: string, from: string): string {
+  let fence: string | null = null
+  return markdown
+    .split('\n')
+    .map((line) => {
+      const opens = /^\s*(```+|~~~+)/.exec(line)?.[1]
+      if (opens && (fence === null || opens.startsWith(fence))) {
+        fence = fence === null ? opens : null
+        return line
+      }
+      if (fence !== null) return line
+      return line
+        .replace(/^(#{1,6} .*?) \[#[^\]\s]+\]$/, '$1')
+        .replace(/\]\(([^)\s]+)\)/g, (_, href: string) => {
+          const route = routeFor(from, href)
+          if (!route.startsWith('/docs')) return `](${route})`
+          const [path, hash] = route.split('#')
+          return `](${path}.md${hash ? `#${hash}` : ''})`
+        })
+    })
+    .join('\n')
+}
+
 /** GitHub's `> [!NOTE]` kinds, as the site's callout types. */
 export const CALLOUTS: Record<string, string> = { NOTE: 'info', TIP: 'info', IMPORTANT: 'info', WARNING: 'warn', CAUTION: 'error' }
 

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { fenceMeta, folderTitle, remarkMuster, routeFor, slugsFor } from '../lib/markdown'
+import { fenceMeta, folderTitle, forAgents, remarkMuster, routeFor, slugsFor } from '../lib/markdown'
 
 const docs = fileURLToPath(new URL('../../../packages/muster/docs', import.meta.url))
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.md') ? [join(dir, entry.name)] : []))
@@ -76,5 +76,20 @@ describe('what the site does with the docs\' own markup', () => {
     expect(quote.type).toBe('blockquote')
     expect(diagram.meta).toBeNull()
     expect(para.children[0].url).toBe('/docs/quickstart')
+  })
+})
+
+describe('a page as text for agents', () => {
+  it('points links at the other pages\' Markdown, keeping anchors, and leaves links out of the docs as they are', () => {
+    const page = 'See [Access](./01-concepts/11-access.md#tokens), [the README](../../../README.md) and [Node](https://nodejs.org).'
+    expect(forAgents(page, '01-quickstart.md')).toBe(
+      'See [Access](/docs/concepts/access.md#tokens), [the README](https://github.com/openmuster/muster/blob/main/README.md) and [Node](https://nodejs.org).',
+    )
+    expect(forAgents('[Home](../index.md)', '03-guides/02-swarm.md')).toBe('[Home](/docs.md)')
+  })
+
+  it('drops the anchor Fumadocs puts after a heading, and touches nothing inside a code block', () => {
+    const page = ['## Install [#install]', '', '```md', '## Kept [#kept]', '[x](./a.md)', '```', '### After [#after]'].join('\n')
+    expect(forAgents(page, 'index.md')).toBe(['## Install', '', '```md', '## Kept [#kept]', '[x](./a.md)', '```', '### After'].join('\n'))
   })
 })
