@@ -233,10 +233,10 @@ async function linksIn(team: Board, result: string, card: number, owner: string)
 async function relateInLinear(team: Board, card: number, others: Message[]): Promise<void> {
   const made = await madeOf(team, card)
   const source = made?.key ? sources()[made.key] : undefined
-  const token = source ? process.env[source.token] : undefined
-  if (source?.type !== 'linear' || !token || !made?.external?.startsWith('issue:')) return
+  if (source?.type !== 'linear' || !made?.external?.startsWith('issue:')) return
+  const authorization = await authOf(source).catch(() => null)
+  if (authorization === null) return
   const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
-  const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
   for (const other of others) {
     const theirs = await madeOf(team, other.id)
     if (theirs?.key !== made.key || !theirs.external?.startsWith('issue:')) continue
@@ -259,15 +259,16 @@ type Stage = 'backlog' | 'planning' | 'ready' | 'working' | 'done' | 'canceled'
 
 /**
  * The sources with a status, by their sync's key in `sync` below: what each status means (by its name as the
- * board labels it, `state=in-progress` for "In progress"), and the statuses the loop writes back, with the
- * variable that holds the token it writes with. A status not listed parks the card. LOOP_STAGES, JSON in the
- * same shape, replaces an entry: `{"nt":{"type":"notion","token":"NOTION_TOKEN","stages":{"inbox":"ready"}}}`.
- * Notion's integration needs "Update content" to write a status; without its token the loop writes none.
+ * board labels it, `state=in-progress` for "In progress"), the statuses the loop writes back, and the variables
+ * that hold what it writes with: a token, or for Linear the same OAuth app's client ID and secret its sync
+ * uses. A status not listed parks the card. LOOP_STAGES, JSON in the same shape, replaces an entry:
+ * `{"nt":{"type":"notion","token":"NOTION_TOKEN","stages":{"inbox":"ready"}}}`. Notion's integration needs
+ * "Update content" to write a status; with nothing to write with, the loop writes none.
  */
-type Source = { type: 'notion' | 'linear'; token: string; stages: Record<string, Stage>; write?: { working?: string; done?: string } }
+type Source = { type: 'notion' | 'linear'; token: string; clientId?: string; clientSecret?: string; stages: Record<string, Stage>; write?: { working?: string; done?: string } }
 const SOURCES: Record<string, Source> = {
   nt: { type: 'notion', token: 'NOTION_TOKEN', stages: { 'not-started': 'backlog', planning: 'planning', ready: 'ready', 'in-progress': 'working', done: 'done' }, write: { working: 'in-progress', done: 'done' } },
-  lin: { type: 'linear', token: 'LINEAR_API_KEY', stages: { triage: 'planning', backlog: 'backlog', todo: 'ready', 'in-progress': 'working', done: 'done', canceled: 'canceled', duplicate: 'canceled' }, write: { working: 'in-progress', done: 'done' } },
+  lin: { type: 'linear', token: 'LINEAR_API_KEY', clientId: 'LINEAR_CLIENT_ID', clientSecret: 'LINEAR_CLIENT_SECRET', stages: { triage: 'planning', backlog: 'backlog', todo: 'ready', 'in-progress': 'working', done: 'done', canceled: 'canceled', duplicate: 'canceled' }, write: { working: 'in-progress', done: 'done' } },
 }
 const sources = (): Record<string, Source> => {
   try {
@@ -381,14 +382,38 @@ async function setStatus(team: Board, card: number, stage: 'working' | 'done', s
   const made = await madeOf(team, card)
   const source = made?.key ? sources()[made.key] : undefined
   const want = source?.write?.[stage]
-  const token = source ? process.env[source.token] : undefined
-  if (!made?.external || !source || !want || !token) return
+  if (!made?.external || !source || !want) return
   try {
-    if (source.type === 'notion') await notionStatus(made.external, want, token)
-    else await linearStatus(made.external, want, token)
+    const authorization = await authOf(source)
+    if (authorization === null) return
+    if (source.type === 'notion') await notionStatus(made.external, want, authorization)
+    else await linearStatus(made.external, want, authorization)
   } catch (error) {
     await note(team, card, `couldn't set its ${source.type === 'notion' ? 'Notion' : 'Linear'} status to ${want}: ${String((error as Error)?.message ?? error).slice(0, 300)}`, `status-${stage}-${since}`)
   }
+}
+
+/** The Linear app's own token, kept until shortly before it runs out. */
+let appToken: { id: string; token: string; until: number } | undefined
+
+/**
+ * How the loop signs what it writes to a source: its token when the environment has one, or for a Linear
+ * OAuth app, the app's own token, asked for with its client credentials as its sync asks (the same scopes, so
+ * the sync's token stays good). Null when it has nothing to write with.
+ */
+async function authOf(source: Source): Promise<string | null> {
+  const token = process.env[source.token]
+  // A Linear personal API key goes as it is; everything else is a bearer token.
+  if (token) return source.type === 'linear' && (token.startsWith('lin_api_') || /^bearer /i.test(token)) ? token : `Bearer ${token}`
+  const id = source.clientId ? process.env[source.clientId] : undefined
+  const secret = source.clientSecret ? process.env[source.clientSecret] : undefined
+  if (source.type !== 'linear' || !id || !secret) return null
+  if (appToken?.id === id && appToken.until > Date.now() + 60_000) return `Bearer ${appToken.token}`
+  const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
+  const got = await answer(await fetch(new URL('/oauth/token', api).href, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'read,write', client_id: id, client_secret: secret }).toString() }))
+  if (typeof got?.access_token !== 'string' || !got.access_token) throw new Error('Linear made no token for the app')
+  appToken = { id, token: got.access_token, until: Date.now() + (Number(got.expires_in) || 0) * 1000 }
+  return `Bearer ${appToken.token}`
 }
 
 /** A platform's answer as JSON, or what it said went wrong. */
@@ -400,10 +425,10 @@ async function answer(response: Response): Promise<any> {
 }
 
 /** A Notion page's Status (or a select called Status) set to the option whose name reads as `want`. */
-async function notionStatus(external: string, want: string, token: string): Promise<void> {
+async function notionStatus(external: string, want: string, authorization: string): Promise<void> {
   if (!external.startsWith('page:')) throw new Error(`not a page: ${external}`)
   const api = process.env.LOOP_NOTION_API ?? 'https://api.notion.com/v1'
-  const headers = { authorization: `Bearer ${token}`, 'notion-version': '2026-03-11', 'content-type': 'application/json' }
+  const headers = { authorization, 'notion-version': '2026-03-11', 'content-type': 'application/json' }
   const id = external.slice(5)
   const page = await answer(await fetch(`${api}/pages/${id}`, { headers }))
   const found = Object.entries(page.properties ?? {}).find(([name, property]: [string, any]) => property?.type === 'status' || (property?.type === 'select' && /^status$/i.test(name)))
@@ -417,11 +442,9 @@ async function notionStatus(external: string, want: string, token: string): Prom
 }
 
 /** A Linear issue moved to its team's state whose name reads as `want`. */
-async function linearStatus(external: string, want: string, token: string): Promise<void> {
+async function linearStatus(external: string, want: string, authorization: string): Promise<void> {
   if (!external.startsWith('issue:')) throw new Error(`not an issue: ${external}`)
   const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
-  // A personal API key goes as it is; an OAuth token is a bearer token, as Linear's sync sends them.
-  const authorization = token.startsWith('lin_api_') || /^bearer /i.test(token) ? token : `Bearer ${token}`
   const ask = async (query: string, variables: Record<string, unknown>) => (await answer(await fetch(api, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) }))).data
   const id = external.slice(6)
   const states = (await ask('query($id: String!) { issue(id: $id) { team { states { nodes { id name } } } } }', { id }))?.issue?.team?.states?.nodes ?? []

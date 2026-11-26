@@ -498,7 +498,15 @@ describe('templates/loop', () => {
       const written: { issue: string; state: string }[] = []
       const related: { a: string; b: string }[] = []
       const api = { failing: false }
-      vi.stubGlobal('fetch', (async (_url: string, init: RequestInit) => {
+      /** How each write to Linear was signed, and the app tokens asked for. */
+      const signed: string[] = []
+      const minted: string[] = []
+      vi.stubGlobal('fetch', (async (url: string, init: RequestInit) => {
+        if (String(url).endsWith('/oauth/token')) {
+          minted.push(String(init.body))
+          return Response.json({ access_token: `app-token-${minted.length}`, expires_in: 2_592_000 })
+        }
+        signed.push(new Headers(init.headers).get('authorization') ?? '')
         const { query, variables } = JSON.parse(String(init.body))
         if (api.failing) return Response.json({ errors: [{ message: 'not allowed' }] }, { status: 400 })
         if (String(query).includes('issueRelationCreate')) return (related.push(variables), Response.json({ data: { issueRelationCreate: { success: true } } }))
@@ -524,7 +532,7 @@ describe('templates/loop', () => {
       }
       /** The issue moved to a state in Linear, by `who`. */
       const move = (id: string, state: string, who = 'u-ada') => send({ type: 'Issue', action: 'update', actor: { id: who }, data: { id, team: { key: 'ENG' }, state: { name: state }, updatedAt: new Date(Date.now() + ++at * 1000).toISOString() } })
-      return { ...made, file, move, written, related, sent, api, channel }
+      return { ...made, file, move, written, related, sent, signed, minted, api, channel }
     }
     /** Whether a triage was asked for on the card, by the board's record of the request. */
     const triaged = async (made: Awaited<ReturnType<typeof fromLinear>>, card: number) => (await made.team.events({ after: 0, filter: { types: ['workflow.requested'], re: card } })).events.some((event) => (event.data as { name: string }).name === 'triage')
@@ -619,6 +627,24 @@ describe('templates/loop', () => {
       expect(await made.card(card)).toMatchObject({ state: 'blocked', hold: { kind: 'working' } })
       expect(made.written.at(-1)).toEqual({ issue: id, state: 'In Progress' })
       expect((await made.team.readThread({ id: run.work!.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
+    })
+
+    it("with no API key, the loop writes as the sync's own Linear app: its token is asked for once, with the app's client credentials", async () => {
+      const made = await fromLinear()
+      delete process.env.LINEAR_API_KEY
+      Object.assign(process.env, { LINEAR_CLIENT_ID: 'app-id', LINEAR_CLIENT_SECRET: 'app-secret' })
+      const { id, card } = await made.file('Todo')
+      await made.complete((await made.run(card, 'triage'))!.triage!.id, SPEC)
+      await made.tick()
+      const run = (await made.run(card, 'card'))!
+      for (const key of ['spec', 'work']) await made.complete(run[key]!.id, `${key} done`)
+      await made.complete(run.review!.id, 'approve')
+      await made.tick()
+      expect(made.written).toEqual([{ issue: id, state: 'In Progress' }, { issue: id, state: 'Done' }])
+      expect(made.minted).toHaveLength(1)
+      expect(new URLSearchParams(made.minted[0]!).get('grant_type')).toBe('client_credentials')
+      expect(new URLSearchParams(made.minted[0]!).get('client_id')).toBe('app-id')
+      expect(new Set(made.signed)).toEqual(new Set(['Bearer app-token-1']))
     })
 
     it('a review that asks for changes is not Done: the card stays working', async () => {
