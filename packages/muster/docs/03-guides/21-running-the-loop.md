@@ -65,6 +65,28 @@ Then file one report from each source and watch it go through: held
 | `card #12 needs your approval` | Read the spec on the card, then approve it or leave it |
 | `task #31 is blocked` | An agent needs a decision: answer it |
 | `card #12's change is done for now` | Review the pull request, and reply on the card if it needs another round |
+| `card #12 has a plan to read` | Read the planner's answer on the card: reply to it, or move the card to ready |
+| `card #12 looks like a duplicate of #9` | Read both. Cancel #12, or label it `approved=yes` to work it anyway |
+| `card #12 was declined` | Read the triage's summary on the card: edit the report, move it to ready again, or cancel it |
+
+## Start and park cards
+
+A card from Notion or Linear follows its status: move the page to Ready or
+the issue to Todo to start it, and to Not started or Backlog to park it. The
+loop sets In progress and Done itself. A card from anywhere else is ready
+when it comes in; park or start it with a label:
+
+```bash
+mu label 12 stage=backlog
+mu label 12 stage=ready
+```
+
+## Plan a card
+
+Move a card to planning (Notion's Planning, Linear's Triage, or
+`stage=planning`) and an agent answers on it with questions and a draft. Reply
+on the card to answer; each reply is its next round. Move it to ready when the
+draft is right: the triage writes the spec from it.
 
 ## Approve a card
 
@@ -115,12 +137,15 @@ page, or on the board.
 
 | What you see | Why | What to do |
 | --- | --- | --- |
-| A card stays `triage`, with a summary that the triage failed | The agent found nothing to change in this repository, and said why | Edit the report to say more (it is triaged again), or cancel it: `mu tasks cancel 12` |
+| A card held `declined` | The triage agent found nothing to change in this repository, or stopped; its summary on the card says which | Edit the report to say more, or move it to ready again (`mu label 12 stage=ready`, or the page's Status): it is triaged again. Or cancel it: `mu tasks cancel 12` |
 | A card stays `approval` | Nobody trusted has approved it | Approve it, or cancel it |
 | A task held `push_conflict`, a `push` label on the work | Someone pushed to `mu/task-<id>` while the agent worked; the branch was left as they left it | Read the branch. Then reply on the card: the next round starts from the branch as it is now |
 | A task held `push_failed` | The push itself failed, often the GitHub App's permissions | Fix the App's Contents permission, then reply on the card |
 | Workers stop with `over_budget`, and nothing is claimed | The cards have spent their budget | Raise it (`mu budget cards 50`), or wait |
-| A card held `edited` for a moment | Its author changed the report | Nothing: it is triaged again |
+| A card held `edited` for a moment | Its author changed the report | Nothing: it is triaged again, or parked again |
+| A card stays `backlog` though its page says Ready | The status was set by someone other than the sync, or Notion's webhook didn't reach the board | Move it out of Ready and back in Notion; check the webhook's deliveries |
+| `couldn't set its Notion status` on the card | The integration can't edit the page, or the database has no option by that name | Give the integration "Update content", or add the option, or change `write` in `LOOP_STAGES` |
+| A card held `done` | The review approved it, but the card couldn't be completed (its budget is spent, say) | Nothing: a trusted reply starts another round as usual |
 | No card for a report | The source isn't reaching the board | `mu daemon status` names the module's sync; check the platform's webhook deliveries |
 
 ## Rotate and stop

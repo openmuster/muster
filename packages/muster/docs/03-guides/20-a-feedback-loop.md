@@ -31,8 +31,11 @@ flowchart LR
   C -->|a trusted reply| W
 ```
 
-- **A card is a thread and a task.** Its hold says where it is: `triage`,
-  `approval`, `working`, or `edited` when its author changed the report.
+- **A card is a thread and a task.** Its hold says where it is: `backlog`
+  while it is parked, `planning` while an agent shapes it with you, `triage`, `approval`, `working`,
+  `declined` when the triage made no card, `done` when its run was approved
+  but it couldn't be completed, or `edited` when its author changed the
+  report.
 - **Each source has its own channel** under `cards/`: `cards/slack`,
   `cards/linear`, `cards/github`, `cards/notion`, `cards/app`. A card's runs are in channels
   under its own, so the card is what Slack and Linear mirror.
@@ -76,6 +79,90 @@ are. Read it each time a card moves, so a change takes effect at once.
   triaged (and approved, where it had to be) with `{on.text}`, never the
   report itself.
 
+## Stages
+
+A card starts where its source says. Only a ready card is triaged; a parked
+one waits, and nothing runs for it.
+
+| Stage | Notion Status | Linear state | Anywhere else: `stage` label | The card |
+| --- | --- | --- | --- | --- |
+| backlog | Not started | Backlog | `stage=backlog` | held `backlog` |
+| planning | Planning | Triage | `stage=planning` | held `planning`, with a planner |
+| ready | Ready | Todo | `stage=ready`, or none | triaged, then `approval` or `working` |
+| working | In progress, written by the loop | In Progress, written by the loop | | held `working` |
+| done | Done, written by the loop | Done, written by the loop | | completed |
+| canceled | | Canceled, Duplicate | | canceled |
+
+- **The source's status moves the card.** Move a Notion page to Ready, or a
+  Linear issue to Todo, and its card is triaged. Move it back to Not started
+  or Backlog and it is parked again, unless a run is going: then it stays
+  `working`, and the card says so.
+- **Only the source's own sync moves it.** A card's source is read from how
+  the board recorded its first message, never from a label. A `state` label
+  anyone else sets moves nothing, and is never read later.
+- **Sources without a status** (Slack, GitHub, your app, the inspector) are
+  ready when they come in. Someone trusted parks one with
+  `mu label 12 stage=backlog`, and starts it with `stage=ready`. Anyone
+  else's `stage` label does nothing.
+- **A status the loop doesn't know** parks the card.
+- **The loop writes the status back:** In progress when the work starts, and
+  Done when the review completes with `approve`, which also completes the
+  card. A write that fails is said on the card, as `loop`, and the card goes
+  on. Notion's integration needs the "Update content" capability for it.
+- **A parked card that is edited** stays parked, and is triaged from its new
+  text when it is moved to ready.
+
+The mapping is `SOURCES` in `board.ts`, by sync key. `LOOP_STAGES` replaces
+an entry with JSON in the same shape:
+
+```bash
+export LOOP_STAGES='{"nt":{"type":"notion","token":"NOTION_TOKEN","stages":{"inbox":"backlog","go":"ready"},"write":{"working":"doing","done":"shipped"}}}'
+```
+
+## Planning
+
+A card in planning gets an agent that shapes it with the people who asked,
+before anything is built: the `planning` workflow, one step that reads the
+report and the repository and changes nothing.
+
+- **It answers on the card,** as `planner`: its questions, numbered, then the
+  card as it stands (a title, what to change, how to check it), and how it
+  would split a change too big for one pull request.
+- **Each trusted reply is its next round,** on the same task: the comments go
+  to it, fenced as content, and it answers again. Replies made while it
+  works wait for its answer. Anyone else's replies aren't shown to it.
+- **Move it to ready** (Ready, Todo, or `stage=ready`) when the card is
+  right. The triage writes the spec from the newest plan and what was said
+  on the card since it, and what was said in planning starts no round of the
+  work.
+- **Edit the report** in planning and a new planner starts from the new
+  text; the old plan is not shown to the triage.
+- One planner per card. Moved back to planning later, it goes on when
+  someone replies.
+
+## Related and duplicate cards
+
+Each triage is shown the other cards, newest first, by number, hold and
+first line, as many as fit in what a run quotes (2,000 characters, after the
+plan when there is one). The list is a reply on the card, written as `cards` and kept on
+the board: it never reaches Slack, Linear or Notion. The triage step quotes
+it with `{on.text}`, as content.
+
+- **Related:** a triage result that starts with `related: #36, #16` labels
+  the card `related=36,16` and says so on the card, by number only: the card
+  is mirrored where it came from, and another card's words may be private to
+  its own source. When both cards are
+  Linear issues of the same sync, the issues are related in Linear too.
+- **The same request:** `duplicate-of: #36` holds the card `duplicate`, with
+  its spec on it, and you are told. Someone trusted labels it `approved=yes`
+  to work it anyway, or you cancel it. A duplicate the triage wrote no card
+  for is triaged again when it is moved to ready.
+- **Only cards of this loop count.** A number that isn't another card's (the
+  card itself, a run's task, any other thread) is left out. The lines are
+  taken off the spec.
+- **Nothing is split.** A report that asks for several things is one card;
+  the spec can list follow-ups for you to file.
+
 ## Another round
 
 A reply on the card by someone trusted, once its run has ended, is another
@@ -84,7 +171,9 @@ sent back (`mu tasks reopen <id> --round`), and a worker takes them. The work
 starts from its branch: see
 [Another round on the same pull request](./06-sandboxed-agents.md#another-round-on-the-same-pull-request).
 A comment made while a round runs waits for it to end. A round's reply on
-the card says which comments it took.
+the card says which comments it took; comments too long for one round wait
+for the next. A card that is done comes back the
+same way: a trusted reply reopens it, and its status is In progress again.
 
 ## What you see
 
@@ -111,8 +200,10 @@ the card says which comments it took.
 - **A run asked on an edited spec** starts nothing (`asked_message_changed`):
   a card that changed after it was triaged is triaged again.
 - **The triage agent fails** a report that isn't a change to make here, with
-  why, in the triage run's summary on the card. The card stays held `triage`:
-  cancel it, or reply and edit the report to try again.
+  why, in the triage run's summary on the card. The card is held `declined`,
+  says so, and you are told. Edit the report, or move it to ready again, to
+  try again; or cancel it. A triage whose agent stopped (out of time, a usage
+  limit) is declined the same way, and its summary says so.
 
 ## Next
 

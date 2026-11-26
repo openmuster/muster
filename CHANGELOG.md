@@ -27,6 +27,8 @@ versions are affected.
   reply as often as not, quoted and fenced as `{thread.text}` is. A message
   deleted since, or edited after the request, starts no run
   (`asked_message_changed`).
+- `fenced(whose, text)`: text someone else wrote, quoted in a task as
+  `{thread.text}` is, in a fence longer than any run of backticks in it.
 - `workflowResult(team, id, owner)`: a workflow step's result for code that
   goes on from it, only when the daemon made the task and the run's own
   worker completed it.
@@ -38,6 +40,19 @@ versions are affected.
   [A feedback loop](./packages/muster/docs/03-guides/20-a-feedback-loop.md).
   - Notion is a source too: a page in a mapped database is a report, in
     `cards/notion`, and the card's replies are comments on it.
+  - Stages: a card from Notion or Linear starts where its status says, and
+    only a ready one (Ready, Todo) is triaged; Not started, Backlog,
+    Planning and Triage park it. The loop writes In progress back when the
+    work starts and Done when the review approves, and completes the card.
+    Elsewhere a trusted `stage` label parks and starts a card. A triage
+    that makes no card holds it `declined`, and an edit or a move to ready
+    tries again. The triage is shown the other cards: `related: #36` labels
+    and links them (in Linear too), and `duplicate-of: #36` holds the card
+    `duplicate` until someone trusted approves it. A card in planning
+    (Planning, Triage, `stage=planning`) gets a planner that answers with
+    questions and a draft; each trusted reply is its next round, and the
+    triage writes the spec from the newest plan. See
+    [Stages](./packages/muster/docs/03-guides/20-a-feedback-loop.md#stages).
   - A task of a run answered and unblocked after the run's workers stopped
     gets a worker of its own (`resume`).
   - [Running the feedback loop](./packages/muster/docs/03-guides/21-running-the-loop.md),
