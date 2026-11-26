@@ -459,9 +459,8 @@ describe('cloud runners', () => {
     expect(await run.wait!()).toEqual({ exitCode: 3 })
     expect(polls).toBe(3)
     // Only closing is something the Worker does to a run's network.
-    await run.setPolicy!('deny-all')
+    await run.close!()
     expect(asked).toContain('POST /runs/r1/close')
-    expect(await reason(run.setPolicy!({ 'example.com': [] }))).toBe('push_unsupported')
     expect(await run.readFile!('/tmp/x', 3)).toEqual(Buffer.from([1, 2, 3]))
     // What the Worker sends is held to the limit here too.
     const big = await cloudflare({ worker: 'https://w.example', secret: 's', fetch: worker({ file: new Uint8Array(10) }) }).start({ ...request, attach: true })

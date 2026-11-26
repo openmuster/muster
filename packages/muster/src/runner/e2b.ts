@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { Failure } from '../failure.ts'
-import { BRANCH, CLONE_HOSTS, INSTALL, SHA, bare, memoryBases, shellQuote, type BaseRecord, type CloudRun, type CloudRunner, type VercelRule } from './cloud.ts'
+import { BRANCH, CLONE_HOSTS, INSTALL, SHA, bare, memoryBases, shellQuote, type BaseRecord, type CloudRun, type CloudRunner } from './cloud.ts'
 import { PLACEHOLDER, boardPolicy } from './policy.ts'
 
 /**
@@ -256,7 +256,11 @@ export function e2b(options: { sdk: E2bSdk; apiKey: string; domain?: string; tem
         }
       }
       // The first way out is the setup's: where mu is installed from, with no credential anywhere in it.
-      sandbox ??= await Sandbox.create(options.template, { ...connection, envs, timeoutMs: lifetime, network: setup.length ? open(options.setupHosts ?? []) : CLOSED, metadata })
+      sandbox ??= await Sandbox.create(options.template, { ...connection, envs, timeoutMs: lifetime, network: setup.length ? open(options.setupHosts ?? []) : CLOSED, metadata }).catch((error: unknown) => {
+        // E2B's own words, which name what it refused: a key, a template, a plan's limit. Never more than a line of them.
+        const said = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 200)
+        throw new Failure('runner_start_failed', `E2B didn't start a sandbox from "${options.template}": ${said}`, { hint: `Check E2B_API_KEY and MUSTER_E2B_TEMPLATE${options.domain ? ', and E2B_DOMAIN, which names the E2B this was asked of' : ''}.` })
+      })
       /** Ends the run so nothing of it is left: its way out is closed, it is removed, and what was stored for it is too. */
       const end = async () => {
         await sandbox.updateNetwork(CLOSED).catch(() => {})
@@ -375,9 +379,7 @@ export function e2b(options: { sdk: E2bSdk; apiKey: string; domain?: string; tem
             }
             return Buffer.concat(chunks)
           },
-          // Only closing is asked of a run once it has started: what E2B can express of a host's rules is less than a caller could mean.
-          setPolicy: async (rules: Record<string, VercelRule[]> | 'deny-all') => {
-            if (rules !== 'deny-all') throw new Failure('push_unsupported', "An E2B sandbox's way out can be closed once it runs, not changed.")
+          close: async () => {
             await sandbox.updateNetwork(CLOSED)
             // And nothing the agent left running holds a connection open, or changes what is read out next.
             await reap()
