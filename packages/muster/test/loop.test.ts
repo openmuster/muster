@@ -218,7 +218,7 @@ describe('templates/loop', () => {
       for (const key of ['spec', 'work']) await made.complete(run[key]!.id, `${key} done`)
       return { ...made, report, run, spawned }
     }
-    const spawnedArgs = async (file: string) => (await waitFor(() => existsSync(file)), existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [])
+    const spawnedArgs = async (file: string) => (await waitFor(() => existsSync(file) && readFileSync(file, 'utf8').includes('\n')), existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [])
 
     it('a trusted comment after the run ended sends the work and its review back, with the comment, and starts a worker on that run', async () => {
       const { team, as, tick, complete, report, run, spawned } = await worked()
@@ -873,7 +873,8 @@ describe('templates/loop', () => {
         // The fence is longer than any run of backticks in the comment.
         expect(asked).toMatch(/^`{5,}$/m)
         expect((await made.team.readThread({ id: made.cardId })).replies.at(-1)!.text).toBe(`planning round 2: taking #${comment.id}`)
-        await waitFor(() => existsSync(made.spawned))
+        // The worker is started detached: wait for what it wrote, not only for the file it opens first.
+        await waitFor(() => existsSync(made.spawned) && readFileSync(made.spawned, 'utf8').includes('\n'))
         expect(readFileSync(made.spawned, 'utf8')).toContain('--label workflow=planning')
       })
 
