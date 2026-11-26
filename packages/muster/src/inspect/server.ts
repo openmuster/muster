@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { Backend } from '../backend/types.ts'
 import { Failure } from '../failure.ts'
 import { profileName, type Caller } from '../model.ts'
+import { ICON_SVG } from './mark.ts'
 import { ROUTES } from '../serve/server.ts'
 
 const ALLOWED = new Set<string>(ROUTES)
@@ -17,6 +18,7 @@ const PAGE = (title: string) => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>${title}</title>
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(ICON_SVG)}">
 </head>
 <body>
 <div id="root"></div>

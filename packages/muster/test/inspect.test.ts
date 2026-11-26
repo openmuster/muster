@@ -70,6 +70,16 @@ describe('the inspector', () => {
     await serving.close()
   })
 
+  it('carries its tab icon inline, as an image its own policy allows, so it asks the network for nothing', async () => {
+    const { serving } = await page()
+    const response = await fetch(serving.url + '/')
+    const icon = /<link rel="icon" href="(data:image\/svg\+xml,[^"]+)">/.exec(await response.text())?.[1]
+    expect(icon).toBeDefined()
+    expect(decodeURIComponent(icon!.slice('data:image/svg+xml,'.length))).toMatch(/^<svg [^>]*viewBox="0 0 16 16"/)
+    expect(response.headers.get('content-security-policy')).toMatch(/img-src [^;]*data:/)
+    await serving.close()
+  })
+
   it('answers only for its own host name', async () => {
     const { serving } = await page()
     const port = new URL(serving.url).port

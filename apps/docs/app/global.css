@@ -82,12 +82,20 @@ h4 {
   border-color: var(--muster-line);
 }
 
-/* Nested pages hang from a thin guide line. */
-#nd-sidebar [data-state] > div > div,
-#nd-sidebar ul ul {
-  border-left: 1px solid var(--muster-line);
-  margin-left: 0.6rem;
-  padding-left: 0.4rem;
+/* Links in prose read as text with a quiet underline: the weight of the words around them, a hairline
+   under them in the site's grey, brightening on hover. Fumadocs' default (medium weight, a 1.5px
+   underline in the foreground colour) shouts on a black page. Nested pages in the sidebar already hang
+   from Fumadocs' own 1px guide line, so there is no rule of ours for it: a second one doubled it. */
+.prose :where(a):not(:where(.not-prose *)) {
+  font-weight: inherit;
+  text-decoration-color: var(--muster-thumb-hover);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
+  transition: text-decoration-color 120ms var(--ease-muster-out);
+}
+
+.prose :where(a):not(:where(.not-prose *)):hover {
+  text-decoration-color: var(--muster-fg);
 }
 
 .prose h2 {
