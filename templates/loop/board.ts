@@ -912,7 +912,8 @@ export const watch = {
  * posts wherever you choose.
  */
 export const sync = {
-  // A Slack channel, by its ID: the one people send feedback in.
+  // A Slack channel, by its ID: the one people send feedback in. With the app's agent feature turned on in Slack,
+  // add `agent: true` here and a thread shows "is working" while its card is worked on (Slack can't undo that).
   slack: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123456789: 'cards/slack' } }),
   // A Linear team, by its key: issues filed there are reports, and the card's replies are comments on them, written
   // by an OAuth application of its own (with client credentials tokens turned on), not by a person's API key.

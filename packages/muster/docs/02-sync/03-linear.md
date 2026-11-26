@@ -61,8 +61,10 @@ export default board({
   set, the app is used.
 
 > [!NOTE]
-> This follows Linear's documentation and is tested against a stand-in for its
-> API. It has not been run against a live workspace yet.
+> Run against a live workspace on 26 Nov 2026: a board reply arrived on the
+> issue as a comment by the application, under the application's name. A token
+> running out after thirty days, and one ended early, are covered by tests
+> against a stand-in for Linear's API only.
 
 `bot` is optional: the user ID whose comments are never imported. Set it only
 when the token acts as a user of its own, such as an OAuth app that posts as

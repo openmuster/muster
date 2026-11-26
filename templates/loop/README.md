@@ -100,6 +100,7 @@ ten a round, from the card workflow's own workers.
 
 Covered by tests (`packages/muster/test/loop.test.ts`), with the sandboxes as
 stand-ins. Run live on 25 Nov 2026 from an app's token, a Linear team and the
-inspector, through rounds on the same pull request and an approval; not yet
-from Slack or GitHub issues. See "What has been run for real" in the
+inspector, through rounds on the same pull request and an approval; and on 26
+Nov 2026 from Slack, with the thread shown as worked on, and with replies
+written by a GitHub App and a Linear application. See "What has been run for real" in the
 repository's README.

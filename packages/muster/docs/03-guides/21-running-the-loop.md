@@ -48,7 +48,23 @@ mu serve --module ~/loop/board.ts --allow-host board.example.com
    [Linear](../02-sync/03-linear.md), [GitHub](../02-sync/02-github.md),
    [Notion](../02-sync/05-notion.md). Notion's webhook is verified once
    first: start with `NOTION_WEBHOOK_SECRET=pending`, and follow its page.
-8. **Your app's button.** Make it a token that can only post reports, and
+8. **Who the loop writes as.** What the loop says on a platform is written
+   by an app of its own, not by you, once each platform has one:
+
+   | Platform | What to set up | In the environment |
+   | --- | --- | --- |
+   | GitHub | The GitHub App your workers push with, with read and write on Issues added and accepted on the organization | `GITHUB_APP_ID`, `GITHUB_APP_KEY_FILE` |
+   | Linear | An OAuth application with client credentials tokens turned on. One made for the board: such a token replaces an installation of the same application made through the authorization page | `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` |
+   | Slack | The bot you already have. To show "is working" under a thread while a card is worked on, turn on the app's agent feature, reinstall it, and add `agent: true` to `slack()` in `board.ts`. Slack doesn't let an app stop being an agent | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` |
+   | Notion | The integration's own token: it already writes as the integration | `NOTION_TOKEN`, `NOTION_WEBHOOK_SECRET` |
+
+   Each sync page says more: [GitHub](../02-sync/02-github.md#who-the-comments-are-by),
+   [Linear](../02-sync/03-linear.md#who-the-comments-are-by),
+   [Slack](../02-sync/04-slack.md#show-a-thread-being-worked-on). To check,
+   reply on a card from each source and look at who wrote the comment there.
+   A reply by someone in `LOOP_TRUSTED` on a card held `working` starts
+   another round, so check on a card that isn't being worked on.
+9. **Your app's button.** Make it a token that can only post reports, and
    keep it on the app's server:
 
 ```bash
@@ -66,6 +82,10 @@ as the run goes, to say where each task is (`#58 completed, #59 claimed, #60
 waiting`), so the thread on Slack, GitHub or Notion shows one comment that
 changes. When the run ends, its summary is a new reply, with each task's
 result and the pull request, so everyone following the thread is told.
+
+On Slack, with `agent: true`, that reply isn't posted: the thread shows
+"<app> is working" under it while a run is open, and the summary when it
+ends. Linear gets the reply as first written, since edits don't go to Linear.
 
 ## What you hear about
 

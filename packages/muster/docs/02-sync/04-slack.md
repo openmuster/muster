@@ -70,7 +70,7 @@ export default board({
   more, it sets it to `active`, after the run's summary has been posted.
 - The run's `started …` reply is not posted to Slack, and neither are its
   edits. Its summary, and every other reply, is posted as before.
-- Slack shows its own words there, not the board's.
+- Slack shows its own words there, "<app> is working", not the board's.
 - A call Slack refuses is tried again a minute later. The thread on the board
   says where the run is either way.
 
@@ -83,10 +83,12 @@ In the app's settings, turn on the agent feature (the manifest's
 > to reload Slack to see it. Try it on an app made for the purpose first.
 
 > [!NOTE]
-> This follows Slack's documentation and is tested against a stand-in for its
-> API. It has not been run against a live workspace yet: whether an app may
-> start "Working…" in a thread a person started, and whether it needs a paid
-> plan, are not settled by the documentation.
+> Run against a live workspace on 26 Nov 2026, in a public channel: a message
+> a person posted started a run, "<app> is working" showed under its thread
+> with no message asking for it, and it went when the run was summed up. Not
+> yet seen live: a private channel, a run longer than Slack's hour, and one run
+> handing over to the next on the same thread. Those are covered by tests
+> against a stand-in for Slack's API.
 
 ## Files
 
