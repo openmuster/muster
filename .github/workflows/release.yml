@@ -77,7 +77,7 @@ jobs:
         # muster is still alpha, so an alpha is "latest" on npm as it is on GitHub: npm won't guess that for a prerelease.
         run: |
           npm --version
-          npm publish "muster-$VERSION.tgz" --access public --tag latest
+          npm publish "./muster-$VERSION.tgz" --access public --tag latest
 
   # The same release as a container image on GitHub's registry, tagged with its version and "latest".
   image:

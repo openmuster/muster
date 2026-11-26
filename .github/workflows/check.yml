@@ -76,7 +76,7 @@ jobs:
       - run: pnpm build
       - run: node scripts/release.mjs pack out
       - name: npm takes the tarball, without publishing it
-        run: npm publish "out/muster-$(node -p "require('./packages/muster/package.json').version").tgz" --access public --tag latest --dry-run
+        run: npm publish "./out/muster-$(node -p "require('./packages/muster/package.json').version").tgz" --access public --tag latest --dry-run
       - run: node scripts/release.mjs notes "$(node -p "require('./packages/muster/package.json').version")" > /dev/null
 
   # The container image builds, starts healthy, and serves the board it keeps on its volume.
