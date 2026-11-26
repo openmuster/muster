@@ -100,7 +100,9 @@ mu workflow list
    `mu/task-<id>` and opened as a pull request.
 4. The card gets two replies, which go to Linear as comments: `started card:
    3 tasks in cards/card-<n>`, and once the tasks have ended, a summary with
-   each task's result and the pull request.
+   each task's result and the pull request. On the board the first reply also
+   says where each task is, as the run goes; Linear keeps it as it was first
+   written, since edits don't go to Linear.
 
 The run's tasks are not sent to Linear: only `cards` is mapped, and
 `cards/card-<n>` is another channel.

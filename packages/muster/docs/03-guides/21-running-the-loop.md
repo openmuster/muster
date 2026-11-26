@@ -58,6 +58,15 @@ mu token create --as pino-app --can 'cards/app=post' --ttl 90d
 Then file one report from each source and watch it go through: held
 `triage`, a spec on the card, `working`, a pull request.
 
+## What a card shows while it works
+
+Each run on a card, triage and then the work, starts with one reply from the
+daemon: `started card: 3 tasks in cards/slack/card-57`. That reply is edited
+as the run goes, to say where each task is (`#58 completed, #59 claimed, #60
+waiting`), so the thread on Slack, GitHub or Notion shows one comment that
+changes. When the run ends, its summary is a new reply, with each task's
+result and the pull request, so everyone following the thread is told.
+
 ## What you hear about
 
 | The line | What to do |

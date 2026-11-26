@@ -997,7 +997,8 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     await complete(a, 'shipped it\nand more besides')
     await fail(b, 'tests broke\ntrace')
     expect(await tick()).toEqual({ started: [], refused: [] })
-    expect(await replies()).toEqual([`started release: 3 tasks in work/app/release-${seq}`])
+    // Nothing new is said: the reply that said it started now says where each task is.
+    expect(await replies()).toEqual([`started release: 3 tasks in work/app/release-${seq}\n#${a} completed, #${b} failed, #${c} ready`])
     await cancel(c)
     expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
     const text = ['release finished: 1 completed, 1 failed, 1 canceled', `#${a} completed: shipped it (pr ${PR})`, `#${b} failed: tests broke`, `#${c} canceled`].join('\n')
@@ -1047,6 +1048,153 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
       [`release finished: 0 completed, 1 failed, 0 canceled, 2 won't start`, `#${a} failed: no access`, `#${b} won't start: blocked by #${a}`, `#${c} won't start: blocked by #${a}`].join('\n'),
     ])
     expect(await tick()).toEqual({ started: [], refused: [] })
+  })
+
+  describe("a run's start reply keeps up with the run", () => {
+    const pipeline: Workflow = { ...trio, steps: [{ key: 'spec', text: 'Spec it' }, { key: 'work', text: 'Do it', needs: ['spec'] }, { key: 'review', text: 'Review it', needs: ['work'] }] }
+    const head = (seq: number, tasks = 3) => `started release: ${tasks} tasks in work/app/release-${seq}`
+    const startReply = async (team: Board, root: number) => (await team.readThread({ id: root })).replies[0]!
+    const edits = async (team: Board) => (await team.events({ after: 0, filter: { types: ['message.edited'] } })).events.length
+
+    it('says where each task is in the one reply, labelled open until the run is summed up', async () => {
+      const { team, root, seq, tasks, tick, replies, complete } = await started(pipeline)
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      // Nothing taken yet: as it was written.
+      expect(await startReply(team, root.id)).toMatchObject({ text: head(seq), labels: { progress: 'open' }, revision: 1 })
+      const held = await team.taskClaim({ id: a })
+      await tick()
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} claimed, #${b} waiting, #${c} waiting`, labels: { progress: 'open' } })
+      // A tick with nothing new writes nothing.
+      const before = await team.head()
+      await tick()
+      expect(await team.head()).toBe(before)
+      await team.taskComplete({ id: a, token: held.token, result: 'spec written' })
+      await tick()
+      expect((await startReply(team, root.id)).text).toBe(`${head(seq)}\n#${a} completed, #${b} ready, #${c} waiting`)
+      await complete(b, 'done')
+      await complete(c, 'approved')
+      expect(await tick()).toMatchObject({ reported: [seq] })
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} completed, #${b} completed, #${c} completed`, labels: { progress: 'done' } })
+      // Still one reply that kept up, and the summary as a reply of its own.
+      expect(await replies()).toHaveLength(2)
+      expect((await replies())[1]).toMatch(/^release finished: 3 completed/)
+    })
+
+    it("says a task that can never start won't", async () => {
+      const { team, root, seq, tasks, tick, fail } = await started({ ...pipeline, timeout: '1h' })
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      await fail(a, 'no access')
+      await tick()
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} failed, #${b} won't start, #${c} won't start`, labels: { progress: 'done' } })
+    })
+
+    it('labels no refusal and no start that failed: each is said once and stays as it was said', async () => {
+      const made = memoryBoard()
+      const root = await made.team.post({ channel: 'work/app', text: 'ship 1.2' })
+      const two: Workflow = { ...trio, workers: { ...trio.workers, count: 2 } }
+      let spawned = 0
+      const deps = {
+        spawn: async () => {
+          if (++spawned === 2) throw Object.assign(new Error('spawn mu ENOENT'), { code: 'ENOENT' })
+        },
+        now: () => made.time.now().getTime(),
+        runs: openRuns(),
+      }
+      await runWorkflows(made.team, [two], deps)
+      const partial = await made.team.workflowRequest({ name: 'release', on: root.id })
+      expect((await runWorkflows(made.team, [two], deps)).refused).toEqual([partial.seq])
+      const refused = await made.team.workflowRequest({ name: 'release', on: root.id })
+      expect((await runWorkflows(made.team, [{ ...two, who: ['local:user:nobody'] }], deps)).refused).toEqual([refused.seq])
+      const [task] = (await made.team.taskList({ channel: `work/app/release-${partial.seq}`, state: 'all' })).tasks
+      await made.team.taskClaim({ id: task!.id })
+      await runWorkflows(made.team, [two], deps)
+      const replies = (await made.team.readThread({ id: root.id })).replies
+      expect(replies.map((reply) => reply.text)).toEqual(["started 1 of 2 workers for release, then: ENOENT (the daemon's log says more)", `${OWNER} may not start release`])
+      expect(replies.map((reply) => reply.labels.progress)).toEqual([undefined, undefined])
+    })
+
+    it('is found again by a daemon that starts again, which writes no second one', async () => {
+      const { team, root, seq, tasks, deps, replies, complete } = await started(pipeline)
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      await complete(a, 'spec written')
+      const again = () => runWorkflows(board({ backend: team.backend }), [pipeline], { ...deps, runs: openRuns() })
+      await again()
+      expect(await replies()).toEqual([`${head(seq)}\n#${a} completed, #${b} ready, #${c} waiting`])
+      await complete(b, 'done')
+      await complete(c, 'approved')
+      expect(await again()).toMatchObject({ reported: [seq] })
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} completed, #${b} completed, #${c} completed`, labels: { progress: 'done' } })
+      expect(await replies()).toHaveLength(2)
+    })
+
+    it('leaves a start reply written before replies were labelled as it is, and still sums the run up', async () => {
+      const made = memoryBoard()
+      const deps = { spawn: async () => {}, now: () => made.time.now().getTime(), runs: openRuns() }
+      const root = await made.team.post({ channel: 'work/app', text: 'ship 1.2' })
+      await runWorkflows(made.team, [trio], deps)
+      const { seq } = await made.team.workflowRequest({ name: 'release', on: root.id })
+      // As a daemon before this one wrote it: the same key and words, and no label.
+      await made.team.as('workflows').reply({ to: root.id, text: head(seq), idempotencyKey: `workflow-${seq}-reply` })
+      expect((await runWorkflows(made.team, [trio], deps)).started).toEqual([seq])
+      const tasks = (await made.team.taskList({ channel: `work/app/release-${seq}`, state: 'all' })).tasks
+      for (const task of tasks) {
+        const held = await made.team.taskClaim({ id: task.id })
+        await runWorkflows(board({ backend: made.team.backend }), [trio], { ...deps, runs: openRuns() })
+        await made.team.taskComplete({ id: task.id, token: held.token, result: 'done' })
+      }
+      expect(await runWorkflows(made.team, [trio], deps)).toMatchObject({ reported: [seq] })
+      const replies = (await made.team.readThread({ id: root.id })).replies
+      expect(replies.map((reply) => reply.text)).toEqual([head(seq), expect.stringMatching(/^release finished: 3 completed/)])
+      expect(replies[0]).toMatchObject({ revision: 1, labels: {} })
+    })
+
+    it('is open again while a reopened task works, and done once the run is summed up again', async () => {
+      const { team, root, seq, tasks, tick, fail, complete } = await started(pipeline)
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      await fail(a, 'no access')
+      expect(await tick()).toMatchObject({ reported: [seq] })
+      expect((await startReply(team, root.id)).labels.progress).toBe('done')
+      await team.taskReopen({ id: a })
+      await tick()
+      // Nothing taken again yet: as it was written, and open.
+      expect(await startReply(team, root.id)).toMatchObject({ text: head(seq), labels: { progress: 'open' } })
+      await complete(a, 'spec written')
+      await complete(b, 'done')
+      await complete(c, 'approved')
+      expect(await tick()).toMatchObject({ updated: [seq] })
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} completed, #${b} completed, #${c} completed`, labels: { progress: 'done' } })
+    })
+
+    it("writes over a person's edit of it, and still closes it when the edit came just before the summary", async () => {
+      const { team, root, seq, tasks, tick, complete } = await started(pipeline)
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      const reply = await startReply(team, root.id)
+      await team.edit({ id: reply.id, text: 'mine now' })
+      await complete(a, 'spec written')
+      await tick()
+      expect((await startReply(team, root.id)).text).toBe(`${head(seq)}\n#${a} completed, #${b} ready, #${c} waiting`)
+      await complete(b, 'done')
+      await complete(c, 'approved')
+      await team.edit({ id: reply.id, text: 'mine again' })
+      const before = await edits(team)
+      expect(await tick()).toMatchObject({ reported: [seq] })
+      expect(await startReply(team, root.id)).toMatchObject({ text: `${head(seq)}\n#${a} completed, #${b} completed, #${c} completed`, labels: { progress: 'done' } })
+      expect(await edits(team)).toBe(before + 1)
+    })
+
+    it("isn't written again once someone deleted it, by this daemon or one that starts again", async () => {
+      const { team, root, seq, tasks, deps, tick, complete } = await started(pipeline)
+      const [a, b, c] = tasks.map((task) => task.id) as [number, number, number]
+      await team.remove({ id: (await startReply(team, root.id)).id })
+      await complete(a, 'spec written')
+      await tick()
+      await complete(b, 'done')
+      await runWorkflows(board({ backend: team.backend }), [pipeline], { ...deps, runs: openRuns() })
+      await complete(c, 'approved')
+      expect(await tick()).toMatchObject({ reported: [seq] })
+      const live = (await team.readThread({ id: root.id })).replies.filter((reply) => !reply.deleted)
+      expect(live.map((reply) => reply.text)).toEqual([expect.stringMatching(/^release finished: 3 completed/)])
+    })
   })
 
   describe('a run summed up, then reopened', () => {
@@ -1431,7 +1579,7 @@ describe('the daemon says how a run went on the thread it was asked on', () => {
     await team.label({ id: opening.id, set: { thread: String(elsewhere.id) } })
     await complete(tasks[0]!.id, 'done')
     expect(await tick()).toEqual({ started: [], refused: [], reported: [seq] })
-    expect(await replies()).toEqual([`started release: 1 tasks in ${run}`, ['release finished: 1 completed, 0 failed, 0 canceled', `#${tasks[0]!.id} completed: done`].join('\n')])
+    expect(await replies()).toEqual([`started release: 1 tasks in ${run}\n#${tasks[0]!.id} completed`, ['release finished: 1 completed, 0 failed, 0 canceled', `#${tasks[0]!.id} completed: done`].join('\n')])
     expect((await team.readThread({ id: elsewhere.id })).replies).toEqual([])
   })
 
