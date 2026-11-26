@@ -105,6 +105,8 @@ const said = (error: unknown): string => {
 export const STEP_LABEL = 'workflow.step'
 /** Whether a run's task pushes, as the daemon labelled it when it made the task, when a step says its own. */
 export const PUSH_LABEL = 'workflow.push'
+/** A step's title, as the daemon made its task: what a pull request from it is called. */
+export const TITLE_LABEL = 'workflow.title'
 /** The name a run's workers act under (`workers.as`), as the daemon labelled each task when it made it. */
 export const WORKERS_LABEL = 'workflow.workers'
 
@@ -166,7 +168,8 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
 
 /**
  * Fills a step's text, in one pass, by plain replacement: `{thread}`, `{thread.text}` (the asking
- * thread's first message, quoted by `threadQuote`), `{channel}`, `{run}` and `{args.<k>}`. A placeholder it
+ * thread's first message, quoted by `threadQuote`), `{on.text}` and `{on.title}` (the message the run was
+ * asked on, quoted, and its first line as a title), `{channel}`, `{run}` and `{args.<k>}`. A placeholder it
  * doesn't know, or an argument nobody gave, is left as written, and what a value says is never read again
  * as a placeholder. `{steps.<key>.result}` is left for the worker that takes the task, so a value that
  * says `{steps.` is changed to say it with a lookalike brace: only the operator's own text names a result.
@@ -732,6 +735,18 @@ function defuse(text: string): string {
   return text.replaceAll('@', '\uFF20').replaceAll('<', '\uFF1C').replaceAll('>', '\uFF1E').replaceAll('![', '\uFF01[').replaceAll('](', '] (')
 }
 
+/**
+ * A step's title as the daemon records it on the task: one line, defused, with no backticks or markdown
+ * heading marks, at most TITLE characters. A worker titles the step's pull request and commit by it.
+ */
+export function titleLine(text: string): string {
+  const line = text.split('\n').map((each) => each.trim()).find(Boolean) ?? ''
+  return cut(defuse(line.replace(/^#+\s*/, '').replaceAll('`', "'").replace(/\s+/g, ' ').trim()), TITLE)
+}
+
+/** How long a step's title may be: what a pull request's title shows whole. */
+const TITLE = 72
+
 /** At most `most` characters, never splitting one, with `…` where it was cut. */
 function cut(text: string, most: number): string {
   const chars = Array.from(text)
@@ -832,14 +847,17 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
   // A worker's token reaches the run's channel alone, so what it needs of the asking thread is copied in.
   const threadText = workflow.steps.some((step) => step.text.includes('{thread.text}')) ? threadQuote((await team.readThread({ id: on.thread })).message) : undefined
   // The message the run was asked on, a reply as often as not: quoted as it was when it was asked on, or no run.
-  const onText = workflow.steps.some((step) => step.text.includes('{on.text}')) ? askedQuote(await askedMessage(team, on)) : undefined
+  const asked = workflow.steps.some((step) => step.text.includes('{on.text}') || step.title?.includes('{on.title}')) ? await askedMessage(team, on) : undefined
+  const onText = asked && workflow.steps.some((step) => step.text.includes('{on.text}')) ? askedQuote(asked) : undefined
+  // A step's title is never in its text, so no agent reads it as the operator's: the runner names a pull request by it.
+  const titleOf = (title: string) => titleLine(title.replaceAll('{on.title}', asked ? asked.text.split('\n').map((each) => each.trim()).find(Boolean) ?? '' : '').replaceAll('{thread}', String(on.thread)).replaceAll('{channel}', on.channel))
   // Whether a step says its own `push`: then every task says whether it pushes, as the board's own record
   // of what the daemon made, which the worker reads from the task's first event and never from its labels now.
   const perStep = workflow.steps.some((step) => step.push !== undefined)
   const tasks: PlanTask[] = workflow.steps.map((step) => ({
     key: step.key,
     text: fillStep(step.text, { thread: on.thread, ...(threadText !== undefined ? { threadText } : {}), ...(onText !== undefined ? { onText } : {}), channel: on.channel, run, args: on.args }),
-    labels: { ...step.labels, ...labels, [STEP_LABEL]: step.key, [WORKERS_LABEL]: workflow.workers.as, ...(perStep ? { [PUSH_LABEL]: String(step.push ?? workflow.workers.push === true) } : {}) },
+    labels: { ...step.labels, ...labels, [STEP_LABEL]: step.key, [WORKERS_LABEL]: workflow.workers.as, ...(perStep ? { [PUSH_LABEL]: String(step.push ?? workflow.workers.push === true) } : {}), ...(step.title !== undefined && titleOf(step.title) ? { [TITLE_LABEL]: titleOf(step.title) } : {}) },
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),
   }))

@@ -83,6 +83,9 @@ describe('templates/loop', () => {
     // Only the spec that was triaged, and approved where it had to be: the raw report never reaches a run that pushes.
     expect(work.spec!.text).not.toContain('the stacks should say how many are in them')
     expect(work.work!.needs).toEqual([work.spec!.id])
+    // The work's pull request and commit are titled by the spec's title, which its text doesn't carry.
+    expect(work.work!.labels['workflow.title']).toBe('Show the stack count beside each stack')
+    expect(work.work!.text.split('\n')[0]).toBe(`Make the change for card #${report.id}.`)
   })
 
   it("an outsider's report waits for a trusted person's approval: anyone else's label does nothing", async () => {
@@ -215,7 +218,7 @@ describe('templates/loop', () => {
       for (const key of ['spec', 'work']) await made.complete(run[key]!.id, `${key} done`)
       return { ...made, report, run, spawned }
     }
-    const spawnedArgs = async (file: string) => (await waitFor(() => existsSync(file)), existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [])
+    const spawnedArgs = async (file: string) => (await waitFor(() => existsSync(file) && readFileSync(file, 'utf8').includes('\n')), existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [])
 
     it('a trusted comment after the run ended sends the work and its review back, with the comment, and starts a worker on that run', async () => {
       const { team, as, tick, complete, report, run, spawned } = await worked()
@@ -870,7 +873,8 @@ describe('templates/loop', () => {
         // The fence is longer than any run of backticks in the comment.
         expect(asked).toMatch(/^`{5,}$/m)
         expect((await made.team.readThread({ id: made.cardId })).replies.at(-1)!.text).toBe(`planning round 2: taking #${comment.id}`)
-        await waitFor(() => existsSync(made.spawned))
+        // The worker is started detached: wait for what it wrote, not only for the file it opens first.
+        await waitFor(() => existsSync(made.spawned) && readFileSync(made.spawned, 'utf8').includes('\n'))
         expect(readFileSync(made.spawned, 'utf8')).toContain('--label workflow=planning')
       })
 

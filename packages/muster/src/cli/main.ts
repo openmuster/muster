@@ -16,7 +16,7 @@ import { leftover, refuseRetired } from '../config/retired.ts'
 import { DAEMON_SPEC, SERVE_SPEC, chooseModule, defaultModule, endLaunch, invokedAs, launchGuard, loadBoard, loadsModule, refusal, self as thisCopy, type ModulePath } from './module.ts'
 import { boardPath, file } from '../backend/file.ts'
 import { loadWorkflows, workflowsPath } from '../daemon/workflows.ts'
-import { FillRefused, fillResults, pushesTask } from '../daemon/steps.ts'
+import { FillRefused, fillResults, pullTitle, pushesTask } from '../daemon/steps.ts'
 import { DROPPED, HOOKS_LEASE, armHooks, ping, why } from '../daemon/hooks.ts'
 import { GAVE_UP, checkWrite } from '../daemon/check.ts'
 import * as guard from '../daemon/guard.ts'
@@ -2057,8 +2057,7 @@ async function heldUnpushed(run: Run, task: number, failure: Failure): Promise<v
 async function pushChanges(run: Run, started: CloudRun, options: { task: number; runner: string; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; branches?: { defaultBranch: string; head: string | null }; api?: string; remote?: string }): Promise<string | null> {
   if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' })
   if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
-  const thread = await run.team.readThread({ id: options.task }).catch(() => null)
-  const title = (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${options.task}`
+  const title = await pullTitle(run.team, options.task, (await run.team.whoami()).principal)
   const branch = `mu/task-${options.task}`
   await started.setPolicy('deny-all')
   const out = `/tmp/mu-task-${options.task}.bundle`

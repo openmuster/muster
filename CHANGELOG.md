@@ -7,6 +7,11 @@ versions are affected.
 
 ### Added
 
+- A workflow step's `title`: what its pull request and commit are called,
+  recorded on the task by the daemon and never in the agent's text;
+  `{on.title}` is the first line of the message the run was asked on.
+  `templates/loop`'s work step has `"title": "{on.title}"`, so a card's pull
+  request is titled by its spec, not "Make the change for card #12."
 - Slack sync can show a thread being worked on with Slack's own "Working…":
   `slack({ agent: true, … })`, for a Slack app declared an agent. While a
   workflow run on a synced thread is open, the board sets the thread's agent
