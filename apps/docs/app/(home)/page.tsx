@@ -34,7 +34,7 @@ export default async function Home() {
         </Link>
       </div>
 
-      <pre className="muster-scroll mt-10 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-fd-border p-4 font-mono text-[13px] leading-relaxed text-fd-muted-foreground sm:whitespace-pre sm:break-normal">
+      <pre className="mt-10 overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-fd-border p-4 font-mono text-code leading-relaxed text-fd-muted-foreground sm:whitespace-pre sm:break-normal">
         <code>{INSTALL}</code>
       </pre>
 

@@ -19,9 +19,9 @@ function useReducedMotion(): boolean {
 
 const STATE_STYLE: Record<Board['state'], string> = {
   ready: 'border-fd-border text-fd-foreground',
-  claimed: 'border-[#3b82f6]/50 text-[#93c5fd]',
-  blocked: 'border-[#f59e0b]/50 text-[#fcd34d]',
-  completed: 'border-[#22c55e]/50 text-[#86efac]',
+  claimed: 'border-blue-500/50 text-blue-300',
+  blocked: 'border-amber-500/50 text-amber-300',
+  completed: 'border-green-500/50 text-green-300',
 }
 
 /**
@@ -105,23 +105,23 @@ export function Story({ code }: { code: string }) {
         )}
       </div>
 
-      <div id="scene-panel" role="tabpanel" aria-labelledby={`scene-tab-${chapter.id}`} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} className="mt-3 overflow-hidden rounded-xl border border-fd-border bg-[#0a0a0a]">
+      <div id="scene-panel" role="tabpanel" aria-labelledby={`scene-tab-${chapter.id}`} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} className="mt-3 overflow-hidden rounded-xl border border-fd-border bg-fd-card">
         <div className="flex items-center gap-3 border-b border-fd-border px-4 py-2.5">
           <span className="flex gap-1.5" aria-hidden="true">
-            <i className="size-2.5 rounded-full bg-[#3a3a3a]" />
-            <i className="size-2.5 rounded-full bg-[#3a3a3a]" />
-            <i className="size-2.5 rounded-full bg-[#3a3a3a]" />
+            <i className="size-2.5 rounded-full bg-muster-knob" />
+            <i className="size-2.5 rounded-full bg-muster-knob" />
+            <i className="size-2.5 rounded-full bg-muster-knob" />
           </span>
           <span className="font-mono text-xs text-fd-muted-foreground">{chapter.file}</span>
         </div>
 
         <div className="grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <div className="min-h-[13rem] lg:min-h-[23rem] border-fd-border p-4 lg:border-r">
+          <div className="min-h-52 lg:min-h-92 border-fd-border p-4 lg:border-r">
             {chapter.code ? (
               // Highlighted on the server from text of ours, never from anything a visitor sends.
-              <div className="story-code text-[13px] leading-relaxed" dangerouslySetInnerHTML={{ __html: code }} />
+              <div className="story-code text-code leading-relaxed" dangerouslySetInnerHTML={{ __html: code }} />
             ) : (
-              <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
+              <pre className="whitespace-pre-wrap font-mono text-code leading-relaxed">
                 {shown.lines.map((line, at) =>
                   line.kind === 'cmd' ? (
                     <div key={at}>
@@ -139,7 +139,7 @@ export function Story({ code }: { code: string }) {
             )}
           </div>
 
-          <div className="min-h-[13rem] lg:min-h-[23rem] border-t border-fd-border p-4 lg:border-t-0" aria-live="off">
+          <div className="min-h-52 lg:min-h-92 border-t border-fd-border p-4 lg:border-t-0" aria-live="off">
             <div className="flex items-center justify-between gap-3 text-xs text-fd-muted-foreground">
               <span className="font-mono">#work</span>
               <span>the board</span>
@@ -190,7 +190,7 @@ function Command({ text }: { text: string }) {
   return (
     <>
       {parts.map((part, at) => {
-        const tone = part.startsWith('"') ? 'text-[#86efac]' : part.startsWith('--') ? 'text-[#93c5fd]' : at === 0 ? 'text-[#f0abfc]' : ''
+        const tone = part.startsWith('"') ? 'text-green-300' : part.startsWith('--') ? 'text-blue-300' : at === 0 ? 'text-fuchsia-300' : ''
         return (
           <span key={at} className={tone}>
             {part}
