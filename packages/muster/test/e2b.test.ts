@@ -14,7 +14,7 @@ const token = (claims: object = { sandbox: true }) => mint(randomBytes(32), { su
  * stored at that moment, and answers commands as told. A command that exits with a code is thrown, as the
  * real one does.
  */
-function standIn(opts: { snapshots?: boolean; gone?: string[]; unready?: boolean; left?: number; exit?: (cmd: string) => number | undefined; out?: (cmd: string) => string; agentExit?: number; full?: boolean; files?: Record<string, Buffer>; home?: string; drops?: number } = {}) {
+function standIn(opts: { refuses?: string; snapshots?: boolean; gone?: string[]; unready?: boolean; left?: number; exit?: (cmd: string) => number | undefined; out?: (cmd: string) => string; agentExit?: number; full?: boolean; files?: Record<string, Buffer>; home?: string; drops?: number } = {}) {
   const log: any[] = []
   const secrets = new Map<string, { value: string; createdAt: Date; metadata?: Record<string, string> }>()
   const held = () => [...secrets.keys()]
@@ -66,6 +66,7 @@ function standIn(opts: { snapshots?: boolean; gone?: string[]; unready?: boolean
       async create(template: string, options: any) {
         log.push({ create: options, template, held: held() })
         if (opts.gone?.includes(template)) throw new Error('snapshot not found')
+        if (opts.refuses) throw new Error(opts.refuses)
         return box(template)
       },
       deleteSnapshot: async (id: string) => void deleted.push(id),
@@ -266,6 +267,18 @@ describe('the E2B runner', () => {
     expect([...e.secrets.keys()].sort()).toEqual(['muster-named-by-a-person', 'muster-of-a-run-still-going', 'stripe-key'])
   })
 
+  it("says what E2B said when it starts no sandbox, with the settings to check, and stores nothing", async () => {
+    const e = standIn({ refuses: "401: Invalid API key\nmore that isn't for a terminal" })
+    const failed = await e.runner({ domain: 'e2b.example.com' }).start(plain).catch((error) => error)
+    expect(failed.reason).toBe('runner_start_failed')
+    expect(failed.message).toBe('E2B didn\'t start a sandbox from "muster-agents": 401: Invalid API key')
+    expect(failed.hint).toBe('Check E2B_API_KEY and MUSTER_E2B_TEMPLATE, and E2B_DOMAIN, which names the E2B this was asked of.')
+    expect(JSON.stringify([failed.message, failed.hint])).not.toContain('e2b_account_key')
+    expect(e.secrets.size).toBe(0)
+    // Without a domain of your own, none is named.
+    expect((await standIn({ refuses: 'fetch failed' }).runner().start(plain).catch((error) => error)).hint).toBe('Check E2B_API_KEY and MUSTER_E2B_TEMPLATE.')
+  })
+
   it('says so when the project can store no more secrets, and leaves no sandbox', async () => {
     const e = standIn({ full: true })
     const failed = await e.runner().start(plain).catch((error) => error)
@@ -283,11 +296,10 @@ describe('the E2B runner', () => {
     expect(await run.exec!({ cmd: 'false', args: [] })).toMatchObject({ exitCode: 4 })
     await run.exec!({ cmd: 'sh', args: ['-c', 'git bundle create "$MU_OUT"'], env: { MU_OUT: '/tmp/out' } })
     expect(e.log.at(-1)).toMatchObject({ run: `'sh' '-c' 'git bundle create "$MU_OUT"'`, options: { cwd: '/home/user/web', envs: { MU_OUT: '/tmp/out' } } })
-    await run.setPolicy!('deny-all')
+    await run.close!()
     // Closed, and then whatever the agent left running is ended: it could hold a connection that was open.
     expect(e.log.at(-2)).toMatchObject({ network: { denyOut: ['0.0.0.0/0'] } })
     expect(e.log.at(-1)).toMatchObject({ run: REAP, options: { user: 'root' } })
-    expect(await reason(run.setPolicy!({ 'example.com': [] }))).toBe('push_unsupported')
     await run.stop()
   })
 

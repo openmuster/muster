@@ -2092,11 +2092,11 @@ async function heldUnpushed(run: Run, task: number, failure: Failure): Promise<v
  * when nothing changed.
  */
 async function pushChanges(run: Run, started: CloudRun, options: { task: number; runner: string; repo: { slug: string; owner: string; name: string }; app: GithubApp; profile: string; branches?: { defaultBranch: string; head: string | null }; api?: string; remote?: string }): Promise<string | null> {
-  if (!started.exec || !started.setPolicy || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' })
+  if (!started.exec || !started.close || !started.readFile) throw new Failure('push_unsupported', "This sandbox can't be pushed from: its SDK can't change its policy, run a command in it, or read a file from it.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' })
   if (!started.checkout) throw new Failure('push_failed', "Where the checkout started couldn't be read from the sandbox, so its changes can't be told apart: nothing was pushed.")
   const title = await pullTitle(run.team, options.task, (await run.team.whoami()).principal)
   const branch = `mu/task-${options.task}`
-  await started.setPolicy('deny-all')
+  await started.close()
   const out = `/tmp/mu-task-${options.task}.bundle`
   const made = await started.exec({
     cmd: 'sh',

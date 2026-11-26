@@ -52,8 +52,8 @@ export type CloudRun = {
   exec?(command: { cmd: string; args: string[]; env?: Record<string, string> }): Promise<{ exitCode: number | null; stdout: string }>
   /** A file in the sandbox, read no further than `max` bytes: null when there is none, or it is bigger. */
   readFile?(path: string, max: number): Promise<Buffer | null>
-  /** Replaces the sandbox's network policy: these hosts' rules, or none reached at all. */
-  setPolicy?(rules: Record<string, VercelRule[]> | 'deny-all'): Promise<void>
+  /** Closes the sandbox's way out: no host is reached from it after. What a runner does besides, to end what was left running, is its own. */
+  close?(): Promise<void>
 }
 
 /** Starts agents in sandboxes. `local` isn't one of these: it has no network between the agent and the board. */
@@ -406,7 +406,7 @@ export function vercel(options: { Sandbox: VercelSandbox; allowHosts?: Record<st
         stop: () => end(sandbox),
         exec,
         ...(sandbox.readFile ? { readFile } : {}),
-        ...(sandbox.update ? { setPolicy: async (rules: Record<string, VercelRule[]> | 'deny-all') => void (await sandbox.update!({ networkPolicy: rules === 'deny-all' ? rules : { allow: rules } })) } : {}),
+        ...(sandbox.update ? { close: async () => void (await sandbox.update!({ networkPolicy: 'deny-all' })) } : {}),
         ...(checkout ? { checkout } : {}),
         ...(installed ? { installed } : {}),
         ...(wait ? { wait: async () => ({ exitCode: (await wait()).exitCode ?? null }) } : {}) }
@@ -495,9 +495,8 @@ export function cloudflare(options: { worker: string; secret: string; fetch?: ty
             await pause(Math.min((options.pollMs ?? 5000) * 2 ** failed, 60_000))
           }
         },
-        // The Worker closed everything when the agent exited: asking again costs nothing, and anything but closing is not something it does.
-        async setPolicy(rules) {
-          if (rules !== 'deny-all') throw new Failure('push_unsupported', "The Cloudflare runner can close a run's network, not change it.")
+        // The Worker closed everything when the agent exited: asking again costs nothing.
+        async close() {
           await call(`${run}/close`, {})
         },
         exec: (command) => call<{ exitCode: number | null; stdout: string }>(`${run}/exec`, command),
