@@ -81,8 +81,9 @@ describe('templates/loop', () => {
     // Only the spec that was triaged, and approved where it had to be: the raw report never reaches a run that pushes.
     expect(work.spec!.text).not.toContain('the stacks should say how many are in them')
     expect(work.work!.needs).toEqual([work.spec!.id])
-    // The work's first line is the spec's title: its pull request and commit are titled by it.
-    expect(work.work!.text.split('\n')[0]).toBe('Show the stack count beside each stack')
+    // The work's pull request and commit are titled by the spec's title, which its text doesn't carry.
+    expect(work.work!.labels['workflow.title']).toBe('Show the stack count beside each stack')
+    expect(work.work!.text.split('\n')[0]).toBe(`Make the change for card #${report.id}.`)
   })
 
   it("an outsider's report waits for a trusted person's approval: anyone else's label does nothing", async () => {

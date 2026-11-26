@@ -1,7 +1,7 @@
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
 import { WORKFLOWS_PROFILE, type BoardEvent } from '../model.ts'
-import { fenced, noStepResults, PUSH_LABEL, STEP_LABEL, WORKERS_LABEL } from './runs.ts'
+import { fenced, noStepResults, PUSH_LABEL, STEP_LABEL, TITLE_LABEL, WORKERS_LABEL } from './runs.ts'
 import { STEP_RESULT } from './workflows.ts'
 
 /**
@@ -15,6 +15,18 @@ export async function madeLabels(team: Board, id: number, owner: string): Promis
   if (made === undefined || made.seq !== id || made.by.principal !== owner || made.by.profile !== WORKFLOWS_PROFILE) return null
   const labels = (made.data as { labels?: unknown }).labels
   return labels !== null && typeof labels === 'object' ? (labels as Record<string, string>) : {}
+}
+
+/**
+ * What a worker's pull request and commit for a task are called: the step's title as the daemon recorded it
+ * when it made the task, never a label as it is now (a run's agents may label in its channel); else the
+ * task's first line, as before titles; else `Task #<id>`.
+ */
+export async function pullTitle(team: Board, id: number, owner: string): Promise<string> {
+  const made = (await madeLabels(team, id, owner))?.[TITLE_LABEL]
+  if (typeof made === 'string' && made.trim()) return made.trim().slice(0, 72)
+  const thread = await team.readThread({ id }).catch(() => null)
+  return (thread?.message.text.split('\n')[0] ?? '').trim().slice(0, 72) || `Task #${id}`
 }
 
 /**
