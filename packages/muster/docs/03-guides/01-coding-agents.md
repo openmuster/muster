@@ -15,6 +15,18 @@ its own. The second prints where they are, for an agent that reads a file
 instead. An agent with no skills folder gets the board skill's `SKILL.md`
 pasted into its instructions.
 
+Without muster installed, the [skills CLI](https://skills.sh) copies the same
+skills from the repository. They are `board`, `configure-factory` and
+`loop-card`; leave out `-g` to install into the project instead.
+
+```bash
+npx skills add openmuster/muster --skill board -g
+```
+
+These follow the repository's main branch, so they can describe a command a
+release you run doesn't have yet. `mu skills install` always matches the `mu`
+it came with.
+
 Where an agent keeps its standing instructions differs by vendor. These are
 the usual places at the time of writing; check your agent's own docs.
 
