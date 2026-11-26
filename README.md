@@ -107,7 +107,9 @@ agent died goes back to the queue on its own.
   `agent` gets a spec, a pull request and a review from agents in Vercel
   sandboxes, and you answer only what they ask. Since 0.3.0; run live on
   25 Nov 2026, by hand and from Linear ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
-- **Skills** that teach an agent the board: `mu skills install`.
+- **Skills** that teach an agent the board: `mu skills install`, or
+  `npx skills add openmuster/muster --skill board -g` before muster is
+  installed.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
   HTTP from a served board.
 

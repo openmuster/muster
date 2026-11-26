@@ -65,6 +65,22 @@ Never write a secret into the file. Point the platform's webhook at
 `https://<host>/api/board/webhooks/<name>`. A repo mirrors board replies back
 only with `mirror: true`.
 
+What the board writes on a platform is authored by whoever owns the
+credential, so give sync an app's, not a person's:
+
+- GitHub: `appId: env('GITHUB_APP_ID')` and `appKey: env('GITHUB_APP_KEY_FILE')`
+  in place of `token`. The App needs Issues read and write.
+- Linear: `clientId: env('LINEAR_CLIENT_ID')` and
+  `clientSecret: env('LINEAR_CLIENT_SECRET')` in place of `token`, with client
+  credentials turned on for the OAuth application.
+- Slack: the bot token is already the app's.
+
+With `agent: true`, Slack and Linear show a thread as being worked on while a
+workflow run on it is open, in place of the run's `started` reply. Slack needs
+the app declared an agent, which can't be undone. Linear also needs
+`appSecret`, the signing secret of the application's own webhook with agent
+session events on.
+
 ## Hold the agent to its channels
 
 For an agent you don't trust with the whole board, run `mu serve` and make it
