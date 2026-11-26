@@ -17,11 +17,11 @@ description: Run an agent in Vercel Sandbox, a Cloudflare container or an E2B sa
 > board's refusals and the closed hosts checked from inside, a private
 > repository cloned, `--push` opening a pull request, a worker giving each
 > task a sandbox, a kept snapshot started from, and a registered workflow
-> whose steps each ran in a sandbox. Codex started there and reached its
-> provider with the key added on the way, but has not finished a task: it
-> was run with a key that isn't one. An E2B you run yourself has not been
-> tried, only `E2B_DOMAIN` with E2B's own name. Treat all three
-> runners as experimental.
+> whose steps each ran in a sandbox. Codex has run there too: a task from
+> start to end, and one in a private repository with `--push` opening a
+> pull request. An E2B you run yourself has not been tried, only
+> `E2B_DOMAIN` with E2B's own name. Treat all three runners as
+> experimental.
 
 ## What a sandbox needs
 
