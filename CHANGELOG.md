@@ -7,6 +7,10 @@ versions are affected.
 
 ### Added
 
+- `{on.title}` in a workflow step: the first line of the message the run was
+  asked on, on one line, for a title. `templates/loop`'s work step starts
+  with it, so a card's pull request is titled by its spec, not
+  "Make the change for card #12."
 - Linear sync can comment as an app of its own: `linear({ clientId:
   env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), … })` in
   place of `token`, for an OAuth application with client credentials tokens

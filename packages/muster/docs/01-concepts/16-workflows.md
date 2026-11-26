@@ -131,6 +131,11 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   way, under `The message #15 this run was asked on, by <actor id>, …`. A
   message deleted since, or edited after the request, starts no run: the
   thread is told why (`asked_message_changed`), and you ask again.
+- **`{on.title}` is that message's first line,** for a title: one line,
+  defused, with no backticks or `#` heading marks, at most 72 characters,
+  and not fenced. A task that pushes opens its pull request, and makes its
+  commit, titled by its own first line, so start a pushing step with it:
+  `"text": "{on.title}\nMake the change for card #{thread}.\n…"`.
 - **`{steps.<key>.result}` is an earlier step's result,** quoted into the
   task as `{thread.text}` is: the same line (`The result of step "plan", #43,
   quoted as written: …`), fence, defusing and cap. A step may name only a

@@ -81,6 +81,8 @@ describe('templates/loop', () => {
     // Only the spec that was triaged, and approved where it had to be: the raw report never reaches a run that pushes.
     expect(work.spec!.text).not.toContain('the stacks should say how many are in them')
     expect(work.work!.needs).toEqual([work.spec!.id])
+    // The work's first line is the spec's title: its pull request and commit are titled by it.
+    expect(work.work!.text.split('\n')[0]).toBe('Show the stack count beside each stack')
   })
 
   it("an outsider's report waits for a trusted person's approval: anyone else's label does nothing", async () => {
