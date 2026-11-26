@@ -43,8 +43,11 @@ to do it, and what goes wrong. Diagrams are Mermaid, in the markdown.
 
 ## Releases
 
-muster is not on npm. A release is a tarball attached to a GitHub Release,
-which npm installs from its URL (`src/version.ts` builds that URL).
+A release is `@openmuster/muster` on npm, and the same tarball attached to a
+GitHub Release, which npm also installs from its URL (`src/version.ts` builds
+that URL; the cloud runners install from it). Code imports it as
+`@openmuster/muster`; a board module that still says `'muster'` is answered
+too (`src/cli/module.ts`).
 
 1. Set the version in `packages/muster/package.json`. The CLI reads it from
    there; nothing else holds a version number.
@@ -52,7 +55,15 @@ which npm installs from its URL (`src/version.ts` builds that URL).
 3. `.github/workflows/release.yml` checks that the tag matches the version,
    runs `pnpm check`, packs the package, installs the tarball and runs it,
    and attaches it as `muster-<version>.tgz` and as `muster.tgz`, with a
-   `SHA256SUMS` file. The release's notes are that version's section of
+   `SHA256SUMS` file. Its `npm` job then publishes that tarball to npm, with
+   no token: npm trusts this workflow (trusted publishing), once an owner of
+   the npm org has added it as a trusted publisher on the package's page
+   (repository `openmuster/muster`, workflow `release.yml`). npm drops a
+   trusted publisher that hasn't published within 48 hours, so one added
+   and never used has to be added again just before a release. If the job
+   fails after the GitHub release was made, publish that release's tarball
+   by hand, checked against its `SHA256SUMS`, and don't re-run the job.
+   The release's notes are that version's section of
    `CHANGELOG.md`, so write it before tagging: for people who use muster,
    and for a security fix, which versions it affects.
 
@@ -78,7 +89,7 @@ so a broken release step fails on the pull request, not on the tag.
 - The pages have their own suite, `pnpm test:browser`: it drives the built
   inspector and both templates under `next dev` in Chromium, through
   Playwright. It is not part of `pnpm check`, because it needs a browser:
-  `pnpm --filter muster exec playwright install chromium` once. CI runs it on
+  `pnpm --filter @openmuster/muster exec playwright install chromium` once. CI runs it on
   every pull request. Change a page, and run it.
 
 ## Structure

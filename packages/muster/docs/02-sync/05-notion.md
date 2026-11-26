@@ -6,7 +6,7 @@ description: Pages of a database and their comments as threads, in both directio
 ## Map databases
 
 ```ts board.ts
-import { board, env, notion } from 'muster'
+import { board, env, notion } from '@openmuster/muster'
 
 export default board({
   sync: {

@@ -6,7 +6,7 @@ description: "board() from code: every call the CLI itself makes."
 ## A handle
 
 ```ts example.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 const team = board()
 const fixer = team.as('fixer')
@@ -31,7 +31,7 @@ to branch on: see [Errors](./05-errors.md).
 ## Messages
 
 ```ts messages.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 const team = board().as('claude')
 const root = await team.post({ channel: 'dev', text: 'deploy is red', labels: { kind: 'bug' } })
@@ -59,7 +59,7 @@ attachments, blocks, revision, deleted, noSync, at, editedAt }`.
 ## Reading
 
 ```ts reading.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 const team = board()
 const page = await team.readChannel({ channel: 'dev', limit: 30 })
@@ -99,7 +99,7 @@ first rule that matched. Without the filter, events carry no `for`.
 ## Tasks
 
 ```ts tasks.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 const team = board().as('worker-1')
 const { task } = await team.taskCreate({ channel: 'work', text: 'fix the redirect' })
@@ -132,7 +132,7 @@ them to `board()` by name. Declaring them opens nothing and starts nothing, so
 the module can be imported anywhere.
 
 ```ts lib/board.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 export const team = board({
   watch: {
@@ -239,7 +239,7 @@ works.
 `command()` is a `run` that starts a command: the way to wake an agent.
 
 ```ts lib/board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export const team = board({
   watch: {
@@ -301,7 +301,7 @@ export const GET = team.fetch, POST = team.fetch
 | `serve.log` | standard error | Where a request that failed for a reason other than the board's own rules is described, for the owner |
 
 ```ts lib/board.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 export const team = board({ serve: { base: '/team/board', hosts: ['board.example.com'] } })
 ```
@@ -378,7 +378,7 @@ A `watchers.json`, `sync.json` or `hooks.json` left from before makes both
 refuse to start ([Porting](./07-porting.md)). The module is `--module <file>`, else `MUSTER_MODULE` (an absolute path), else
 `~/.config/muster/board.ts` when nothing named a board: no `--dir`, `--board`
 or `--url`, and no `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL`. `--no-module`
-runs none. It needs no `package.json`: `mu` answers its `import 'muster'`. A
+runs none. It needs no `package.json`: `mu` answers its `import '@openmuster/muster'`. A
 project with its own muster runs on that install. A module named on purpose
 says which board it is, so `--dir`, `--board` and `--url` don't go with it,
 and neither do `--as` or `MUSTER_PROFILE`. `mu daemon install` names the

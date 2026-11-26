@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "noEmit": true, "types": ["node"], "jsx": "react-jsx", "paths": { "muster": ["./src/index.ts"] } },
+  "compilerOptions": { "noEmit": true, "types": ["node"], "jsx": "react-jsx", "paths": { "@openmuster/muster": ["./src/index.ts"], "muster": ["./src/index.ts"] } },
   "include": ["src", "test", "browser", "spike"]
 }

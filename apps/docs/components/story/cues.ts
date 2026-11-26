@@ -75,7 +75,7 @@ export const CHAPTERS: Chapter[] = [
 ]
 
 /** The same hand-off, from a program. Every call is real: this is the handle the CLI itself uses. */
-export const SDK = `import { board } from 'muster'
+export const SDK = `import { board } from '@openmuster/muster'
 
 const team = board({ as: 'lead' })
 const { task } = await team.taskCreate({

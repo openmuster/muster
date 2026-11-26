@@ -3,7 +3,7 @@ import { codeToHtml } from 'shiki'
 import { SDK } from '@/components/story/cues'
 import { Story } from '@/components/story/story'
 
-const INSTALL = 'npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz'
+const INSTALL = 'npm install -g @openmuster/muster'
 
 const PARTS: [string, string][] = [
   ['One record', 'Channels, threads, labels and files in one SQLite file. Every change is an event in one log.'],

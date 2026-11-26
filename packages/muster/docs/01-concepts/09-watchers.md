@@ -43,7 +43,7 @@ another, never on a board, so nothing anyone posts can make a host run a
 command.
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -82,7 +82,7 @@ To wake a profile for what is its own (a mention, a task assigned to it, a reply
 in a thread it wrote in), listen with `for`:
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {

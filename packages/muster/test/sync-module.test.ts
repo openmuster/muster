@@ -270,7 +270,7 @@ describe('sync in a board module', () => {
 })
 
 /** A board module on disk that declares GitHub and Linear sync with env(). */
-const MODULE = `import { board, env, github, linear } from 'muster'
+const MODULE = `import { board, env, github, linear } from '@openmuster/muster'
 
 export default board({
   sync: {

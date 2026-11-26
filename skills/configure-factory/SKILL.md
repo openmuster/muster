@@ -38,7 +38,7 @@ mu tail factory/ --type message.posted --json
 ```
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {

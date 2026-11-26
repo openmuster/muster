@@ -16,7 +16,7 @@ export const PORTING_URL = 'https://openmuster.ai/docs/reference/porting'
 
 /** A board module that does what each file did, at its smallest. Each one loads as written. */
 export const EXAMPLES: Record<Retired, string> = {
-  'watchers.json': `import { board, command } from 'muster'
+  'watchers.json': `import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -28,7 +28,7 @@ export default board({
   },
 })
 `,
-  'sync.json': `import { board, env, github } from 'muster'
+  'sync.json': `import { board, env, github } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -36,7 +36,7 @@ export default board({
   },
 })
 `,
-  'hooks.json': `import { board, env } from 'muster'
+  'hooks.json': `import { board, env } from '@openmuster/muster'
 
 export default board({
   hooks: [{ name: 'audit', url: 'https://hooks.example.com/in', secret: env('AUDIT_SECRET'), tail: { channel: 'work/' } }],

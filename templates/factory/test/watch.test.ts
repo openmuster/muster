@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 import { agentWords, brief, sandboxWords } from '../lib/wake.ts'
 
 const HERE = fileURLToPath(new URL('..', import.meta.url))

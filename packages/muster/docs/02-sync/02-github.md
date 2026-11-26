@@ -6,7 +6,7 @@ description: Issues, pull requests, comments, reviews and CI results as threads 
 ## Map repositories
 
 ```ts board.ts
-import { board, env, github } from 'muster'
+import { board, env, github } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -100,7 +100,7 @@ personal access token in `token` makes every comment yours. To have them
 written by a GitHub App, name the App in place of the token:
 
 ```ts board.ts
-import { board, env, github } from 'muster'
+import { board, env, github } from '@openmuster/muster'
 
 export default board({
   sync: {

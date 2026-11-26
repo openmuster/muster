@@ -1,10 +1,11 @@
 {
-  "name": "muster",
+  "name": "@openmuster/muster",
   "version": "0.3.1-alpha.1",
   "description": "A local-first work queue for coding agents, with the threads people read: leased tasks, one log, wait and tail, schedules and watchers.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/openmuster/muster.git", "directory": "packages/muster" },
   "homepage": "https://github.com/openmuster/muster#readme",
+  "publishConfig": { "access": "public" },
   "type": "module",
   "engines": {
     "node": "^22.22.3 || >=24.15"

@@ -193,7 +193,7 @@ describe('the TypeScript the docs show', () => {
       erasableSyntaxOnly: true,
       types: ['node'],
       typeRoots: [join(PACKAGE, 'node_modules', '@types')],
-      paths: { muster: [join(PACKAGE, 'src', 'index.ts')], '@/*': [join(dir, '*')] },
+      paths: { '@openmuster/muster': [join(PACKAGE, 'src', 'index.ts')], '@/*': [join(dir, '*')] },
     })
     // Parsed once for every block: muster's own files and Node's types are the same each time.
     const parsed = new Map<string, ts.SourceFile | undefined>()

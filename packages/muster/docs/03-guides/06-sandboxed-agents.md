@@ -424,7 +424,7 @@ token has an allowance of 100 MB a day.
 ## From code
 
 ```ts runners.ts
-import { claude, cloudflare, vercel } from 'muster'
+import { claude, cloudflare, vercel } from '@openmuster/muster'
 // import { Sandbox } from '@vercel/sandbox'
 
 const board = { url: 'https://board.example.com/api/board', token: process.env.AGENT_TOKEN! }

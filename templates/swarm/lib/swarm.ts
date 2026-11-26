@@ -1,4 +1,4 @@
-import type { Board, Message, TaskListing, TaskState } from 'muster'
+import type { Board, Message, TaskListing, TaskState } from '@openmuster/muster'
 
 export const STATES: TaskState[] = ['waiting', 'ready', 'claimed', 'blocked', 'completed', 'failed', 'canceled']
 

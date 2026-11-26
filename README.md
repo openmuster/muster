@@ -15,19 +15,21 @@ The CLI is `muster`, or `mu`.
 ## Install
 
 muster needs Node 22.22.3 or later on the 22 line, or 24.15 or later: older ones
-bundle a SQLite it refuses to run on. A release is a tarball on GitHub, which
-npm installs from its URL:
+bundle a SQLite it refuses to run on. It is on npm as `@openmuster/muster`:
 
 ```bash
-npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz
+npm install -g @openmuster/muster
 mu demo
 ```
 
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
+In a project, `npm i @openmuster/muster` and run it as `npx mu` there. Outside
+one, use `npx @openmuster/muster`: `mu` on npm is not muster.
 
-To pin a version, use its own tarball, for example
-`https://github.com/openmuster/muster/releases/download/v0.3.1-alpha.1/muster-0.3.1-alpha.1.tgz`.
-muster is not published to npm: install it from the URL.
+To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.2`.
+The name is scoped because `muster` on npm is an unrelated package. Every
+release is also a tarball on GitHub, which npm installs from its URL:
+`https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
 To upgrade, run the install line again; `mu --version` says what you have, and
 [CHANGELOG.md](./CHANGELOG.md) says what changed. A release lists its files'
@@ -55,13 +57,11 @@ message in the thread, so an answer that lands before the wait starts still
 counts. The [quickstart](./packages/muster/docs/01-quickstart.md) takes each
 step in turn.
 
-To try it without installing, `npx` runs the same tarball:
+To try it without installing:
 
 ```bash
-npx https://github.com/openmuster/muster/releases/latest/download/muster.tgz demo
+npx @openmuster/muster demo
 ```
-
-Don't run `npx muster`: `muster` on npm is an unrelated package.
 
 ## Hand work to agents
 
@@ -96,7 +96,7 @@ one TypeScript file:
 
 ```ts
 // ~/.config/muster/board.ts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -125,7 +125,7 @@ run it: `mu daemon run`, `mu serve`, or your own process. See
 
 ```ts
 // ~/.config/muster/board.ts
-import { board, env, github, slack } from 'muster'
+import { board, env, github, slack } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -149,7 +149,7 @@ being worked on in Slack and Linear. See
 
 ```ts
 // deploy.mts
-import { board } from 'muster'
+import { board } from '@openmuster/muster'
 
 const team = board().as('deploys')
 const sha = process.argv[2]
@@ -248,8 +248,7 @@ writing as you. See
   sandboxes, and you answer only what they ask. Since 0.3.0; run live on
   25 Nov 2026, by hand and from Linear ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
 - **Skills** that teach an agent the board: `mu skills install`, or
-  `npx skills add openmuster/muster --skill board -g` before muster is
-  installed.
+  `npx skills add openmuster/muster --skill board -g`.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
   HTTP from a served board.
 

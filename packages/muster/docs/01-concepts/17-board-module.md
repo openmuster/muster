@@ -13,7 +13,7 @@ A board module is a TypeScript file whose default export, or `team`, is a
 - `hooks`: [outgoing webhooks](./15-outgoing-webhooks.md).
 
 ```ts board.ts
-import { board, command, env, github } from 'muster'
+import { board, command, env, github } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -52,7 +52,7 @@ so `--dir`, `--board`, `--url`, `--as` and `MUSTER_PROFILE` don't go with it.
 
 It needs no project. A bare `~/.config/muster/board.ts`, with no
 `package.json` and no `node_modules`, is the shell-only and container case:
-`mu` answers its `import 'muster'` with its own copy. A module in a project
+`mu` answers its `import '@openmuster/muster'` with its own copy. A module in a project
 that installs muster runs on that project's install: `mu` becomes that
 install's `mu`, so a process holds one copy of muster. It is refused when the
 project's muster is too old to run a module, naming both versions.

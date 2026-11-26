@@ -1,6 +1,6 @@
 name: release
 
-# A release is a tarball on GitHub, which npm installs from its URL. Pushing a tag vX.Y.Z whose
+# A release is a tarball on GitHub, published to npm as @openmuster/muster. Pushing a tag vX.Y.Z whose
 # number is the package's version checks the tree, packs packages/muster, and attaches the tarball
 # twice (under its version, and as muster.tgz so releases/latest/download/muster.tgz works) with
 # their checksums. muster is still alpha, so every release is "latest", an alpha or beta
@@ -49,6 +49,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest
+
+  # The same tarball on npm, as @openmuster/muster. The job holds no npm token: npm trusts this workflow
+  # in this repository (trusted publishing) and takes the job's OIDC token. It runs no install and no
+  # build, only npm on the file the release job attached, checked against the sums beside it.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: The tarball the release carries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "muster-$version.tgz" --pattern SHA256SUMS
+          grep " muster-$version.tgz$" SHA256SUMS | sha256sum --check
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Publish
+        # muster is still alpha, so an alpha is "latest" on npm as it is on GitHub: npm won't guess that for a prerelease.
+        run: |
+          npm --version
+          npm publish "./muster-$VERSION.tgz" --access public --tag latest
 
   # The same release as a container image on GitHub's registry, tagged with its version and "latest".
   image:

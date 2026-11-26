@@ -49,7 +49,7 @@ else, so both work the same on either.
 | `http()` | A board behind `mu serve`, reached with a token |
 
 ```ts boards.ts
-import { board, file, http } from 'muster'
+import { board, file, http } from '@openmuster/muster'
 
 const here = board()
 const project = board({ dir: './.muster', name: 'web' })

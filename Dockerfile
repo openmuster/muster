@@ -13,10 +13,10 @@ FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338
 RUN corepack enable
 WORKDIR /src
 COPY . .
-RUN pnpm install --frozen-lockfile --filter muster... \
- && pnpm --filter muster build \
+RUN pnpm install --frozen-lockfile --filter @openmuster/muster... \
+ && pnpm --filter @openmuster/muster build \
  && cd packages/muster && pnpm pack --pack-destination /out \
- && mv /out/muster-*.tgz /out/muster.tgz
+ && mv /out/openmuster-muster-*.tgz /out/muster.tgz
 
 # Run it: Node and the packed CLI, nothing else.
 FROM node:24-bookworm-slim@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530

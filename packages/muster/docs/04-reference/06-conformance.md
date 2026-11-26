@@ -42,7 +42,7 @@ pass  a reply to a reply lands on the root
 ## From code
 
 ```ts conformance.test.ts
-import { board, conformance } from 'muster'
+import { board, conformance } from '@openmuster/muster'
 
 const checks = await conformance(board({ memory: true }))
 const failed = checks.filter((check) => !check.ok)

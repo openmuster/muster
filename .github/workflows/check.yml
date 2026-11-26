@@ -56,7 +56,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter muster exec playwright install --with-deps chromium
+      - run: pnpm --filter @openmuster/muster exec playwright install --with-deps chromium
       - run: pnpm test:browser
 
   # What a release does, without publishing: so a broken release step fails here, not on a tag.
@@ -75,6 +75,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: node scripts/release.mjs pack out
+      - name: npm takes the tarball, without publishing it
+        run: npm publish "./out/muster-$(node -p "require('./packages/muster/package.json').version").tgz" --access public --tag latest --dry-run
       - run: node scripts/release.mjs notes "$(node -p "require('./packages/muster/package.json').version")" > /dev/null
 
   # The container image builds, starts healthy, and serves the board it keeps on its volume.
