@@ -7,6 +7,14 @@ versions are affected.
 
 ### Added
 
+- GitHub sync can comment as a GitHub App: `github({ appId: env('GITHUB_APP_ID'),
+  appKey: env('GITHUB_APP_KEY_FILE'), … })` in place of `token`. Comments,
+  edits, deletes and catch-up then use a token the board makes for each
+  repository, so what the sync writes is by the App and not by whoever owns
+  a personal token. The App needs write on Issues (and on Pull requests where
+  those are mapped). `templates/loop` now uses the App its workers push with.
+  See [Who the comments are by](./packages/muster/docs/02-sync/02-github.md#who-the-comments-are-by).
+
 - A run's `started <workflow>: …` reply keeps up with the run: once a task is
   taken, the daemon edits it to say where each task is (`#42 completed, #43
   claimed, #44 waiting`), and labels it `progress=open` while the run works
