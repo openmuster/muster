@@ -437,6 +437,21 @@ describe('templates/loop', () => {
       expect(await made.card(bare.id)).toMatchObject({ state: 'blocked', hold: { kind: 'declined' } })
     })
 
+    it("a public source's triage is shown only public cards, so its spec can't repeat a private card's words; a private source's sees all", async () => {
+      const made = await setup()
+      const secret = await made.team.post({ channel: 'cards/slack', text: 'acquire acme quietly' })
+      await made.tick()
+      const issue = await made.as('gh:user:octocat').post({ channel: 'cards/github', text: 'typo in README' })
+      await made.tick()
+      const listed = async (card: number) => (await made.team.readThread({ id: card })).replies.find((reply) => reply.by.profile === 'cards')!.text
+      expect(await listed(issue.id)).not.toContain('acquire acme')
+      const later = await made.team.post({ channel: 'cards/app', text: 'stack counts' })
+      await made.tick()
+      expect(await listed(later.id)).toContain('acquire acme')
+      expect(await listed(later.id)).toContain('typo in README')
+      void secret
+    })
+
     it('a triage of the text before its author changed it declines nothing when it fails', async () => {
       const made = await setup()
       withWorkflows()

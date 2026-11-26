@@ -157,6 +157,10 @@ it with `{on.text}`, as content.
   its spec on it, and you are told. Someone trusted labels it `approved=yes`
   to work it anyway, or you cancel it. A duplicate the triage wrote no card
   for is triaged again when it is moved to ready.
+- **A public source sees only public cards.** What a triage writes is
+  mirrored where its card came from, so a card from a public source (GitHub
+  issues; `LOOP_PUBLIC` lists the channels, comma separated) is shown only
+  other public cards. A card from Slack, Linear, Notion or your app sees all.
 - **Only cards of this loop count.** A number that isn't another card's (the
   card itself, a run's task, any other thread) is left out. The lines are
   taken off the spec.

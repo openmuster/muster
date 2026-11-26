@@ -145,9 +145,18 @@ async function triageContext(team: Board, card: number, owner: string): Promise<
   return out
 }
 
+/**
+ * The card channels anyone can read where they come from (a public repository's issues): a triage of a card
+ * from one is shown only cards from these, since what it writes is mirrored there and could repeat another
+ * card's words. LOOP_PUBLIC (comma separated) replaces the list.
+ */
+const publicChannels = () => new Set((process.env.LOOP_PUBLIC ?? 'cards/github').split(',').map((each) => each.trim()).filter(Boolean))
+
 /** The other cards, newest first, after a heading: `#id  stage  first line`. Canceled ones aren't. */
 async function otherCards(team: Board, card: number, owner: string): Promise<string[]> {
-  const channels = (await team.channels()).channels.map((each) => each.path).filter(isCardChannel)
+  const open = publicChannels()
+  const mine = (await team.readThread({ id: card })).message.channel
+  const channels = (await team.channels()).channels.map((each) => each.path).filter((path) => isCardChannel(path) && (!open.has(mine) || open.has(path)))
   const found: { id: number; line: string }[] = []
   for (const channel of channels) {
     const { tasks } = await team.taskList({ channel, state: 'all', latest: true, limit: 1000 })
