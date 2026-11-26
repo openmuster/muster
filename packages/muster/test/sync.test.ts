@@ -491,6 +491,105 @@ describe('sync: Linear', () => {
   })
 })
 
+describe('sync: Linear as its own app', () => {
+  const DAY = 24 * 60 * 60_000
+  /** A board whose Linear sync has an app's client ID and secret and no token, and a Linear that makes tokens for it. */
+  function appSetup(options: { scopes?: string[]; ended?: () => string | null; refuse?: () => boolean } = {}) {
+    const time = clock()
+    const tokens: { type: string | null; form: Record<string, string> }[] = []
+    const calls: { auth: string; input: any }[] = []
+    let comment = 0
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === 'https://api.linear.app/oauth/token') {
+        tokens.push({ type: new Headers(init?.headers).get('content-type'), form: Object.fromEntries(new URLSearchParams(String(init?.body))) })
+        if (options.refuse?.()) return Response.json({ error: 'Error', error_description: 'Client does not support the client_credentials grant type' }, { status: 400 })
+        return Response.json({ access_token: `lin_app_${tokens.length}`, token_type: 'Bearer', expires_in: 2591999, scope: 'read write' })
+      }
+      const auth = new Headers(init?.headers).get('authorization') ?? ''
+      // A token Linear ended early: its secret was rotated, or its scopes changed.
+      if (options.ended?.() === auth) return new Response('{"errors":[{"message":"Authentication required"}]}', { status: 401 })
+      calls.push({ auth, input: JSON.parse(String(init?.body)).variables?.input })
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${++comment}` } } } })
+    }) as typeof fetch
+    const lin = linear({ secret: SECRET, clientId: 'client-1', clientSecret: 'shh', teams: { ENG: 'eng' }, now: () => time.now().getTime(), ...(options.scopes ? { scopes: options.scopes } : {}) })
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync: { lin }, fetch: fetcher })
+    const team = board({ backend })
+    /** An issue that came in from Linear, as the board has it. */
+    const issue = async () => {
+      await backend.syncTick()
+      const body = JSON.stringify({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-42', title: 'Crash', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' } } })
+      await backend.syncReceive('lin', { headers: { 'linear-delivery': 'l-1', 'linear-signature': sign(SECRET, body) }, body })
+      return (await team.readChannel({ channel: 'eng' })).threads[0]!.message.id
+    }
+    return { time, tokens, calls, lin, backend, team, issue }
+  }
+
+  it("comments with the app's own token, asked for with its client ID and secret, and needs no token of a person", async () => {
+    const { team, backend, tokens, calls, lin, issue } = appSetup()
+    expect(lin.mirrors('ENG')).toBe(true)
+    await team.reply({ to: await issue(), text: 'on it' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toEqual([{ type: 'application/x-www-form-urlencoded', form: { grant_type: 'client_credentials', scope: 'read,write', client_id: 'client-1', client_secret: 'shh' } }])
+    expect(calls).toEqual([{ auth: 'Bearer lin_app_1', input: { issueId: 'iss-1', body: 'on it' } }])
+  })
+
+  it('keeps the token for its thirty days, and asks for the next one before it runs out', async () => {
+    const { team, backend, time, tokens, calls, issue } = appSetup()
+    const root = await issue()
+    await team.reply({ to: root, text: 'one' })
+    await backend.syncTick()
+    time.advance(29 * DAY)
+    await team.reply({ to: root, text: 'two' })
+    await backend.syncTick()
+    expect(tokens).toHaveLength(1)
+    // Within five minutes of its end.
+    time.advance(DAY - 4 * 60_000)
+    await team.reply({ to: root, text: 'three' })
+    await backend.syncTick()
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => call.auth)).toEqual(['Bearer lin_app_1', 'Bearer lin_app_1', 'Bearer lin_app_2'])
+  })
+
+  it('asks for a new token when Linear ended the one it has, and sends the comment once', async () => {
+    let ended: string | null = null
+    const { team, backend, tokens, calls, issue } = appSetup({ ended: () => ended })
+    const root = await issue()
+    await team.reply({ to: root, text: 'one' })
+    await backend.syncTick()
+    ended = 'Bearer lin_app_1'
+    await team.reply({ to: root, text: 'two' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => [call.auth, call.input.body])).toEqual([
+      ['Bearer lin_app_1', 'one'],
+      ['Bearer lin_app_2', 'two'],
+    ])
+  })
+
+  it('counts a delivery as failed while Linear makes no token, and asks again on the next try', async () => {
+    let refusing = true
+    const { team, backend, tokens, calls, issue } = appSetup({ refuse: () => refusing })
+    await team.reply({ to: await issue(), text: 'on it' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 0, failed: 1 })
+    refusing = false
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => call.auth)).toEqual(['Bearer lin_app_2'])
+  })
+
+  it('asks for the scopes the module names, names the app with env(), and refuses half an app', async () => {
+    const { team, backend, tokens, issue } = appSetup({ scopes: ['read', 'comments:create'] })
+    await team.reply({ to: await issue(), text: 'on it' })
+    await backend.syncTick()
+    expect(tokens[0]!.form.scope).toBe('read,comments:create')
+    const waiting = linear({ secret: env('LINEAR_WEBHOOK_SECRET'), clientId: env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), teams: { ENG: 'eng' } })
+    expect(envNames(waiting)).toEqual(['LINEAR_WEBHOOK_SECRET', 'LINEAR_CLIENT_ID', 'LINEAR_CLIENT_SECRET'])
+    expect(() => linear({ secret: SECRET, clientId: 'client-1', teams: { ENG: 'eng' } })).toThrow(/clientId.*clientSecret/)
+    // Neither a token nor an app: nothing goes back, as before.
+    expect(linear({ secret: SECRET, teams: { ENG: 'eng' } }).mirrors('ENG')).toBe(false)
+  })
+})
+
 describe('sync: Slack', () => {
   it('answers the URL check, imports a channel message as a thread and a threaded message as a reply, and replies back in the Slack thread', async () => {
     const { team, chat, backend, sent } = setup()

@@ -25,6 +25,45 @@ A team, by its key, maps to a channel. Sync is two-way unless a team sets
 `token` is a personal API key (`lin_api_…`) or an OAuth access token; muster
 sends each the way Linear expects.
 
+## Who the comments are by
+
+What the sync sends is written by whoever its credential belongs to. A
+personal API key in `token` makes every comment and issue yours. To have them
+written by an app of its own, name an OAuth application in place of the token:
+
+```ts board.ts
+import { board, env, linear } from 'muster'
+
+export default board({
+  sync: {
+    lin: linear({
+      secret: env('LINEAR_WEBHOOK_SECRET'),
+      clientId: env('LINEAR_CLIENT_ID'),
+      clientSecret: env('LINEAR_CLIENT_SECRET'),
+      teams: { ENG: 'eng' },
+    }),
+  },
+})
+```
+
+- In Linear, create an OAuth application (Settings, API, OAuth applications)
+  and turn on **client credentials tokens** for it. Its name and icon are how
+  it shows on comments.
+- The board asks Linear for the app's token when it first needs one, keeps it
+  for the thirty days it lasts, and asks again before it runs out or when
+  Linear ends it early. Nothing is stored: a board that starts again asks
+  again.
+- `scopes` is what the token may do, `['read', 'write']` unless you say.
+  Changing it ends the app's earlier tokens in the workspace.
+- A client credentials token replaces an installation of the same app made
+  through the authorization page. Use an application of its own for the board.
+- Catch-up and files use the app as well, so no `token` is needed. With both
+  set, the app is used.
+
+> [!NOTE]
+> This follows Linear's documentation and is tested against a stand-in for its
+> API. It has not been run against a live workspace yet.
+
 `bot` is optional: the user ID whose comments are never imported. Set it only
 when the token acts as a user of its own, such as an OAuth app that posts as
 itself rather than as the person who installed it. With a personal API key, that user is you, and naming it would

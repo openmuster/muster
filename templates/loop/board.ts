@@ -390,8 +390,9 @@ export const watch = {
 export const sync = {
   // A Slack channel, by its ID: the one people send feedback in.
   slack: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123456789: 'cards/slack' } }),
-  // A Linear team, by its key: issues filed there are reports, and the card's replies are comments on them.
-  lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), token: env('LINEAR_API_KEY'), teams: { ENG: 'cards/linear' } }),
+  // A Linear team, by its key: issues filed there are reports, and the card's replies are comments on them, written
+  // by an OAuth application of its own (with client credentials tokens turned on), not by a person's API key.
+  lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), clientId: env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), teams: { ENG: 'cards/linear' } }),
   // GitHub issues on your repository, with the card's replies sent back as comments, written by the GitHub App
   // the workers push with (it needs write on Issues too), not by a person's token.
   gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), appId: env('GITHUB_APP_ID'), appKey: env('GITHUB_APP_KEY_FILE'), repos: { 'your-org/your-repo': { issues: 'cards/github', mirror: true } } }),
