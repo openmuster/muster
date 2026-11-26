@@ -26,7 +26,7 @@
 // Nothing here reads what a message means. The triage agent decides what the change is; people decide who
 // is trusted and what is approved; the board says who wrote what.
 import { spawn, spawnSync } from 'node:child_process'
-import { board, env, fenced, github, linear, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
+import { board, env, fenced, github, linear, LINEAR_SCOPES, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
 
 /** The sync keys below whose authors are named by a login someone else could take later: `gh`, GitHub's. */
 const LOGIN_KEYED = new Set(['gh'])
@@ -234,13 +234,13 @@ async function relateInLinear(team: Board, card: number, others: Message[]): Pro
   const made = await madeOf(team, card)
   const source = made?.key ? sources()[made.key] : undefined
   if (source?.type !== 'linear' || !made?.external?.startsWith('issue:')) return
-  const authorization = await authOf(source).catch(() => null)
-  if (authorization === null) return
   const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
   for (const other of others) {
     const theirs = await madeOf(team, other.id)
     if (theirs?.key !== made.key || !theirs.external?.startsWith('issue:')) continue
-    await fetch(api, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation($a: String!, $b: String!) { issueRelationCreate(input: { issueId: $a, relatedIssueId: $b, type: related }) { success } }', variables: { a: made.external.slice(6), b: theirs.external.slice(6) } }) }).then(answer, () => null).catch(() => null)
+    const variables = { a: made.external.slice(6), b: theirs.external.slice(6) }
+    const relate = async (authorization: string) => answer(await fetch(api, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation($a: String!, $b: String!) { issueRelationCreate(input: { issueId: $a, relatedIssueId: $b, type: related }) { success } }', variables }) }))
+    await signed(source, relate).catch(() => null)
   }
 }
 
@@ -263,9 +263,11 @@ type Stage = 'backlog' | 'planning' | 'ready' | 'working' | 'done' | 'canceled'
  * that hold what it writes with: a token, or for Linear the same OAuth app's client ID and secret its sync
  * uses. A status not listed parks the card. LOOP_STAGES, JSON in the same shape, replaces an entry:
  * `{"nt":{"type":"notion","token":"NOTION_TOKEN","stages":{"inbox":"ready"}}}`. Notion's integration needs
- * "Update content" to write a status; with nothing to write with, the loop writes none.
+ * "Update content" to write a status; with nothing to write with, the loop writes none. A Linear app's token is
+ * asked for with its sync's scopes (`scopes`, the sync's default unless you gave the sync others): Linear ends an
+ * app's earlier tokens when one is asked for with different scopes, and the sync's would be among them.
  */
-type Source = { type: 'notion' | 'linear'; token: string; clientId?: string; clientSecret?: string; stages: Record<string, Stage>; write?: { working?: string; done?: string } }
+type Source = { type: 'notion' | 'linear'; token: string; clientId?: string; clientSecret?: string; scopes?: readonly string[]; stages: Record<string, Stage>; write?: { working?: string; done?: string } }
 const SOURCES: Record<string, Source> = {
   nt: { type: 'notion', token: 'NOTION_TOKEN', stages: { 'not-started': 'backlog', planning: 'planning', ready: 'ready', 'in-progress': 'working', done: 'done' }, write: { working: 'in-progress', done: 'done' } },
   lin: { type: 'linear', token: 'LINEAR_API_KEY', clientId: 'LINEAR_CLIENT_ID', clientSecret: 'LINEAR_CLIENT_SECRET', stages: { triage: 'planning', backlog: 'backlog', todo: 'ready', 'in-progress': 'working', done: 'done', canceled: 'canceled', duplicate: 'canceled' }, write: { working: 'in-progress', done: 'done' } },
@@ -384,10 +386,7 @@ async function setStatus(team: Board, card: number, stage: 'working' | 'done', s
   const want = source?.write?.[stage]
   if (!made?.external || !source || !want) return
   try {
-    const authorization = await authOf(source)
-    if (authorization === null) return
-    if (source.type === 'notion') await notionStatus(made.external, want, authorization)
-    else await linearStatus(made.external, want, authorization)
+    await signed(source, (authorization) => (source.type === 'notion' ? notionStatus(made.external!, want, authorization) : linearStatus(made.external!, want, authorization)))
   } catch (error) {
     await note(team, card, `couldn't set its ${source.type === 'notion' ? 'Notion' : 'Linear'} status to ${want}: ${String((error as Error)?.message ?? error).slice(0, 300)}`, `status-${stage}-${since}`)
   }
@@ -397,29 +396,58 @@ async function setStatus(team: Board, card: number, stage: 'working' | 'done', s
 let appToken: { id: string; token: string; until: number } | undefined
 
 /**
- * How the loop signs what it writes to a source: its token when the environment has one, or for a Linear
- * OAuth app, the app's own token, asked for with its client credentials as its sync asks (the same scopes, so
- * the sync's token stays good). Null when it has nothing to write with.
+ * How the loop signs what it writes to a source. A Linear OAuth app, when its client ID and secret are set,
+ * comes first: the loop then writes as the same app its sync comments as, never as whoever owns a key also
+ * left in the environment. Its token is asked for with the client credentials, as its sync asks (the same
+ * scopes, so the sync's token stays good). Otherwise the source's token. Null when it has neither.
  */
 async function authOf(source: Source): Promise<string | null> {
-  const token = process.env[source.token]
-  // A Linear personal API key goes as it is; everything else is a bearer token.
-  if (token) return source.type === 'linear' && (token.startsWith('lin_api_') || /^bearer /i.test(token)) ? token : `Bearer ${token}`
   const id = source.clientId ? process.env[source.clientId] : undefined
   const secret = source.clientSecret ? process.env[source.clientSecret] : undefined
-  if (source.type !== 'linear' || !id || !secret) return null
-  if (appToken?.id === id && appToken.until > Date.now() + 60_000) return `Bearer ${appToken.token}`
-  const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
-  const got = await answer(await fetch(new URL('/oauth/token', api).href, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'read,write', client_id: id, client_secret: secret }).toString() }))
-  if (typeof got?.access_token !== 'string' || !got.access_token) throw new Error('Linear made no token for the app')
-  appToken = { id, token: got.access_token, until: Date.now() + (Number(got.expires_in) || 0) * 1000 }
-  return `Bearer ${appToken.token}`
+  if (source.type === 'linear' && id && secret) {
+    if (appToken?.id === id && appToken.until > Date.now() + 60_000) return `Bearer ${appToken.token}`
+    const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
+    const got = await answer(await fetch(new URL('/oauth/token', api).href, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: (source.scopes ?? LINEAR_SCOPES).join(','), client_id: id, client_secret: secret }).toString() }))
+    if (typeof got?.access_token !== 'string' || !got.access_token) throw new Error('Linear made no token for the app')
+    appToken = { id, token: got.access_token, until: Date.now() + (Number(got.expires_in) || 0) * 1000 }
+    return `Bearer ${appToken.token}`
+  }
+  const token = process.env[source.token]
+  if (!token) return null
+  // A Linear personal API key goes as it is; everything else is a bearer token.
+  return source.type === 'linear' && (token.startsWith('lin_api_') || /^bearer /i.test(token)) ? token : `Bearer ${token}`
+}
+
+/**
+ * Does a write signed as `authOf` says. A Linear app's token Linear refused (401: one asked for since, with other
+ * scopes, ended it) is asked for again, and the write tried once more, as its sync does. Nothing to sign with: nothing.
+ */
+async function signed(source: Source, write: (authorization: string) => Promise<unknown>): Promise<void> {
+  const authorization = await authOf(source)
+  if (authorization === null) return
+  try {
+    await write(authorization)
+  } catch (error) {
+    if (!(error instanceof Refused) || error.status !== 401 || appToken === undefined || authorization !== `Bearer ${appToken.token}`) throw error
+    appToken = undefined
+    const again = await authOf(source)
+    if (again !== null) await write(again)
+  }
+}
+
+/** What a platform answered when it said no. */
+class Refused extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
 }
 
 /** A platform's answer as JSON, or what it said went wrong. */
 async function answer(response: Response): Promise<any> {
   const body = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(`${response.status} ${String(body?.message ?? body?.errors?.[0]?.message ?? '')}`.trim())
+  if (!response.ok) throw new Refused(response.status, `${response.status} ${String(body?.message ?? body?.errors?.[0]?.message ?? '')}`.trim())
   if (body?.errors?.length) throw new Error(String(body.errors[0]?.message ?? 'an error'))
   return body
 }

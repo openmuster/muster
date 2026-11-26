@@ -385,8 +385,12 @@ export const linear = (options: LinearOptions): Provider => {
 /** How often Linear is told an issue is still being worked on: a session with nothing new for 30 minutes goes stale. */
 const LINEAR_WORKING_TTL_MS = 25 * 60_000
 
-/** What an app's token may do unless the module says: read what comes in, and write the comments and issues that go back. */
-const LINEAR_SCOPES = ['read', 'write'] as const
+/**
+ * What an app's token may do unless the module says: read what comes in, and write the comments and issues that go
+ * back. Anything else that asks for a token for the same app asks with these: a token asked for with other scopes ends
+ * the app's earlier ones, the sync's included.
+ */
+export const LINEAR_SCOPES = ['read', 'write'] as const
 
 function linearWith(options: Resolved<LinearOptions>): Provider {
   const team = (place: string) => options.teams[place]

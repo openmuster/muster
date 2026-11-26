@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { tickOnce } from '../src/daemon/daemon.ts'
 import { openRuns, type Spawner } from '../src/daemon/runs.ts'
 import { fillResults } from '../src/daemon/steps.ts'
-import { board, file, linear, loadWorkflows, notion, type Board, type FileOptions } from '../src/index.ts'
+import { board, file, linear, LINEAR_SCOPES, loadWorkflows, notion, type Board, type FileOptions } from '../src/index.ts'
 import { watch } from '../../../templates/loop/board.ts'
 import { clock, tempDir } from './helpers.ts'
 
@@ -500,7 +500,8 @@ describe('templates/loop', () => {
       Object.assign(process.env, { MUSTER_CONFIG: config, LOOP_MU: '/bin/true', LINEAR_API_KEY: 'lin_api_key', LOOP_TRUSTED: 'lin:user:u-ada' })
       const written: { issue: string; state: string }[] = []
       const related: { a: string; b: string }[] = []
-      const api = { failing: false }
+      /** `ended`: app tokens Linear has ended, as it does when one is asked for with other scopes. */
+      const api = { failing: false, ended: new Set<string>() }
       /** How each write to Linear was signed, and the app tokens asked for. */
       const signed: string[] = []
       const minted: string[] = []
@@ -510,6 +511,7 @@ describe('templates/loop', () => {
           return Response.json({ access_token: `app-token-${minted.length}`, expires_in: 2_592_000 })
         }
         signed.push(new Headers(init.headers).get('authorization') ?? '')
+        if (api.ended.has(new Headers(init.headers).get('authorization') ?? '')) return Response.json({ errors: [{ message: 'Authentication required' }] }, { status: 401 })
         const { query, variables } = JSON.parse(String(init.body))
         if (api.failing) return Response.json({ errors: [{ message: 'not allowed' }] }, { status: 400 })
         if (String(query).includes('issueRelationCreate')) return (related.push(variables), Response.json({ data: { issueRelationCreate: { success: true } } }))
@@ -632,9 +634,10 @@ describe('templates/loop', () => {
       expect((await made.team.readThread({ id: run.work!.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
     })
 
-    it("with no API key, the loop writes as the sync's own Linear app: its token is asked for once, with the app's client credentials", async () => {
+    it("with the sync's Linear app set up, the loop writes as that app, even with a personal key also set: its token is asked for once", async () => {
       const made = await fromLinear()
-      delete process.env.LINEAR_API_KEY
+      // The personal key stays in the environment, as it does on a board that moved its sync to the app.
+      expect(process.env.LINEAR_API_KEY).toBe('lin_api_key')
       Object.assign(process.env, { LINEAR_CLIENT_ID: 'app-id', LINEAR_CLIENT_SECRET: 'app-secret' })
       const { id, card } = await made.file('Todo')
       await made.complete((await made.run(card, 'triage'))!.triage!.id, SPEC)
@@ -647,7 +650,27 @@ describe('templates/loop', () => {
       expect(made.minted).toHaveLength(1)
       expect(new URLSearchParams(made.minted[0]!).get('grant_type')).toBe('client_credentials')
       expect(new URLSearchParams(made.minted[0]!).get('client_id')).toBe('app-id')
+      // The sync's own scopes: a token asked for with others would end the sync's.
+      expect(new URLSearchParams(made.minted[0]!).get('scope')).toBe(LINEAR_SCOPES.join(','))
       expect(new Set(made.signed)).toEqual(new Set(['Bearer app-token-1']))
+    })
+
+    it("an app token Linear ended since is asked for again once, and the status is still written", async () => {
+      const made = await fromLinear()
+      Object.assign(process.env, { LINEAR_CLIENT_ID: 'app-id-2', LINEAR_CLIENT_SECRET: 'app-secret' })
+      const { id, card } = await made.file('Todo')
+      await made.complete((await made.run(card, 'triage'))!.triage!.id, SPEC)
+      await made.tick()
+      expect(made.written).toEqual([{ issue: id, state: 'In Progress' }])
+      // Someone asked for a token for the same app with other scopes: the loop's is ended.
+      for (const minted of made.minted) made.api.ended.add(`Bearer app-token-${made.minted.indexOf(minted) + 1}`)
+      const run = (await made.run(card, 'card'))!
+      for (const key of ['spec', 'work']) await made.complete(run[key]!.id, `${key} done`)
+      await made.complete(run.review!.id, 'approve')
+      await made.tick()
+      expect(made.written.at(-1)).toEqual({ issue: id, state: 'Done' })
+      expect(made.minted).toHaveLength(2)
+      expect((await made.team.readThread({ id: card })).replies.some((reply) => reply.text.startsWith("couldn't set"))).toBe(false)
     })
 
     it('a review that asks for changes is not Done: the card stays working', async () => {
