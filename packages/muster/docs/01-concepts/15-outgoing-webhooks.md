@@ -26,7 +26,7 @@ posts can make a host call a URL. `env()` names the variable that holds the
 secret; nothing reads it when the module is imported.
 
 ```ts lib/board.ts
-import { board, env } from 'muster'
+import { board, env } from '@openmuster/muster'
 
 export const team = board({
   hooks: [

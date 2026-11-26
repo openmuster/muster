@@ -93,7 +93,7 @@ approve the code it shows with `docker exec board mu join approve <code>
 Put a [board module](../01-concepts/17-board-module.md) in `/data/config`,
 say `/data/config/board.ts`, and name it with `-e MUSTER_MODULE=/data/config/board.ts`:
 the image sets `MUSTER_DIR`, so the default module isn't picked up on its own.
-It needs no `package.json`: `mu` answers its `import 'muster'`. Pass the
+It needs no `package.json`: `mu` answers its `import '@openmuster/muster'`. Pass the
 secrets it names with `env()` as environment variables to `docker run`
 (`-e GITHUB_TOKEN`). The board runs its sync, watchers and hooks while it
 serves; one it can't load is said in the container's log, and the board is

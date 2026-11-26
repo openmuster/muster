@@ -66,7 +66,7 @@ function folder(url: string, extra = '') {
   const dir = tempDir()
   mkdirSync(join(dir, 'config'), { recursive: true })
   const module = join(dir, 'board.ts')
-  writeFileSync(module, `import { board, env } from 'muster'
+  writeFileSync(module, `import { board, env } from '@openmuster/muster'
 export default board({
   hooks: [{ name: 'audit', url: '${url}', secret: env('AUDIT_SECRET'), tail: { channel: 'work/' }, body: 'event' }],${extra}
 })

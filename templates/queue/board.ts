@@ -6,7 +6,7 @@
 // HOME and the board's own variables, the names in `env`, and a pointer to what happened (MUSTER_EVENT,
 // MUSTER_THREAD, ...). Never the card's text: the script reads the board itself.
 import { fileURLToPath } from 'node:url'
-import { board, command, env, linear, type Watch } from 'muster'
+import { board, command, env, linear, type Watch } from '@openmuster/muster'
 
 /** A script in this folder, by its full path, wherever the module is run from. */
 const script = (name: string) => fileURLToPath(new URL(name, import.meta.url))

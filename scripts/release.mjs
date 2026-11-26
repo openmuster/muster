@@ -3,7 +3,7 @@
 //   node scripts/release.mjs notes <version> print that version's section of CHANGELOG.md
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +26,9 @@ if (command === 'pack') {
   const out = resolve(arg ?? 'out')
   mkdirSync(out, { recursive: true })
   execFileSync('pnpm', ['pack', '--pack-destination', out], { cwd: join(root, 'packages/muster'), stdio: 'inherit' })
+  // pnpm names a scoped package's tarball after its scope. A release keeps the names its install line has always had.
   const tarball = join(out, `muster-${version}.tgz`)
+  renameSync(join(out, `openmuster-muster-${version}.tgz`), tarball)
   copyFileSync(tarball, join(out, 'muster.tgz'))
   // The packed CLI has to install and run, from a path npm can't mistake for a GitHub repository.
   const prefix = mkdtempSync(join(tmpdir(), 'muster-release-'))

@@ -107,7 +107,7 @@ flowchart LR
 In the board module:
 
 ```ts board.ts
-import { board, command, type Watch } from 'muster'
+import { board, command, type Watch } from '@openmuster/muster'
 
 /** A product's watcher: woken when its label lands, and for what comes after in its threads. */
 const product = (name: string): Watch => ({

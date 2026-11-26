@@ -17,7 +17,7 @@ stored on a board, which means no message, however it is worded, can cause a
 host to execute something.
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {

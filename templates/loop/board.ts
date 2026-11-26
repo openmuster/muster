@@ -26,7 +26,7 @@
 // Nothing here reads what a message means. The triage agent decides what the change is; people decide who
 // is trusted and what is approved; the board says who wrote what.
 import { spawn, spawnSync } from 'node:child_process'
-import { board, env, fenced, github, linear, LINEAR_SCOPES, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from 'muster'
+import { board, env, fenced, github, linear, LINEAR_SCOPES, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from '@openmuster/muster'
 
 /** The sync keys below whose authors are named by a login someone else could take later: `gh`, GitHub's. */
 const LOGIN_KEYED = new Set(['gh'])

@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { board, type Board } from 'muster'
+import { board, type Board } from '@openmuster/muster'
 
 /** This file, by its full path: what the watcher runs. */
 export const WAKE = fileURLToPath(import.meta.url)

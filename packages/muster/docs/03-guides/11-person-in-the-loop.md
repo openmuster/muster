@@ -65,7 +65,7 @@ A watcher runs your command when a task blocks. Put it in your board module,
 `~/.config/muster/board.ts`, and run `mu daemon run`:
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {

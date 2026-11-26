@@ -62,7 +62,7 @@ command types one line into it. Three rules keep that from going wrong:
 In your board module, `~/.config/muster/board.ts`:
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -116,7 +116,7 @@ knows whether an agent is idle, so it does the gate's job itself: its
 agent has taken it.
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {

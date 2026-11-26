@@ -26,7 +26,7 @@ into the service as before.
 ## watchers.json
 
 ```ts board.ts
-import { board, command } from 'muster'
+import { board, command } from '@openmuster/muster'
 
 export default board({
   watch: {
@@ -71,7 +71,7 @@ What a woken command gets is the same: `MUSTER_THREAD`, `MUSTER_CHANNEL`,
 ## sync.json
 
 ```ts board.ts
-import { board, env, github } from 'muster'
+import { board, env, github } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -95,7 +95,7 @@ Its webhook URL, `/api/board/webhooks/<name>`, is the same. See
 ## hooks.json
 
 ```ts board.ts
-import { board, env } from 'muster'
+import { board, env } from '@openmuster/muster'
 
 export default board({
   hooks: [{ name: 'audit', url: 'https://hooks.example.com/in', secret: env('AUDIT_SECRET'), tail: { channel: 'work/' } }],

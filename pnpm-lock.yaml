@@ -119,7 +119,7 @@ importers:
 
   templates/factory:
     dependencies:
-      muster:
+      '@openmuster/muster':
         specifier: workspace:*
         version: link:../../packages/muster
       next:
@@ -150,7 +150,7 @@ importers:
 
   templates/swarm:
     dependencies:
-      muster:
+      '@openmuster/muster':
         specifier: workspace:*
         version: link:../../packages/muster
       next:
