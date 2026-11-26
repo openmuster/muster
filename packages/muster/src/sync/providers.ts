@@ -359,6 +359,16 @@ export type LinearOptions = SyncOptions & {
   scopes?: readonly string[]
   /** The clock the app's token is kept by. */
   now?: () => number
+  /**
+   * With an app (`clientId`): an issue being worked on shows the app's agent session on it, working, in place of
+   * a progress message. Needs webhooks with "Agent session events" turned on for the application in Linear.
+   */
+  agent?: boolean
+  /**
+   * The signing secret of the application's own webhook, which Linear needs set before it allows agent sessions.
+   * What it sends is checked with this and answered; nothing in it is imported. `env('NAME')`.
+   */
+  appSecret?: Secret
   /** The app's own user ID, so its comments aren't imported back. */
   bot?: string
   /** A team key to a channel. Two-way unless `mirror: false`. */
@@ -369,8 +379,11 @@ export type LinearOptions = SyncOptions & {
 /** Linear: issues and comments come in as threads, and board replies go back as comments. */
 export const linear = (options: LinearOptions): Provider => {
   if ((options.clientId === undefined) !== (options.clientSecret === undefined)) throw misuse('invalid_sync', 'A linear sync needs "clientId" and "clientSecret" together: the OAuth application\'s own.')
-  return declared('linear', options, linearWith, ['clientId', 'clientSecret'])
+  return declared('linear', options, linearWith, ['clientId', 'clientSecret', 'appSecret'])
 }
+
+/** How often Linear is told an issue is still being worked on: a session with nothing new for 30 minutes goes stale. */
+const LINEAR_WORKING_TTL_MS = 25 * 60_000
 
 /**
  * What an app's token may do unless the module says: read what comes in, and write the comments and issues that go
@@ -383,6 +396,12 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
   const team = (place: string) => options.teams[place]
   const api = options.api ?? 'https://api.linear.app/graphql'
   const app = options.clientId !== undefined && options.clientSecret !== undefined ? { id: options.clientId, secret: options.clientSecret } : undefined
+  /**
+   * The app's own user in the workspace, once Linear has said who it is. What an agent session says as it ends
+   * is a comment by that user, which the board has no ID for: so with sessions on, a comment by it isn't brought in.
+   */
+  let appUser: string | undefined
+  const own = (author: string) => (options.bot !== undefined && author === options.bot) || (appUser !== undefined && author === appUser)
   /** Whether the sync has something to send and read with: a token, or an app to ask for one. */
   const signed = options.token !== undefined || app !== undefined
   /**
@@ -470,7 +489,7 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
       id,
       author,
       place: String(issue.team?.key ?? ''),
-      self: options.bot !== undefined && author === options.bot,
+      self: own(author),
       kind: 'root',
       thread,
       external: thread,
@@ -482,16 +501,61 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
   return {
     type: 'linear',
     verify({ headers, body }) {
-      if (!same(headers['linear-signature'] ?? '', hmac(options.secret, body))) throw bad()
+      const signature = headers['linear-signature'] ?? ''
+      // The workspace's webhook, or the application's own, each signed with its own secret.
+      if (!same(signature, hmac(options.secret, body)) && !(options.appSecret !== undefined && same(signature, hmac(options.appSecret, body)))) throw bad()
     },
-    parse({ body }) {
+    ...(options.agent && app
+      ? {
+          workingTtl: LINEAR_WORKING_TTL_MS,
+          /**
+           * The app's agent session on the issue: opened when work starts, told what the work says as a note
+           * that the next one replaces, so it stays shown as working, and ended with the work's last words as
+           * its response. A session that ended is the one a later round goes on in. What Linear gave is kept:
+           * the session, and who the app is there.
+           */
+          async working(target: { place: string; threadExternal: string }, step: WorkingStep, now: { text: string; state: unknown }, fetcher: typeof fetch) {
+            const kept = (now.state ?? {}) as { session?: string; user?: string }
+            if (typeof kept.user === 'string') appUser = kept.user
+            if (appUser === undefined) {
+              const who = (await postAs('{ viewer { id } }', undefined, fetcher))?.data?.viewer?.id
+              if (typeof who === 'string' && who) appUser = who
+            }
+            const said = async (session: string) => {
+              const input = { agentSessionId: session, content: { type: step === 'end' ? 'response' : 'thought', body: now.text }, ...(step === 'end' ? {} : { ephemeral: true }) }
+              const made = await postAs('mutation($input: AgentActivityCreateInput!) { agentActivityCreate(input: $input) { success } }', { input }, fetcher)
+              return made?.data?.agentActivityCreate?.success === true
+            }
+            const state = (session?: string) => ({ ...(session ? { session } : {}), ...(appUser ? { user: appUser } : {}) })
+            let session = typeof kept.session === 'string' ? kept.session : undefined
+            if (session && (await said(session))) return state(session)
+            // No session to end. One Linear no longer takes a note for is replaced only when work starts: a note
+            // it refused in the middle of a run is tried again, not answered with a second thread on the issue.
+            if (step === 'end' && !session) return state()
+            if (session && step !== 'start') throw new Failure('platform_refused', "Linear did not take the session's activity.")
+            const opened = await postAs('mutation($input: AgentSessionCreateOnIssue!) { agentSessionCreateOnIssue(input: $input) { success agentSession { id } } }', { input: { issueId: target.threadExternal.replace(/^issue:/, '') } }, fetcher)
+            session = opened?.data?.agentSessionCreateOnIssue?.agentSession?.id
+            if (typeof session !== 'string' || !session) {
+              const why = opened?.errors?.[0]?.extensions?.userPresentableMessage ?? opened?.errors?.[0]?.message
+              throw new Failure('platform_refused', `Linear opened no agent session${typeof why === 'string' ? `: ${why.slice(0, 200)}` : '.'}`)
+            }
+            if (!(await said(session))) throw new Failure('platform_refused', "Linear did not take the session's activity.")
+            return state(session)
+          },
+        }
+      : {}),
+    parse({ headers, body }) {
+      // Only what the workspace's own webhook signed is brought in. The application's webhook is checked and
+      // answered, and no more: an application can be installed elsewhere, and what it sends about another
+      // workspace's issues and comments must never land on this board.
+      if (!same(headers['linear-signature'] ?? '', hmac(options.secret, body))) return []
       const payload = JSON.parse(body) as Record<string, any>
       const data = payload.data ?? {}
       // Known by what Linear signed, as a GitHub delivery is: the `linear-delivery` header isn't signed, so an
       // old body sent again under a new one would otherwise be news, and set a thread's state back.
       const delivery = `lin:${hmac('id', body).slice(0, 32)}`
       const author = String(data.userId ?? data.user?.id ?? payload.actor?.id ?? 'unknown')
-      const self = options.bot !== undefined && author === options.bot
+      const self = own(author)
       // When Linear says the issue or comment changed, not when it sent this: a retry is sent later, of the same change.
       const updated = typeof data.updatedAt === 'string' ? { updated: data.updatedAt } : {}
       if (payload.type === 'Issue' && payload.action === 'create') {
@@ -617,7 +681,7 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
         // Each carries its issue: catch-up rows arrive together, and a comment may be imported before its issue's root.
         const { author, text, labels, place } = rootOf(comment.issue, '')
         const by = String(comment.user?.id ?? 'unknown')
-        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: options.bot !== undefined && by === options.bot, kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} }, ...(uploads(comment.body) ? { files: uploads(comment.body)! } : {}), ...(comment.updatedAt ? { updated: String(comment.updatedAt) } : {}) })
+        out.push({ id: `catchup:comment:${comment.id}`, author: by, place, self: own(by), kind: 'reply', thread: `issue:${comment.issue.id}`, external: `comment:${comment.id}`, text: String(comment.body ?? ''), parent: { author, text: text ?? '', labels: labels ?? {} }, ...(uploads(comment.body) ? { files: uploads(comment.body)! } : {}), ...(comment.updatedAt ? { updated: String(comment.updatedAt) } : {}) })
       }
       // Cut short, the next catch-up starts where the list read least far got to; what both read again is known already.
       const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)

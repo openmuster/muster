@@ -16,6 +16,15 @@ versions are affected.
 
 ### Added
 
+- Linear sync can show an issue being worked on with the application's agent
+  session: `linear({ agent: true, appSecret: env('LINEAR_APP_WEBHOOK_SECRET'), … })`,
+  for an application with "Agent session events" turned on for its webhook.
+  While a workflow run on a synced issue is open, the session says where the
+  run is, and its response is the run's last words; the run's `started …`
+  reply is then not a comment. The calls were run against a live workspace on
+  26 Nov 2026. See
+  [Show an issue being worked on](./packages/muster/docs/02-sync/03-linear.md#show-an-issue-being-worked-on).
+
 - A workflow step's `title`: what its pull request and commit are called,
   recorded on the task by the daemon and never in the agent's text;
   `{on.title}` is the first line of the message the run was asked on.
