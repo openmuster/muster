@@ -372,8 +372,12 @@ export const linear = (options: LinearOptions): Provider => {
   return declared('linear', options, linearWith, ['clientId', 'clientSecret'])
 }
 
-/** What an app's token may do unless the module says: read what comes in, and write the comments and issues that go back. */
-const LINEAR_SCOPES = ['read', 'write'] as const
+/**
+ * What an app's token may do unless the module says: read what comes in, and write the comments and issues that go
+ * back. Anything else that asks for a token for the same app asks with these: a token asked for with other scopes ends
+ * the app's earlier ones, the sync's included.
+ */
+export const LINEAR_SCOPES = ['read', 'write'] as const
 
 function linearWith(options: Resolved<LinearOptions>): Provider {
   const team = (place: string) => options.teams[place]

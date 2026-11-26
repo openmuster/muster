@@ -9,7 +9,10 @@ versions are affected.
 
 - `templates/loop` writes a Linear issue's status as the sync's own OAuth app
   when one is set up, not with a personal `LINEAR_API_KEY` left in the
-  environment: comments and status changes come from the same app.
+  environment: comments and status changes come from the same app. It asks
+  for the app's token with the sync's scopes (`LINEAR_SCOPES`, now exported),
+  since a token asked for with other scopes ends the sync's, and asks again
+  once when Linear says a token was ended.
 
 ### Added
 

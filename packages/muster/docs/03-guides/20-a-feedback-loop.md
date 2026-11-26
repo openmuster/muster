@@ -111,7 +111,10 @@ one waits, and nothing runs for it.
   on. Notion's integration needs the "Update content" capability for it.
   Linear's status is written by the same OAuth app its sync comments as
   (`LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`), even when a `LINEAR_API_KEY`
-  is also set; with no app, by that key.
+  is also set; with no app, by that key. The loop asks for the app's token
+  with its sync's scopes: Linear ends an app's earlier tokens when one is
+  asked for with other scopes, the sync's among them. A sync given its own
+  `scopes` needs the same `scopes` in its `SOURCES` entry.
 - **A parked card that is edited** stays parked, and is triaged from its new
   text when it is moved to ready.
 
