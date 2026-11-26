@@ -7,6 +7,12 @@ versions are affected.
 
 ### Fixed
 
+- The swarm and factory templates fit a phone. The line under the title that
+  names the board couldn't wrap, so both pages scrolled sideways; the swarm
+  form's fields kept fixed widths when a row wrapped; and the live view
+  listed every empty column. Text fields are now large enough that a phone
+  doesn't zoom in on them.
+
 - A push GitHub refuses says why. `push_failed` kept only the last two lines
   git printed, which cut off the line with the reason, and added "The token
   needs Contents: write" to every failure. It now quotes what the remote and
