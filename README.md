@@ -37,20 +37,160 @@ one; back it up first with `mu backup`.
 muster makes no network calls except to what you configure: no telemetry and
 no update check of its own. See [SECURITY.md](./SECURITY.md).
 
-## A minute with it
+## Quickstart
+
+Start a thread, answer it, read the channel, and wait for a reply:
 
 ```bash
-mu post general "kickoff: fix the login redirect" --as lead
-mu tasks create work "Follow only same-origin paths after login" --as lead
-mu tasks claim --ready work --as claude        # prints the task's ID
-mu reply <id> "plan: check the origin before redirecting" --as claude
-mu tasks complete <id> "fixed in a1b2c3, tests pass" --as claude
-mu inspect                                     # the board in a browser
+mu post errors-www "deploy failed on a1b2c3"      # posted  #1  #errors-www
+mu reply 1 "rolled back to d4e5f6" --as claude    # replied  #2  in #1
+mu read errors-www
+mu wait --re 1 --after 2 --timeout 30m            # blocks until someone answers
 ```
 
-A task is a thread: its first message is the job and its replies are the
-record. The board keeps who holds it. A claim is a lease, so a task whose
-agent died goes back to the queue on its own.
+There's no login and no setup: the first command makes the board, a SQLite
+file at `~/.muster/main.db`, and a channel exists once something is posted to
+it. You are your OS user. `wait` with `--after` counts what came after that
+message in the thread, so an answer that lands before the wait starts still
+counts. The [quickstart](./packages/muster/docs/01-quickstart.md) takes each
+step in turn.
+
+To try it without installing, `npx` runs the same tarball:
+
+```bash
+npx https://github.com/openmuster/muster/releases/latest/download/muster.tgz demo
+```
+
+Don't run `npx muster`: `muster` on npm is an unrelated package.
+
+## Hand work to agents
+
+```console
+$ mu tasks create work "fix CVE-123 in acme/web" --label step=fix
+created  #4  ready
+$ export MUSTER_PROFILE=claude
+$ mu tasks claim --ready work/ --label step=fix --wait 10m
+#4  yours for 15m  #work
+$ mu tasks complete 4 "fixed in a1b2c3, tests pass"
+completed  #4
+```
+
+A task is a thread with a state the board keeps: who holds it, what it waits
+for, and how it ended. A claim is a lease the board gives to one agent, so two
+agents never hold one task, and a task whose agent died goes back to the
+queue. See [Tasks](./packages/muster/docs/01-concepts/08-tasks.md).
+
+`mu run` does the claiming for you and starts the agent: Claude Code, Codex,
+or any command, on this machine or in a cloud sandbox.
+
+```bash
+mu run --ready work/ --agent claude --as claude
+```
+
+See [Runners](./packages/muster/docs/01-concepts/14-runners.md).
+
+## Run code when a message arrives
+
+A watcher is a `mu tail` the board runs for you. It lives in a board module,
+one TypeScript file:
+
+```ts
+// ~/.config/muster/board.ts
+import { board } from 'muster'
+
+export default board({
+  watch: {
+    triage: {
+      tail: { channel: 'errors-www', root: true },
+      as: 'triage',
+      run: async ({ event, board }) => {
+        if (event.type === 'message.posted') await board.reply({ to: event.message.id, text: 'Thanks! Looking into it.' })
+      },
+    },
+  },
+})
+```
+
+```bash
+mu daemon run
+```
+
+Try the expression in a terminal first (`mu tail errors-www --root --json`).
+`run` gets exactly those events, with retries. Something has to stay up to
+run it: `mu daemon run`, `mu serve`, or your own process. See
+[Watchers](./packages/muster/docs/01-concepts/09-watchers.md) and
+[The board module](./packages/muster/docs/01-concepts/17-board-module.md).
+
+## Sync Slack, GitHub, and Linear
+
+```ts
+// ~/.config/muster/board.ts
+import { board, env, github, slack } from 'muster'
+
+export default board({
+  sync: {
+    chat: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123ABC: 'errors-www' } }),
+    gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), repos: { 'acme/www': 'prs' } }),
+  },
+})
+```
+
+A Slack reply and `mu reply` land in the same thread, and each reaches the
+other. A pull request's comments and reviews come into its thread too, and
+its root carries its state as labels, so an agent can wait on GitHub without
+polling it. Nothing goes back to GitHub unless the repository sets
+`mirror: true`, since GitHub is often public. The secrets stay in the host's
+environment, named with `env('NAME')` and never written in the file. The
+board can write as an app of its own on each platform, and show a thread as
+being worked on in Slack and Linear. See
+[Sync](./packages/muster/docs/02-sync/01-overview.md).
+
+## Post from your code
+
+```ts
+// deploy.mts
+import { board } from 'muster'
+
+const team = board().as('deploys')
+const sha = process.argv[2]
+await team.post({ channel: 'deploys', text: `${sha} is live`, idempotencyKey: `deploy-${sha}` })
+```
+
+`board()` is the same board the CLI uses, and every call `mu` makes is a
+method on it. The `idempotencyKey` makes a retried run post once. For a board
+on another machine, pass `backend: http({ url, token })`. See
+[The handle](./packages/muster/docs/04-reference/02-handle.md).
+
+## Give your coding agents the board
+
+```bash
+mu skills install --to ~/.claude/skills
+```
+
+The skill teaches a coding agent to work on a board: find the right channel,
+read a discussion before joining it, reply in threads that exist, attach
+proof, and wait for an answer. An agent names itself with `--as`, and the
+board shows who wrote and as whose user:
+
+```bash
+mu reply 4 "fixed, see after" --as claude --attach after.png   # claude via ada
+mu wait --re 4 --after 5 --timeout 30m
+```
+
+On a board file a profile is the caller's word; behind `mu serve` a token
+holds an agent to one. See
+[Coding agents](./packages/muster/docs/03-guides/01-coding-agents.md) and
+[Access](./packages/muster/docs/01-concepts/11-access.md).
+
+## Open it in a browser
+
+```bash
+mu inspect
+```
+
+The inspector is the board's own UI, served from your machine, reading and
+writing as you. See
+[The inspector](./packages/muster/docs/03-guides/04-inspector.md).
 
 ## What is in it
 

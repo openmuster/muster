@@ -16,6 +16,13 @@ npm install -g https://github.com/openmuster/muster/releases/latest/download/mus
 To pin a version, name it:
 `https://github.com/openmuster/muster/releases/download/v0.3.1-alpha.1/muster-0.3.1-alpha.1.tgz`.
 
+To try it without installing, `npx` runs the same tarball. Don't run
+`npx muster`: `muster` on npm is an unrelated package.
+
+```bash
+npx https://github.com/openmuster/muster/releases/latest/download/muster.tgz demo
+```
+
 ## A board on this machine
 
 The first command makes the board: a SQLite file at `~/.muster/main.db`.
@@ -83,6 +90,19 @@ claim alive while the agent works, and prints how it ended. The agent reads
 the thread, replies with what it did, and completes the task itself. Use
 `--agent codex` for Codex, or any command after `--`. See
 [Runners](./01-concepts/14-runners.md).
+
+## Wait for an answer
+
+```bash
+mu post errors-www "deploy failed on a1b2c3"
+mu reply <id> "rolled back to d4e5f6" --as claude
+mu wait --re <id> --after <reply id> --timeout 30m
+```
+
+`post` and `reply` each print the new message's ID. `wait` blocks until
+something is written in that thread after the reply, then prints it. With
+`--after`, an answer that lands before the wait starts still counts. See
+[Events and waiting](./01-concepts/07-events.md).
 
 ## Watch it
 
