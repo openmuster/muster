@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { randomBytes } from 'node:crypto'
-import { board, file, http, listen, mint, slack } from '../src/index.ts'
+import { board, file, http, linear, listen, mint, slack } from '../src/index.ts'
 import type { Provider } from '../src/sync/types.ts'
 import { clock, tempDir } from './helpers.ts'
 
@@ -338,5 +338,158 @@ describe('sync: Slack as an agent shows a thread being worked on', () => {
     await daemon.label({ id: progress.id, set: { progress: 'done' } })
     await backend.syncTick()
     expect(statuses()).toEqual(['processing', 'processing', 'active'])
+  })
+})
+
+describe('sync: Linear as an agent shows an issue being worked on', () => {
+  const APP_SECRET = 'app-whsec'
+  const ISSUE = { id: 'iss-1', identifier: 'ENG-42', title: 'Crash', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' } }
+  /** A board synced with a Linear team by an app with agent sessions on, and a Linear that takes its calls. */
+  function agent(options: { agent?: boolean; dir?: string; gone?: () => string | null; refuse?: () => boolean } = {}) {
+    const time = clock()
+    const calls: { op: string; input?: any }[] = []
+    let sessions = 0
+    let comments = 0
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/oauth/token')) return Response.json({ access_token: 'lin_app_1', token_type: 'Bearer', expires_in: 2591999, scope: 'read write' })
+      const { query, variables } = JSON.parse(String(init?.body ?? '{}')) as { query: string; variables?: { input?: any } }
+      if (query.includes('viewer')) {
+        calls.push({ op: 'viewer' })
+        return Response.json({ data: { viewer: { id: 'u-app' } } })
+      }
+      if (query.includes('agentSessionCreateOnIssue')) {
+        calls.push({ op: 'session', input: variables!.input })
+        return Response.json({ data: { agentSessionCreateOnIssue: { success: true, agentSession: { id: `s-${++sessions}` } } } })
+      }
+      if (query.includes('agentActivityCreate')) {
+        const input = variables!.input
+        calls.push({ op: 'activity', input })
+        // A session Linear no longer has, or a call it won't take just now: a 200 with errors, as Linear answers.
+        if (options.gone?.() === input.agentSessionId || options.refuse?.()) return Response.json({ errors: [{ message: 'Entity not found' }] })
+        return Response.json({ data: { agentActivityCreate: { success: true } } })
+      }
+      if (query.includes('commentCreate')) {
+        calls.push({ op: 'comment', input: variables!.input })
+        return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${++comments}` } } } })
+      }
+      // What a board that starts again asks about the time it was away: nothing changed.
+      const none = { nodes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false } }
+      return Response.json({ data: { issues: none, comments: none } })
+    }) as typeof fetch
+    const lin = linear({ secret: SECRET, appSecret: APP_SECRET, clientId: 'client-1', clientSecret: 'shh', teams: { ENG: 'eng' }, now: () => time.now().getTime(), ...(options.agent === false ? {} : { agent: true }) })
+    const open = () => file({ ...(options.dir ? { dir: options.dir } : { memory: true }), principal: 'local:user:ada', now: time.now, sync: { lin }, fetch: fetcher })
+    const backend = open()
+    const team = board({ backend })
+    let delivery = 0
+    const hook = (payload: unknown, secret = SECRET, to = backend) => {
+      const body = JSON.stringify(payload)
+      return to.syncReceive('lin', { headers: { 'linear-delivery': `l-${++delivery}`, 'linear-signature': createHmac('sha256', secret).update(body).digest('hex') }, body })
+    }
+    const issue = async () => {
+      await backend.syncTick()
+      await hook({ type: 'Issue', action: 'create', data: ISSUE })
+      return (await team.readChannel({ channel: 'eng' })).threads[0]!.message.id
+    }
+    const daemon = team.as('workflows')
+    const begin = (to: number) => daemon.reply({ to, text: 'started card: 3 tasks in eng/card-9', labels: { progress: 'open' } })
+    const said = () => calls.filter((call) => call.op !== 'viewer').map((call) => (call.op === 'activity' ? [call.input.content.type, call.input.agentSessionId, call.input.content.body, call.input.ephemeral === true] : [call.op, call.input.issueId, call.input.body ?? null]))
+    return { time, calls, said, backend, team, daemon, open, hook, issue, begin }
+  }
+
+  it('opens a session on the issue, says where the run is in notes that replace each other, and ends it with its last words', async () => {
+    const { backend, daemon, said, issue, begin } = agent()
+    const root = await issue()
+    const progress = await begin(root)
+    await backend.syncTick()
+    expect(said()).toEqual([
+      ['session', 'iss-1', null],
+      ['thought', 's-1', 'started card: 3 tasks in eng/card-9', true],
+    ])
+    await daemon.edit({ id: progress.id, text: 'started card: 3 tasks in eng/card-9\n#11 completed, #13 completed, #15 completed' })
+    await backend.syncTick()
+    await daemon.reply({ to: root, text: 'card finished: 3 completed, 0 failed, 0 canceled' })
+    await daemon.label({ id: progress.id, set: { progress: 'done' } })
+    await backend.syncTick()
+    // The progress message was never a comment; the summary is one, and the session's response is not ephemeral.
+    expect(said().slice(2)).toEqual([
+      ['thought', 's-1', 'started card: 3 tasks in eng/card-9\n#11 completed, #13 completed, #15 completed', true],
+      ['comment', 'iss-1', 'card finished: 3 completed, 0 failed, 0 canceled'],
+      ['response', 's-1', 'started card: 3 tasks in eng/card-9\n#11 completed, #13 completed, #15 completed', false],
+    ])
+  })
+
+  it("goes on in the same session for a later round, after the board started again, and tells Linear again before a session goes stale", async () => {
+    const first = agent({ dir: tempDir() })
+    const progress = await first.begin(await first.issue())
+    await first.backend.syncTick()
+    await first.daemon.label({ id: progress.id, set: { progress: 'done' } })
+    await first.backend.syncTick()
+    first.backend.close()
+    const again = first.open()
+    await board({ backend: again }).as('workflows').label({ id: progress.id, set: { progress: 'open' } })
+    await again.syncTick()
+    first.time.advance(24 * MIN)
+    await again.syncTick()
+    expect(first.said().map((each) => [each[0], each[1]])).toEqual([['session', 'iss-1'], ['thought', 's-1'], ['response', 's-1'], ['thought', 's-1']])
+    first.time.advance(MIN)
+    await again.syncTick()
+    expect(first.said().at(-1)).toEqual(['thought', 's-1', 'started card: 3 tasks in eng/card-9', true])
+    expect(first.said()).toHaveLength(5)
+    again.close()
+  })
+
+  it('opens a new session when work starts and Linear no longer has the old one, but only tries again when a note in the middle of a run is refused', async () => {
+    let gone: string | null = null
+    let refusing = false
+    const { backend, time, daemon, said, issue, begin } = agent({ gone: () => gone, refuse: () => refusing })
+    const root = await issue()
+    const progress = await begin(root)
+    await backend.syncTick()
+    refusing = true
+    await daemon.edit({ id: progress.id, text: 'started card: 3 tasks in eng/card-9\n#11 claimed' })
+    await backend.syncTick()
+    refusing = false
+    time.advance(MIN)
+    await backend.syncTick()
+    // Refused, then taken a minute later: the same session, and no second one.
+    expect(said().filter((each) => each[0] === 'session')).toHaveLength(1)
+    expect(said().at(-1)).toEqual(['thought', 's-1', 'started card: 3 tasks in eng/card-9\n#11 claimed', true])
+    await daemon.label({ id: progress.id, set: { progress: 'done' } })
+    await backend.syncTick()
+    gone = 's-1'
+    await daemon.label({ id: progress.id, set: { progress: 'open' } })
+    await backend.syncTick()
+    expect(said().slice(-3).map((each) => [each[0], each[1]])).toEqual([['thought', 's-1'], ['session', 'iss-1'], ['thought', 's-2']])
+  })
+
+  it("doesn't bring in what the session itself said as a comment, and still brings in a person's", async () => {
+    const { backend, team, hook, issue, begin } = agent()
+    const root = await issue()
+    await begin(root)
+    await backend.syncTick()
+    // Linear writes the session's response on the issue as a comment by the app, and tells the workspace's webhook.
+    await hook({ type: 'Comment', action: 'create', data: { id: 'c-resp', body: 'started card: 3 tasks in eng/card-9', issueId: 'iss-1', userId: 'u-app', issue: { team: { key: 'ENG' } } } })
+    await hook({ type: 'Comment', action: 'create', data: { id: 'c-maya', body: 'thanks', issueId: 'iss-1', userId: 'u-maya', issue: { team: { key: 'ENG' } } } })
+    expect((await team.readThread({ id: root })).replies.map((reply) => [reply.by.principal, reply.text])).toEqual([
+      ['local:user:ada', 'started card: 3 tasks in eng/card-9'],
+      ['lin:user:u-maya', 'thanks'],
+    ])
+  })
+
+  it("takes the application's own webhook, signed with its own secret, and imports nothing from it", async () => {
+    const { backend, team, hook, issue } = agent()
+    const root = await issue()
+    const event = { type: 'AgentSessionEvent', action: 'prompted', agentSession: { id: 's-1', issueId: 'iss-1' }, agentActivity: { content: { type: 'prompt', body: 'and the header?' } } }
+    expect((await hook(event, APP_SECRET)).status).toBe(200)
+    expect((await hook(event, 'someone-else')).status).toBe(401)
+    await backend.syncTick()
+    expect((await team.readThread({ id: root })).replies).toEqual([])
+  })
+
+  it('sends the progress message as a comment when the app has no agent sessions on', async () => {
+    const { backend, said, issue, begin } = agent({ agent: false })
+    await begin(await issue())
+    await backend.syncTick()
+    expect(said()).toEqual([['comment', 'iss-1', 'started card: 3 tasks in eng/card-9']])
   })
 })

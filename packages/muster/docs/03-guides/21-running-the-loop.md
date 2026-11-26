@@ -54,7 +54,7 @@ mu serve --module ~/loop/board.ts --allow-host board.example.com
    | Platform | What to set up | In the environment |
    | --- | --- | --- |
    | GitHub | The GitHub App your workers push with, with read and write on Issues added and accepted on the organization | `GITHUB_APP_ID`, `GITHUB_APP_KEY_FILE` |
-   | Linear | An OAuth application with client credentials tokens turned on. One made for the board: such a token replaces an installation of the same application made through the authorization page | `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` |
+   | Linear | An OAuth application with client credentials tokens turned on. One made for the board: such a token replaces an installation of the same application made through the authorization page | `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, and `LINEAR_APP_WEBHOOK_SECRET` with `agent: true` to show the issue being worked on |
    | Slack | The bot you already have. To show "is working" under a thread while a card is worked on, turn on the app's agent feature, reinstall it, and add `agent: true` to `slack()` in `board.ts`. Slack doesn't let an app stop being an agent | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` |
    | Notion | The integration's own token: it already writes as the integration | `NOTION_TOKEN`, `NOTION_WEBHOOK_SECRET` |
 
@@ -85,7 +85,10 @@ result and the pull request, so everyone following the thread is told.
 
 On Slack, with `agent: true`, that reply isn't posted: the thread shows
 "<app> is working" under it while a run is open, and the summary when it
-ends. Linear gets the reply as first written, since edits don't go to Linear.
+ends. On Linear, with `agent: true`, the issue shows the application's agent
+session working, with where the run is, and its last words as the session's
+response. Without it, Linear gets the reply as first written, since edits
+don't go to Linear.
 
 ## What you hear about
 
