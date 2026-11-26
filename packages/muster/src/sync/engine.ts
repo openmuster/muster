@@ -4,7 +4,7 @@ import { findMessage } from '../core/context.ts'
 import { fileBytes } from '../core/files.ts'
 import { head } from '../core/reads.ts'
 import { holdIfEdited } from '../core/tasks.ts'
-import { LIMITS, labelKey, labelValue, type By } from '../model.ts'
+import { LIMITS, PROGRESS, labelKey, labelValue, type By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
 import { FILTERED, withLines } from './files.ts'
 import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, SEND_MS, type Inbound, type Provider, type Received } from './types.ts'
@@ -363,6 +363,12 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
       const message = findMessage(ctx.db, event.seq)
       if (!message || message.deleted) {
+        advance()
+        continue
+      }
+      // A message that says where work is, on a platform with its own way to show that: shown that way
+      // (`workingPending`), not as a comment. With no copy there, its edits have nowhere to go either.
+      if (provider.working && !isRoot && typeof data.labels?.[PROGRESS] === 'string') {
         advance()
         continue
       }
