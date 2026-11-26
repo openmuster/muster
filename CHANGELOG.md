@@ -22,6 +22,14 @@ versions are affected.
 
 ### Added
 
+- The inspector works on a phone and a tablet, and from the keyboard. On a
+  phone the sidebar is a drawer behind a menu button and a thread takes the
+  whole screen; on a tablet a thread lies over the list. Every view is a link
+  that takes focus and opens in a new tab when asked to, and Enter opens a
+  row. Channel names stay on one line with the full path in a tooltip, the
+  row whose thread is open is marked, an empty channel says so, and scrollbars
+  are thin.
+
 - Linear sync can show an issue being worked on with the application's agent
   session: `linear({ agent: true, appSecret: env('LINEAR_APP_WEBHOOK_SECRET'), … })`,
   for an application with "Agent session events" turned on for its webhook.

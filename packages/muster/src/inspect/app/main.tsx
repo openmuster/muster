@@ -1,12 +1,12 @@
-import { Activity, Hash, ListTodo, Paperclip, Tag, UserPlus, X } from 'lucide-react'
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Activity, Hash, ListTodo, Menu, Paperclip, Tag, UserPlus, X } from 'lucide-react'
+import { useEffect, useReducer, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { FeedEvent, ThreadSummary } from '../../core/reads.ts'
 import type { TaskListing } from '../../core/tasks.ts'
 import type { By, Message } from '../../model.ts'
 import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
-import { STYLE } from './style.ts'
+import { ICON, ICON_SMALL, STYLE } from './style.ts'
 
 /**
  * The page's token. It arrives in the link `mu inspect` printed, after the `#`: the one part of an
@@ -53,10 +53,39 @@ const ago = (at: string) => {
   const s = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 1000))
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86_400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86_400)}d`
 }
+/** The whole date, for the tooltip on a time said as "3m". */
+const when = (at: string) => new Date(at).toLocaleString()
 const left = (until: string) => {
   const s = Math.max(0, Math.round((Date.parse(until) - Date.now()) / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`
 }
+
+/**
+ * A link to a view: a real address, so it takes the keyboard's focus and opens in a new tab when asked
+ * to. A plain click stays on this page.
+ */
+function Link(props: { href: string; go: (href: string) => void; on?: boolean; className?: string; title?: string; label?: string; children: ReactNode }) {
+  const follow = (event: MouseEvent) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    props.go(props.href)
+  }
+  const className = [props.className, props.on ? 'on' : ''].filter(Boolean).join(' ')
+  return (
+    <a href={props.href} className={className || undefined} title={props.title} aria-label={props.label} aria-current={props.on ? 'page' : undefined} onClick={follow}>
+      {props.children}
+    </a>
+  )
+}
+
+/** What makes a row something to open: a click, or Enter once the keyboard has reached it. */
+const opens = (open: () => void) => ({
+  tabIndex: 0,
+  onClick: open,
+  onKeyDown: (event: KeyboardEvent) => {
+    if (event.key === 'Enter' && event.target === event.currentTarget) open()
+  },
+})
 
 type View = { kind: 'activity' } | { kind: 'joins' } | { kind: 'tasks'; tab: Tab } | { kind: 'channel'; path: string }
 
@@ -83,11 +112,20 @@ function App() {
   })
   const cursor = useRef(0)
   const { view, thread } = route
+  // On a phone the sidebar is a drawer: open while this is true, and shut by going anywhere.
+  const [menu, setMenu] = useState(false)
 
   const go = (href: string) => {
     window.history.pushState(null, '', href)
     setRoute(viewOf(window.location))
+    setMenu(false)
   }
+  useEffect(() => {
+    if (!menu) return
+    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && setMenu(false)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menu])
   useEffect(() => {
     const onPop = () => setRoute(viewOf(window.location))
     window.addEventListener('popstate', onPop)
@@ -155,24 +193,32 @@ function App() {
   const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : view.kind === 'joins' ? 'requests to join' : `#${view.path}`
 
   return (
-    <div className="app">
+    <div className={menu ? 'app menu' : 'app'}>
       <aside>
         <div className="board">
           <b>muster</b>
           <span>{window.location.host}</span>
         </div>
         <nav>
-          <a className={view.kind === 'activity' ? 'on' : ''} onClick={() => go('/activity')}><Activity size={14} /> activity</a>
-          <a className={view.kind === 'tasks' ? 'on' : ''} onClick={() => go('/')}><ListTodo size={14} /> tasks <i>{openCount(state)}</i></a>
+          <Link href="/activity" go={go} on={view.kind === 'activity'}><Activity size={ICON} /> activity</Link>
+          <Link href="/" go={go} on={view.kind === 'tasks'}><ListTodo size={ICON} /> tasks <i>{openCount(state)}</i></Link>
           <h6>channels</h6>
-          {state.channels.map((channel) => (
-            <a key={channel.path} className={view.kind === 'channel' && view.path === channel.path ? 'on' : ''} onClick={() => go(`/c/${encodeURIComponent(channel.path)}`)}>
-              <Hash size={14} /> {channel.path}
-            </a>
-          ))}
+          {state.channels.map((channel) => {
+            // The last part is what tells two channels apart, so it is the part that is never cut short.
+            const cut = channel.path.lastIndexOf('/') + 1
+            return (
+              <Link key={channel.path} href={`/c/${encodeURIComponent(channel.path)}`} go={go} on={view.kind === 'channel' && view.path === channel.path} title={channel.path}>
+                <Hash size={ICON} />
+                <span className="path">
+                  {cut > 0 && <span className="in">{channel.path.slice(0, cut)}</span>}
+                  <span className="leaf">{channel.path.slice(cut)}</span>
+                </span>
+              </Link>
+            )
+          })}
         </nav>
         <nav>
-          <a className={view.kind === 'joins' ? 'on' : ''} onClick={() => go('/joins')}><UserPlus size={14} /> requests to join</a>
+          <Link href="/joins" go={go} on={view.kind === 'joins'}><UserPlus size={ICON} /> requests to join</Link>
         </nav>
         <label className="as">
           as
@@ -191,8 +237,10 @@ function App() {
           />
         </label>
       </aside>
+      <div className="scrim" onClick={() => setMenu(false)} />
       <main>
         <header>
+          <button className="icon burger" aria-label="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Menu size={ICON} /></button>
           <b>{title}</b>
           {view.kind === 'tasks' && <span>oldest first</span>}
           <em className={state.connected ? 'live' : 'down'}>{state.connected ? 'live' : 'reconnecting'}</em>
@@ -206,14 +254,14 @@ function App() {
           <>
             <div className="tabs">
               {TABS.map((tab) => (
-                <a key={tab} className={tab === view.tab ? 'on' : ''} onClick={() => go(`/?state=${tab}`)}>
+                <Link key={tab} href={`/?state=${tab}`} go={go} on={tab === view.tab}>
                   {tab}
-                </a>
+                </Link>
               ))}
             </div>
             <div className="rows">
               {tasksFor(state, view.tab).map((task) => (
-                <div key={task.id} className={`row ${task.state}`} onClick={() => openThread(task.id)}>
+                <div key={task.id} className={`row ${task.state}${thread === task.id ? ' on' : ''}`} {...opens(() => openThread(task.id))}>
                   <span className="state">{task.state}</span>
                   <span className="id">#{task.id}</span>
                   <span className="text">{task.text.split('\n')[0]}</span>
@@ -225,7 +273,7 @@ function App() {
                   {task.state === 'waiting' && <span className="meta">needs {task.needs.map((id) => `#${id}`).join(' ')}</span>}
                   {task.hold && <span className="meta">{task.hold.kind}</span>}
                   <span className="meta where">#{task.channel}</span>
-                  <span className="meta">{ago(task.at)}</span>
+                  <span className="meta" title={when(task.at)}>{ago(task.at)}</span>
                 </div>
               ))}
               {tasksFor(state, view.tab).length === 0 && <p className="empty">no {view.tab === 'all' ? '' : view.tab} tasks</p>}
@@ -235,8 +283,8 @@ function App() {
         {view.kind === 'channel' && (
           <div className="rows">
             {(state.threads[view.path] ?? []).map((item) => (
-              <div key={item.message.id} className="thread" onClick={() => openThread(item.message.id)}>
-                <div className="by">#{item.message.id} {who(item.message.by)} · {ago(item.message.at)} {item.task && <code>{item.task.state}</code>}</div>
+              <div key={item.message.id} className={thread === item.message.id ? 'thread on' : 'thread'} {...opens(() => openThread(item.message.id))}>
+                <div className="by" title={when(item.message.at)}>#{item.message.id} {who(item.message.by)} · {ago(item.message.at)} {item.task && <code>{item.task.state}</code>}</div>
                 <div className="text">{item.message.text}</div>
                 {item.replies > 0 && <div className="meta">{item.replies} {item.replies === 1 ? 'reply' : 'replies'}</div>}
               </div>
@@ -244,19 +292,21 @@ function App() {
             {state.pending.filter((write) => write.thread === null && write.channel === view.path).map((write) => (
               <div key={write.key} className="thread pending"><div className="text">{write.text}</div></div>
             ))}
+            {state.threads[view.path]?.length === 0 && !state.pending.some((write) => write.thread === null && write.channel === view.path) && <p className="empty">no messages in #{view.path} yet</p>}
           </div>
         )}
         {view.kind === 'activity' && (
           <div className="rows">
             {state.activity.map((event) => (
-              <div key={event.seq} className="row" onClick={() => event.thread && openThread(event.thread)}>
+              <div key={event.seq} className={event.thread && thread === event.thread ? 'row event on' : 'row event'} {...(event.thread ? opens(() => openThread(event.thread!)) : {})}>
                 <span className="id">{event.seq}</span>
                 <span className="state">{event.type}</span>
                 <span className="text">{String((event.data as { text?: string; result?: string; reason?: string }).text ?? (event.data as { result?: string }).result ?? (event.data as { reason?: string }).reason ?? '').split('\n')[0]}</span>
                 <span className="grow" />
-                <span className="meta">{who(event.by)} · {ago(event.at)}</span>
+                <span className="meta" title={when(event.at)}>{who(event.by)} · {ago(event.at)}</span>
               </div>
             ))}
+            {state.connected && state.activity.length === 0 && <p className="empty">nothing has happened on this board yet</p>}
           </div>
         )}
         {view.kind === 'joins' && <Joins />}
@@ -277,17 +327,17 @@ function App() {
           <header>
             <b>#{state.open.message.id}</b>
             <span>#{state.open.message.channel}</span>
-            <a onClick={() => go(here(view.kind === 'tasks' ? `?state=${view.tab}` : ''))}><X size={14} /></a>
+            <Link href={here(view.kind === 'tasks' ? `?state=${view.tab}` : '')} go={go} className="icon" label="close"><X size={ICON} /></Link>
           </header>
           <div className="messages">
             {[state.open.message, ...state.open.replies].map((message) => (
               <article key={message.id}>
-                <div className="by">{who(message.by)} · {ago(message.at)}</div>
+                <div className="by" title={when(message.at)}>{who(message.by)} · {ago(message.at)}</div>
                 <div className="text">{message.deleted ? '(deleted)' : message.text}</div>
                 {Object.keys(message.labels).length > 0 && (
-                  <div className="labels"><Tag size={12} /> {Object.entries(message.labels).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>
+                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>
                 )}
-                {message.attachments.length > 0 && <div className="labels"><Paperclip size={12} /> {message.attachments.map((file) => file.name).join(' ')}</div>}
+                {message.attachments.length > 0 && <div className="labels"><Paperclip size={ICON_SMALL} /> {message.attachments.map((file) => file.name).join(' ')}</div>}
               </article>
             ))}
             {state.pending.filter((write) => write.thread === state.open!.message.id).map((write) => (
@@ -350,7 +400,7 @@ function JoinRow(props: { join: JoinRecord; onAnswered: () => void; onError: (me
       </div>
       {join.note && <div className="text">{join.note}</div>}
       {join.state === 'pending' && (
-        <div className="bar">
+        <div className="bar wrap">
           <input aria-label="channel" value={channel} onChange={(event) => setChannel(event.target.value.trim())} />
           {PERMISSIONS.map((permission) => (
             <label key={permission}>
@@ -400,7 +450,7 @@ function Composer(props: { placeholder: string; button: string; needsChannel?: b
         }}
       />
       <div className="bar">
-        <span>enter to send · shift+enter for a new line</span>
+        <span className="hint">enter to send · shift+enter for a new line</span>
         <button onClick={send}>{props.button}</button>
       </div>
     </div>
