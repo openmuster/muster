@@ -27,6 +27,7 @@ import { HELP, helpFor } from './help.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { conformance } from '../conformance.ts'
+import { e2b } from '../runner/e2b.ts'
 import { SANDBOX_ENV, cloudflare, vercel, type BaseRecord, type CloudRun, type CloudRunner } from '../runner/cloud.ts'
 import { BUNDLE, BUNDLE_MAX, branchState, githubRepo, openPullRequest, pushBundle } from '../runner/github.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
@@ -869,7 +870,7 @@ const commands: Record<string, Command> = {
   },
 
   token: {
-    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync', 'all'] },
+    spec: { value: ['ttl'], many: ['can'], bool: ['no-sync', 'all', 'sandbox'] },
     async run(run, parsed) {
       const verb = parsed.positionals[0]
       const tokens = run.team.backend.tokens
@@ -904,10 +905,13 @@ const commands: Record<string, Command> = {
       const all = on(parsed.flags, 'all')
       if (all && Object.keys(can).length > 0) throw misuse('invalid_token', '--all is a token with your full access, and --can holds one to channels: pass one or the other.')
       if (!all && Object.keys(can).length === 0) throw misuse('invalid_token', "Name the channels the token reaches with --can <channel>=<permissions>, or pass --all for a token with your full access.", "mu token create --as fixer --can 'work/=read,post,react,label'")
+      // One for an agent in a sandbox calls the routes a sandbox may and no others, so it is never one with your full access.
+      const sandbox = on(parsed.flags, 'sandbox')
+      if (sandbox && all) throw misuse('invalid_token', "--sandbox is a token for an agent in a sandbox, which is held to channels: pass --can, not --all.", "mu token create --as fixer --can 'work/=read,post,react,label' --sandbox")
       const me = await run.team.whoami()
       const ttl = duration(str(parsed.flags, 'ttl') ?? (me.mode === 'file' ? '30d' : '2h'), 'ttl')
-      const made = await tokens.create({ profile: me.profile, can, ttl, ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}) })
-      print(run, { token: made.token, id: made.record.id, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
+      const made = await tokens.create({ profile: me.profile, can, ttl, ...(on(parsed.flags, 'no-sync') ? { noSync: true } : {}), ...(sandbox ? { sandbox: true } : {}) })
+      print(run, { token: made.token, id: made.record.id, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp, ...(sandbox ? { sandbox: true } : {}) } }, () => made.token)
     },
   },
 
@@ -1555,7 +1559,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   if (where !== 'local') return runInCloud(run, parsed, where, agent)
   // These are about a sandbox: on this machine they would do nothing, so they are refused, not ignored.
   const cloudOnly = (['repo', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
-  if (cloudOnly) throw misuse(cloudOnly === 'push' ? 'push_unsupported' : 'unknown_flag', `--${cloudOnly} is for a cloud runner, and this run is on this machine.`, 'Add --runner vercel or --runner cloudflare, or leave it out.')
+  if (cloudOnly) throw misuse(cloudOnly === 'push' ? 'push_unsupported' : 'unknown_flag', `--${cloudOnly} is for a cloud runner, and this run is on this machine.`, 'Add --runner vercel, --runner cloudflare or --runner e2b, or leave it out.')
   const me = await run.team.whoami()
   const cwd = resolvePath(str(parsed.flags, 'cwd') ?? process.cwd())
   const worktree = str(parsed.flags, 'worktree')
@@ -1721,7 +1725,7 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
   if (on(parsed.flags, 'detach')) throw misuse('push_unsupported', "A worker can't --detach: it stays to start each task's sandbox.")
   // A runner that can't start, or a --push with nothing to push to, is said once, before any task is claimed for it.
   repoAndPush(parsed, run.io.env)
-  await cloudRunner(where, run.io.env)
+  await cloudRunner(where, run.io.env, agent)
   const idle = duration(str(parsed.flags, 'wait') ?? '10m', 'wait') * 1000
   // As a worker here would: --label narrows which ready tasks it takes, and --by to whose.
   const labels = list(parsed.flags, 'label')
@@ -1800,7 +1804,7 @@ async function cloudWorker(run: Run, parsed: Parsed, where: string, agent: (type
 }
 
 /** The runner a cloud run starts on, from this machine's settings: a misuse or a config error before anything is claimed or started. */
-async function cloudRunner(where: string, env: Run['io']['env']): Promise<CloudRunner> {
+async function cloudRunner(where: string, env: Run['io']['env'], agent: (typeof AGENTS)[string]): Promise<CloudRunner> {
   if (where === 'cloudflare') {
     if (!env.MUSTER_CF_WORKER || !env.MUSTER_CF_SECRET) throw new Failure('runner_not_configured', 'The Cloudflare runner needs MUSTER_CF_WORKER (your Worker\'s URL) and MUSTER_CF_SECRET.', { hint: 'Deploy templates/cloudflare-runner first.' })
     return cloudflare({ worker: env.MUSTER_CF_WORKER, secret: env.MUSTER_CF_SECRET })
@@ -1814,7 +1818,25 @@ async function cloudRunner(where: string, env: Run['io']['env']): Promise<CloudR
     // GitHub is open only while mu installs; the agent starts with it closed.
     // A kept base with muster installed is forked for each run, unless MUSTER_VERCEL_BASE=off.
     return vercel({ Sandbox: sdk.Sandbox as never, setupHosts: RELEASE_HOSTS, credentials: vercelCredentials(env), base: env.MUSTER_VERCEL_BASE !== 'off', bases: fileBases(join(configDir(), 'vercel-bases.json')) })
-  } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare.')
+  } else if (where === 'e2b') {
+    if (!env.E2B_API_KEY || !env.MUSTER_E2B_TEMPLATE) throw new Failure('runner_not_configured', 'The E2B runner needs E2B_API_KEY and MUSTER_E2B_TEMPLATE (a template with the agent\'s CLI in it).', { hint: 'Build the template in templates/e2b-runner first.' })
+    let sdk: { Sandbox?: unknown; Secret?: unknown }
+    try {
+      sdk = (await import(/* @vite-ignore */ env.MUSTER_E2B_SDK ?? 'e2b')) as typeof sdk
+    } catch {
+      throw new Failure('runner_not_installed', "The E2B runner needs the e2b package, which isn't installed.", { hint: 'npm i e2b' })
+    }
+    // Said here, before a task is claimed or a token made for it: a worker would otherwise be refused once per task.
+    const keyed = agent.model && (env.MUSTER_E2B_MODEL_SECRET ? 'MUSTER_E2B_MODEL_SECRET' : env[agent.model.keyEnv] ? agent.model.keyEnv : undefined)
+    if (agent.model && keyed && env.MUSTER_E2B_KEY_ANY_PATH !== '1') {
+      throw Object.assign(new Failure('model_key_unscoped', `E2B adds the model's key to every request to ${agent.model.host}, not only the ones that ask the model: an agent that is steered could use it for anything that key can do there.`, { hint: `Set MUSTER_E2B_KEY_ANY_PATH=1 to accept that, with a key made for this alone. Or unset ${keyed} and sign the agent in inside your template.` }), { worker: 'stop' as const })
+    }
+    if (!sdk.Sandbox || !sdk.Secret) throw new Failure('runner_too_old', "This e2b package can't store a secret for a sandbox's requests, so the board's token would have to go inside the sandbox.", { hint: 'npm i e2b@latest' })
+    // A kept snapshot with muster installed is what each run starts from, unless MUSTER_E2B_BASE=off.
+    // GitHub is open only while mu installs; the agent starts with it closed. E2B adds a credential to every request
+    // to its host, so a model key is used there only when that is asked for by name.
+    return e2b({ sdk: sdk as never, apiKey: env.E2B_API_KEY, template: env.MUSTER_E2B_TEMPLATE, setupHosts: RELEASE_HOSTS, keyAnyPath: env.MUSTER_E2B_KEY_ANY_PATH === '1', base: env.MUSTER_E2B_BASE !== 'off', bases: fileBases(join(configDir(), 'e2b-bases.json')), ...(env.E2B_DOMAIN ? { domain: env.E2B_DOMAIN } : {}), ...(env.MUSTER_E2B_MODEL_SECRET ? { modelSecret: env.MUSTER_E2B_MODEL_SECRET } : {}) })
+  } else throw misuse('unknown_runner', `No runner "${where}".`, 'One of: local, vercel, cloudflare, e2b.')
 }
 
 /** The repository a cloud run clones, and with --push what pushing needs: checked before anything is claimed, started or loaded. */
@@ -1847,6 +1869,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   if (given !== undefined) agentToken(given)
   else if (!named) throw new Failure('agent_token_missing', 'A cloud run needs to know who the agent is: pass --as <name>, and a token is made for it.', { hint: 'Your own token is never passed on. Or set MUSTER_AGENT_TOKEN to one you made.' })
   // Checked before anything is started or loaded: a bad address should cost nothing.
+  // A run nobody stays with is never ended by this machine, and on E2B what is stored for it would stay stored.
+  if (where === 'e2b' && on(parsed.flags, 'detach')) throw misuse('detach_unsupported', "An E2B run can't be detached: its credentials are stored at E2B until mu run ends it, and nothing would.", 'Leave --detach out. Run it under mu daemon, or in a terminal that stays open.')
   if (on(parsed.flags, 'push') && str(parsed.flags, 'ready') !== undefined) {
     throw misuse('push_unsupported', '--push with --ready needs --loop: each task then gets a sandbox, and a pull request, of its own.')
   }
@@ -1880,7 +1904,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
       }
     }
   }
-  const runner = await cloudRunner(where, env)
+  const runner = await cloudRunner(where, env, agent)
   const ready = str(parsed.flags, 'ready')
   const profile = str(parsed.flags, 'as') ?? env.MUSTER_PROFILE ?? null
   const task = ready === undefined ? id(parsed.positionals[0], 'a task') : 0
@@ -1897,13 +1921,22 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   // the agent's token outlives the sandbox. A worker takes task after task, so its sandbox lives longer.
   const limit = str(parsed.flags, 'timeout')
   // A Cloudflare run is waited on with --push, and as one of a worker's tasks: the worker starts the next
-  // once it has ended. A Vercel run always is.
+  // once it has ended. A Vercel or an E2B run always is.
   const waited = push || held.claimToken !== undefined
   // A run that is waited on has a bound.
-  const timeout = limit ?? (where === 'vercel' || waited ? DEFAULT_CLOUD_TIMEOUT : undefined)
+  const timeout = limit ?? (where === 'vercel' || where === 'e2b' || waited ? DEFAULT_CLOUD_TIMEOUT : undefined)
   const seconds = timeout ? duration(timeout, 'timeout') : undefined
   // A --timeout you give is the bound, for a worker too; without one a worker gets time for several tasks.
-  const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? WORKER_LIFETIME : seconds + SETTLE
+  // E2B ends a sandbox at its plan's longest run, an hour unless MUSTER_E2B_MAX_LIFETIME says the plan allows more:
+  // a worker there gets what fits, and a run that wouldn't fit is refused here, not cut off there.
+  const cap = where === 'e2b' ? duration(env.MUSTER_E2B_MAX_LIFETIME ?? '1h', 'MUSTER_E2B_MAX_LIFETIME') : undefined
+  const lifetime = seconds === undefined ? undefined : ready !== undefined && limit === undefined ? (cap === undefined ? WORKER_LIFETIME : Math.min(WORKER_LIFETIME, cap - SETTLE)) : seconds + SETTLE
+  // What a run stores at E2B is taken for left behind once it is older than a run can be: no run may be that old.
+  if (cap !== undefined && cap > 24 * 60 * 60) throw misuse('timeout_too_long', 'MUSTER_E2B_MAX_LIFETIME is 24h at most: no E2B plan runs a sandbox longer.', 'Set it to 24h or less.')
+  if (cap !== undefined && lifetime !== undefined && lifetime > cap) {
+    await giveBack()
+    throw Object.assign(new Failure('timeout_too_long', `An E2B sandbox lives ${env.MUSTER_E2B_MAX_LIFETIME ?? '1h'} at most here, and this run needs ${Math.ceil(lifetime / 60)} minutes: the agent's time and ten more to set up and settle the task.`, { hint: 'Pass a shorter --timeout, such as 45m. On a plan that allows longer runs, set MUSTER_E2B_MAX_LIFETIME, to 24h say.' }), { worker: 'stop' as const })
+  }
   // A token for this run alone: this agent's name, the task's own channel, gone soon after the run should be,
   // and what it writes stays on the board. It is made by the board, from your token, and can make no others.
   let token = given
@@ -1916,6 +1949,8 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
           can: { [channel]: ['read', 'post', 'react', 'label'] },
           ttl: (lifetime ?? 30 * 60) + 10 * 60,
           noSync: true,
+          // The board holds it to the routes a sandbox may call, whatever the sandbox's network lets through.
+          sandbox: true,
         })
       })(),
     )
@@ -1923,8 +1958,10 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     made = minted.record.id
   }
   // The model's key is read here and added to the sandbox's requests on the way out: it never enters the sandbox.
-  const modelKey = agent.model ? env[agent.model.keyEnv] : undefined
-  if (agent.model && !modelKey) run.io.err(`warning: ${agent.model.keyEnv} is not set here, so the agent can't reach its model unless the sandbox has a sign-in of its own`)
+  // A secret of yours at E2B, named, is the model's key there: none is read here, and none passes through this machine.
+  const storedKey = where === 'e2b' && Boolean(env.MUSTER_E2B_MODEL_SECRET)
+  const modelKey = agent.model && !storedKey ? env[agent.model.keyEnv] : undefined
+  if (agent.model && !modelKey && !storedKey) run.io.err(`warning: ${agent.model.keyEnv} is not set here, so the agent can't reach its model unless the sandbox has a sign-in of its own`)
   const safe = on(parsed.flags, 'safe')
   if (!safe) run.io.err("note: in the sandbox the agent runs without its permission prompts; its network policy is the boundary (--safe keeps them)")
   // What runs in the sandbox is `mu run` itself, as it runs here: it claims the task, keeps the claim alive
@@ -1966,7 +2003,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
     permissionMode: safe ? 'safe' : 'bypass',
     // A Vercel sandbox gets the same release as this CLI, from its tarball: never a package looked up by name.
     // A Cloudflare container has no internet: mu is in the image you built.
-    ...(where === 'vercel' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
+    ...(where === 'vercel' || where === 'e2b' ? { setup: [['npm', 'install', '-g', env.MUSTER_INSTALL ?? releaseTarball()]] } : {}),
     ...(lifetime ? { timeoutMs: lifetime * 1000 } : {}),
     // --push reads the agent's changes out once it exits, so the run is waited on and its sandbox kept until then.
     // A worker's task is waited on too. Either way it is stopped below once it is done, not left to the Worker's keep.
@@ -1983,7 +2020,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   if (claimed && !started.wait) {
     await started.stop().catch(() => {})
     await undo()
-    throw Object.assign(new Failure('runner_too_old', "This runner can't be waited on, so a worker can't give each task a sandbox of its own: the run was stopped.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner.' }), { worker: 'stop' as const })
+    throw Object.assign(new Failure('runner_too_old', "This runner can't be waited on, so a worker can't give each task a sandbox of its own: the run was stopped.", { hint: 'For Vercel: npm i @vercel/sandbox@latest. For Cloudflare: deploy the current templates/cloudflare-runner. For E2B: npm i e2b@latest.' }), { worker: 'stop' as const })
   }
   if (on(parsed.flags, 'detach') || !started.wait) {
     print(run, what, () => `started  ${line}`)
@@ -1999,7 +2036,7 @@ async function cloudTask(run: Run, parsed: Parsed, where: string, agent: (typeof
   try {
     exitCode = await attend(started.wait.bind(started), run.io.stop, deadline)
     if (push && exitCode !== null && !run.io.stop.aborted) {
-      pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', runner: where === 'vercel' ? 'Vercel' : 'Cloudflare', ...(branches ? { branches } : {}), ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) }).catch(async (error: unknown) => {
+      pr = await pushChanges(run, started, { task, repo: gh!, app: app!, profile: profile ?? 'agent', runner: where === 'vercel' ? 'Vercel' : where === 'e2b' ? 'E2B' : 'Cloudflare', ...(branches ? { branches } : {}), ...githubApi, ...(env.MUSTER_GITHUB_REMOTE ? { remote: env.MUSTER_GITHUB_REMOTE } : {}) }).catch(async (error: unknown) => {
         // Anything that stopped the change reaching its branch. A pull request that wasn't opened has its branch pushed.
         if (!(error instanceof Failure) || error.reason === 'pull_request_failed') throw error
         // The agent may have completed its task already: what waits on it is held, so nothing goes on from a change that isn't on the branch.

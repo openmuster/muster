@@ -526,6 +526,20 @@ describe('files', () => {
     expect((await cli(dir, ['token', 'list'])).stdout).toMatch(new RegExp(`^${all.id}  \\(any profile\\)  everything  until \\d{4}-`))
   })
 
+  it('token create --sandbox marks a token for an agent in a sandbox, and never one with full access', async () => {
+    const dir = tempDir()
+    const claimsOf = (token: string) => JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'))
+    const made = JSON.parse((await cli(dir, ['token', 'create', '--as', 'fixer', '--can', 'work/=read,post', '--sandbox', '--json'])).stdout)
+    expect(made.claims).toMatchObject({ profile: 'fixer', sandbox: true })
+    expect(claimsOf(made.token).sandbox).toBe(true)
+    // Without the flag, no mark: in the token or in what is said of it.
+    const plain = JSON.parse((await cli(dir, ['token', 'create', '--as', 'fixer', '--can', 'work/=read,post', '--json'])).stdout)
+    expect('sandbox' in plain.claims).toBe(false)
+    expect('sandbox' in claimsOf(plain.token)).toBe(false)
+    const wide = await cli(dir, ['token', 'create', '--all', '--sandbox', '--json'])
+    expect([wide.code, JSON.parse(wide.stderr).error.reason]).toEqual([2, 'invalid_token'])
+  })
+
   it('token list shows what the board has made, and revoke stops one', async () => {
     const dir = tempDir()
     const made = JSON.parse((await cli(dir, ['token', 'create', '--as', 'fixer', '--can', 'work/=read,post', '--ttl', '2h', '--json'])).stdout)

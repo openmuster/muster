@@ -20,6 +20,8 @@ export type Claims = {
   minted?: true
   /** What its bearer writes stays on the board, whatever the request says. */
   noSync?: true
+  /** It was made for an agent in a sandbox: it calls the routes a sandbox may, and no others. */
+  sandbox?: true
 }
 
 const b64 = (data: Buffer | string) => Buffer.from(data).toString('base64url')

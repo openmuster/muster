@@ -87,10 +87,11 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...noCwd, cwd: '' } })).toMatch(/Workflow "release".*"workers.cwd"/)
     expect(bad({ workers: { ...noCwd, runner: 'vercel' } })).toBe('loaded')
     expect(bad({ workers: { ...noCwd, runner: 'cloudflare' } })).toBe('loaded')
+    expect(bad({ workers: { ...noCwd, runner: 'e2b' } })).toBe('loaded')
   })
 
-  it('says a bad runner needs to be local, vercel or cloudflare', () => {
-    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local", "vercel" or "cloudflare"/)
+  it('says a bad runner needs to be local, vercel, cloudflare or e2b', () => {
+    expect(bad({ workers: { ...good.workers, runner: 'docker' } })).toMatch(/needs a "workers.runner" of "local", "vercel", "cloudflare" or "e2b"/)
   })
 
   it('takes a step\'s own push, which needs what workers.push needs when it is true', () => {
@@ -847,6 +848,8 @@ describe('the daemon starts a requested workflow', () => {
     expect(missingSettings({ ...cloudflare.workers, runner: 'vercel' }, { ...rec.deps.env, VERCEL_OIDC_TOKEN: undefined, VERCEL_TOKEN: 't' })).toContain('all three')
     expect(missingSettings(cloudflare.workers, { ...rec.deps.env, MUSTER_URL: undefined })).toContain('MUSTER_URL or MUSTER_SANDBOX_URL')
     expect(missingSettings(cloudflare.workers, rec.deps.env)).toBeNull()
+    expect(missingSettings({ ...cloudflare.workers, runner: 'e2b' }, rec.deps.env)).toMatch(/no E2B_API_KEY, MUSTER_E2B_TEMPLATE, which its e2b workers need/)
+    expect(missingSettings({ ...cloudflare.workers, runner: 'e2b' }, { ...rec.deps.env, E2B_API_KEY: 'k', MUSTER_E2B_TEMPLATE: 't' })).toBeNull()
     expect(missingSettings(release.workers, {})).toBeNull()
   })
 

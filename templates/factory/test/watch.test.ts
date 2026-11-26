@@ -67,6 +67,9 @@ describe('what a wake hands on', () => {
     const started = readFileSync(join(dir, 'mu-env.txt'), 'utf8')
     expect(leaked(started).sort()).toEqual(Object.entries(SANDBOX_SETTINGS).map(([name, value]) => `${name}=${value}`).sort())
     expect(started).toMatch(/^MUSTER_AGENT_TOKEN=\S+$/m)
+    // The token is one for a sandbox, so the board holds it to a sandbox's routes on any runner.
+    const token = /^MUSTER_AGENT_TOKEN=(\S+)$/m.exec(started)![1]!
+    expect(JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'))).toMatchObject({ profile: 'factory', sandbox: true })
   })
 
   it('passes the sandbox settings from the host only when it runs wakes in a sandbox', async () => {
@@ -83,6 +86,8 @@ describe('what a wake hands on', () => {
     expect((await pass(undefined)).filter((name) => settings.includes(name))).toEqual([])
     expect((await pass('local')).filter((name) => settings.includes(name))).toEqual([])
     expect((await pass('vercel')).filter((name) => settings.includes(name)).sort()).toEqual([...settings].sort())
+    expect(await pass('e2b')).toEqual(expect.arrayContaining(['E2B_API_KEY', 'MUSTER_E2B_TEMPLATE', 'MUSTER_SANDBOX_URL']))
+    expect(await pass('local')).not.toContain('E2B_API_KEY')
   })
 })
 
@@ -157,6 +162,7 @@ describe('wake.ts', () => {
   it('runs Claude Code headless unless told another agent, and a sandbox run as wake.sh did', () => {
     expect([agentWords({}), agentWords({ FACTORY_AGENT: 'codex exec' })]).toEqual([['claude', '--print'], ['codex', 'exec']])
     expect(sandboxWords(7, {})).toEqual(['run', '7', '--runner', 'vercel', '--agent', 'claude', '--as', 'factory'])
+    expect(sandboxWords(7, { FACTORY_RUNNER: 'e2b' })).toEqual(['run', '7', '--runner', 'e2b', '--agent', 'claude', '--as', 'factory'])
     expect(sandboxWords(7, { FACTORY_REPO: 'https://github.com/acme/web', FACTORY_PUSH: '1' })).toEqual(['run', '7', '--runner', 'vercel', '--agent', 'claude', '--as', 'factory', '--repo', 'https://github.com/acme/web', '--push'])
   })
 })

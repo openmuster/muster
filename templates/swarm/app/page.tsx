@@ -23,7 +23,7 @@ async function start(form: FormData) {
       agents: Number(form.get('agents') ?? 1),
       agent: String(form.get('agent') ?? 'claude'),
       cwd,
-      runner: String(form.get('runner') ?? 'local') as 'local' | 'vercel' | 'cloudflare',
+      runner: String(form.get('runner') ?? 'local') as 'local' | 'vercel' | 'cloudflare' | 'e2b',
       ...(form.get('repo') ? { repo: String(form.get('repo')) } : {}),
       push: form.get('push') === 'on',
     },
@@ -66,6 +66,7 @@ export default async function Page() {
             <select id="runner" name="runner" defaultValue="local">
               <option value="local">on this machine</option>
               <option value="vercel">in Vercel Sandbox</option>
+              <option value="e2b">in an E2B sandbox</option>
             </select>
           </div>
           <div className="field wide">
@@ -77,7 +78,7 @@ export default async function Page() {
         <input id="repo" name="repo" placeholder="https://github.com/acme/web.git" />
         <label className="check">
           <input type="checkbox" name="push" defaultChecked />
-          a pull request per task (Vercel, with a repository; needs a GitHub App)
+          a pull request per task (Vercel or E2B, with a repository; needs a GitHub App)
         </label>
         <button type="submit">launch</button>
       </form>

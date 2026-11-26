@@ -12,10 +12,10 @@ export type Launch = {
   /** Where the agents work. */
   cwd: string
   /** Where the agents run: on this machine, or in a cloud sandbox. Default local. */
-  runner?: 'local' | 'vercel' | 'cloudflare'
+  runner?: 'local' | 'vercel' | 'cloudflare' | 'e2b'
   /** The repository a cloud sandbox clones. */
   repo?: string
-  /** In a Vercel sandbox with a repository, open a pull request for each task's changes. Default on; it needs a GitHub App. */
+  /** In a Vercel or E2B sandbox with a repository, open a pull request for each task's changes. Default on; it needs a GitHub App. */
   push?: boolean
   /**
    * Lets `agent` be any command. Off unless code of yours says so: a launch that takes its fields from a
@@ -25,7 +25,7 @@ export type Launch = {
 }
 
 const KNOWN = ['claude', 'codex']
-const RUNNERS = ['local', 'vercel', 'cloudflare']
+const RUNNERS = ['local', 'vercel', 'cloudflare', 'e2b']
 
 export const AGENTS_MAX = 16
 const SLUG = /^[a-z0-9][a-z0-9-]{0,30}$/
@@ -35,10 +35,10 @@ export type Spawner = (worker: { name: string; argv: string[]; cwd: string }) =>
 
 /** The command line of a worker: take the run's next ready task, start the agent on it, and again, until nothing is ready for ten minutes. */
 export function workerArgv(launch: Launch, swarm: string): string[] {
-  if (launch.runner === 'vercel') {
+  if (launch.runner === 'vercel' || launch.runner === 'e2b') {
     // A worker on this machine that gives each task a sandbox of its own, and with a repository, a pull request of its own.
     const repo = launch.repo ? ['--repo', launch.repo, ...(launch.push === false ? [] : ['--push'])] : []
-    return ['run', '--ready', `${swarm}/${launch.slug}`, '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', launch.agent, ...repo]
+    return ['run', '--ready', `${swarm}/${launch.slug}`, '--loop', '--wait', '10m', '--runner', launch.runner, '--agent', launch.agent, ...repo]
   }
   if (launch.runner && launch.runner !== 'local') {
     // A sandbox is its own worker: it takes tasks from the queue itself, through the board's URL.
@@ -56,12 +56,12 @@ export function workerArgv(launch: Launch, swarm: string): string[] {
 export async function launch(team: Board, swarm: string, request: Launch, spawn: Spawner): Promise<{ run: number; plan: number; workers: string[] }> {
   if (!SLUG.test(request.slug)) throw new Error('A run name is lowercase letters, numbers and "-".')
   if (!request.goal.trim()) throw new Error('Say what the swarm is for.')
-  if (request.runner !== undefined && !RUNNERS.includes(request.runner)) throw new Error('A run is on this machine, or in a vercel or cloudflare sandbox.')
+  if (request.runner !== undefined && !RUNNERS.includes(request.runner)) throw new Error('A run is on this machine, or in a vercel, cloudflare or e2b sandbox.')
   if (!KNOWN.includes(request.agent) && !request.allowCommand) throw new Error('A run starts claude or codex. Another command is started only by code that passes allowCommand.')
   if (request.runner && request.runner !== 'local') {
     if (request.agent !== 'claude' && request.agent !== 'codex') throw new Error('A cloud sandbox runs claude or codex.')
-    if (!process.env.MUSTER_URL && !(request.runner === 'vercel' && process.env.MUSTER_SANDBOX_URL)) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set, or MUSTER_SANDBOX_URL where this machine has the board.')
-    // A Vercel worker makes each task's agent a token of its own, held to that task's channel. A Cloudflare one is handed one.
+    if (!process.env.MUSTER_URL && !((request.runner === 'vercel' || request.runner === 'e2b') && process.env.MUSTER_SANDBOX_URL)) throw new Error('A cloud sandbox reaches the board by URL: start this app with MUSTER_URL and MUSTER_TOKEN set, or MUSTER_SANDBOX_URL where this machine has the board.')
+    // A Vercel or E2B worker makes each task's agent a token of its own, held to that task's channel. A Cloudflare one is handed one.
     if (request.runner === 'cloudflare' && !process.env.MUSTER_AGENT_TOKEN) throw new Error('A cloud sandbox needs a token made for its agents: set MUSTER_AGENT_TOKEN to one held to a profile and to this swarm\'s channels (mu token create).')
   }
   if (!Number.isInteger(request.agents) || request.agents < 1 || request.agents > AGENTS_MAX) throw new Error(`A run has 1 to ${AGENTS_MAX} agents.`)

@@ -33,6 +33,10 @@ would run yourself.
   (`MUSTER_URL`, or `MUSTER_SANDBOX_URL` when this machine has the board),
   the Vercel and model credentials `mu run --runner vercel` reads, and for
   pull requests a GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_KEY_FILE`).
+- **E2B:** as Vercel, a sandbox and a pull request per task, with what
+  `mu run --runner e2b` reads: `E2B_API_KEY`, `MUSTER_E2B_TEMPLATE`, and
+  `MUSTER_E2B_KEY_ANY_PATH=1` to use a model key there. See muster's guide,
+  Agents in cloud sandboxes.
 - **Cloudflare:** each agent is a sandbox that takes tasks itself, with a
   token you make for it in `MUSTER_AGENT_TOKEN`. It makes no pull requests.
 

@@ -142,7 +142,7 @@ export const SANDBOX_ENV = ['NODE_EXTRA_CA_CERTS', 'NODE_USE_SYSTEM_CA', 'SSL_CE
 export const VERCEL_IMAGE = 'vercel/sandbox/universal'
 
 /** A command's word as an error may show it: a URL without the credential or query it may carry. */
-const bare = (word: string) => {
+export const bare = (word: string) => {
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(word)) return word
   try {
     const url = new URL(word)
@@ -226,7 +226,7 @@ async function baseSandbox(options: { Sandbox: VercelSandbox; setupHosts?: strin
 export const repoDir = (url: string) => `/vercel/${new URL(url).pathname.split('/').filter(Boolean).pop()!.replace(/\.git$/, '')}`
 
 /** What cloning a repository from GitHub reaches, at the sandbox's creation. */
-const CLONE_HOSTS = ['github.com', 'codeload.github.com']
+export const CLONE_HOSTS = ['github.com', 'codeload.github.com']
 
 /**
  * Installs a repository's dependencies the way its lockfile says, with the package manager it pins
@@ -250,7 +250,7 @@ else echo installed none; fi`
 /** What an install can say it did, and nothing else. */
 const INSTALLED = /^(pnpm|npm|yarn|bun|none|failed \((exit \d{1,3}|no exit code|timeout)\))$/
 
-const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
+export const shellQuote = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 /**
  * Runs an agent in a Vercel Sandbox. The board's credential and the model's key are in the sandbox's

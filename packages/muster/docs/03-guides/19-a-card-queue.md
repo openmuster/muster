@@ -14,7 +14,9 @@ agent needs a decision from you.
 through a tunnel or a proxy, a Vercel project for the sandboxes, a GitHub App
 installed on the repository, a model key, and for Linear cards a Linear key
 and webhook. See [Agents in cloud sandboxes](./06-sandboxed-agents.md) for
-the Vercel and GitHub parts.
+the Vercel and GitHub parts. `"runner": "e2b"` in `workflows.json` runs the
+steps in E2B sandboxes instead, with `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`
+in place of the Vercel settings.
 
 ## The parts
 

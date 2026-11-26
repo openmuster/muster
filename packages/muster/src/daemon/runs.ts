@@ -67,10 +67,11 @@ export type RunDeps = { spawn: Spawner; now: () => number; runs: OpenRuns; env?:
  * thread instead of starting workers that exit at once, unseen. Null when nothing is missing.
  */
 export function missingSettings(workers: Workflow['workers'], env: Record<string, string | undefined>): string | null {
-  if (workers.runner !== 'vercel' && workers.runner !== 'cloudflare') return null
+  if (workers.runner !== 'vercel' && workers.runner !== 'cloudflare' && workers.runner !== 'e2b') return null
   const missing: string[] = []
   if (!env.MUSTER_URL && !env.MUSTER_SANDBOX_URL) missing.push('MUSTER_URL or MUSTER_SANDBOX_URL')
   if (workers.runner === 'cloudflare') for (const name of ['MUSTER_CF_WORKER', 'MUSTER_CF_SECRET']) if (!env[name]) missing.push(name)
+  if (workers.runner === 'e2b') for (const name of ['E2B_API_KEY', 'MUSTER_E2B_TEMPLATE']) if (!env[name]) missing.push(name)
   if (workers.runner === 'vercel') {
     const set = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'].filter((name) => env[name])
     if (set.length === 0 && !env.VERCEL_OIDC_TOKEN) missing.push('VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN')
@@ -156,7 +157,7 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
   const workers = workflow.workers
   return [
     'run', '--ready', run, '--loop', '--wait', '10m',
-    ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
+    ...(workers.runner === 'vercel' || workers.runner === 'cloudflare' || workers.runner === 'e2b' ? ['--runner', workers.runner] : ['--cwd', workers.cwd!]),
     '--agent', workers.agent, '--as', `${workers.as}-${i}`,
     ...(workers.repo ? ['--repo', workers.repo] : []),
     // Any task may push: a step that mustn't is labelled so by the daemon, and the worker reads only that.

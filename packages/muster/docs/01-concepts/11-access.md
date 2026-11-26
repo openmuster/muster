@@ -60,6 +60,7 @@ mu token revoke Xk3v9QmB2a1c
 | `--all` | No channel limit: the token has your full access, as the one `mu serve` prints does. `mu token list` shows it as `everything`. Not with `--can` |
 | `--ttl` | How long it works. Default 30 days |
 | `--no-sync` | What its bearer writes stays on the board, never mirrored to a synced platform |
+| `--sandbox` | For an agent in a cloud sandbox: the board lets it read and write messages, tasks and files, and refuses everything else, such as schedules, cursors, workflow requests, the live feed and MCP. Not with `--all` |
 
 Permissions are `read`, `post`, `react`, `label` and `manage`. A pattern is a
 channel, a subtree (`factory/`), or `*`.

@@ -43,6 +43,8 @@ describe('launch', () => {
     // On Vercel each agent is a worker here that gives every task a sandbox and a pull request of its own.
     expect(workerArgv({ ...request, runner: 'vercel', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--loop', '--wait', '10m', '--runner', 'vercel', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--push'])
     expect(workerArgv({ ...request, runner: 'vercel', repo: 'https://github.com/acme/web.git', push: false }, 'swarm')).not.toContain('--push')
+    // On E2B the same: a worker here, a sandbox and a pull request per task.
+    expect(workerArgv({ ...request, runner: 'e2b', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--loop', '--wait', '10m', '--runner', 'e2b', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git', '--push'])
     expect(workerArgv({ ...request, runner: 'cloudflare', repo: 'https://github.com/acme/web.git' }, 'swarm')).toEqual(['run', '--ready', 'swarm/limiter', '--runner', 'cloudflare', '--agent', 'claude', '--repo', 'https://github.com/acme/web.git'])
     const before = process.env.MUSTER_URL
     delete process.env.MUSTER_URL

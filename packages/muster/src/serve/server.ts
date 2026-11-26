@@ -6,16 +6,11 @@ import { Failure, misuse } from '../failure.ts'
 import { profileName, WORKFLOWS_PROFILE, type Caller } from '../model.ts'
 import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
 import { verify, type Claims } from './token.ts'
+import { ROUTES, SANDBOX_ROUTES } from './routes.ts'
 
-/** What a client may call. `scheduleTick` is the ticker's, never a client's. */
-export const ROUTES = [
-  'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
-  'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head', 'cursorGet', 'cursorSet',
-  'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
-  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',
-  'scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'schemaList', 'filePut', 'fileGet', 'budgetSet', 'budgets',
-] as const
+export { ROUTES }
 const ALLOWED = new Set<string>(ROUTES)
+const SANDBOX = new Set<string>(SANDBOX_ROUTES)
 
 /** Removes `pid` and `pidStart` from a request, at any depth. */
 function withoutPids(value: unknown, depth = 0): void {
@@ -158,6 +153,19 @@ export function createHandler(options: ServeOptions) {
         return res.end(answer.body)
       }
       const route = url.pathname.slice(MOUNT.length + 1)
+      // A token made for a sandbox reads and writes the board and does nothing else with it, whatever the
+      // network around the sandbox lets through: some can match a host and not a path. It is checked here,
+      // before the routes that take no token, so that such a token opens none of them either.
+      const bearer = req.headers.authorization
+      if (bearer?.startsWith('Bearer ') && !(SANDBOX.has(route) && req.method === 'POST') && !(route === 'whoami' && req.method === 'GET')) {
+        let held: Claims | null = null
+        try {
+          held = verify(options.key, bearer.slice(7), now())
+        } catch {
+          // Not a token of this board's: the route decides what that means.
+        }
+        if (held?.sandbox) throw new Failure('forbidden', "A sandbox's token reads and writes the board, and this isn't part of that.", { hint: 'Ask whoever runs the board to do it, or use a token that was not made for a sandbox.' })
+      }
       // Asking to join, and picking up the answer, are the only routes with no token: the asker has none yet.
       if (route === 'joinAsk' || route === 'joinPoll') {
         if (req.method !== 'POST') throw misuse('method_not_allowed', 'Board routes take POST.')
@@ -193,7 +201,10 @@ export function createHandler(options: ServeOptions) {
         }
       }
       const caller = callerOf(req)
-      if (route === 'whoami' && req.method === 'GET') return send(res, 200, { ok: { principal: caller.principal, profile: caller.profile, can: caller.can ?? null, exp: claimsOf(req).exp } })
+      if (route === 'whoami' && req.method === 'GET') {
+        const held = claimsOf(req)
+        return send(res, 200, { ok: { principal: caller.principal, profile: caller.profile, can: caller.can ?? null, exp: held.exp, ...(held.sandbox ? { sandbox: true } : {}) } })
+      }
       // Tokens are the board's own business, not a backend's: the key is here. None of these is a route a
       // sandbox's policy lets through, and a token held to channels, or made from another, can't use them.
       if (route === 'tokenCreate' || route === 'tokenList' || route === 'tokenRevoke') {
