@@ -7,6 +7,12 @@ versions are affected.
 
 ### Fixed
 
+- A push GitHub refuses says why. `push_failed` kept only the last two lines
+  git printed, which cut off the line with the reason, and added "The token
+  needs Contents: write" to every failure. It now quotes what the remote and
+  git said, and names that permission only when GitHub says access was
+  refused.
+
 - `templates/loop` writes a Linear issue's status as the sync's own OAuth app
   when one is set up, not with a personal `LINEAR_API_KEY` left in the
   environment: comments and status changes come from the same app. It asks

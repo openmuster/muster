@@ -133,6 +133,10 @@ const run = promisify(execFile)
  * that is null) to a commit that carries on from `base`: a branch someone moved in the meantime, or a change
  * that doesn't build on where its checkout started, is refused (`push_conflict`) and nothing is overwritten.
  */
+/** How much of what git and the remote said about a push that failed is passed on: its last lines, up to this many characters. */
+const PUSH_SAID_LINES = 12
+const PUSH_SAID_MAX = 800
+
 export async function pushBundle(options: { repo: { slug: string }; token: string; bundle: Buffer; base: string; branch: string; expect: string | null; remote?: string }): Promise<void> {
   // Each of these reaches git as an argument: none may look like an option, and the bundle is held to its size here too.
   if (!COMMIT.test(options.base)) throw new Failure('push_failed', "The commit the checkout started from isn't a commit ID.")
@@ -166,11 +170,22 @@ export async function pushBundle(options: { repo: { slug: string }; token: strin
     await git('push', '-q', `--force-with-lease=refs/heads/${options.branch}:${options.expect ?? ''}`, '--end-of-options', remote, `refs/mu/head:refs/heads/${options.branch}`)
   } catch (error) {
     if (error instanceof Failure) throw error
-    const said = String((error as { stderr?: string }).stderr ?? (error as Error).message).replaceAll(options.token, '[REDACTED]').trim().split('\n').slice(-2).join(' ')
+    // What the remote said and what git made of it, whole: the line that says why a push was refused comes before
+    // git's last ones, and can run over several. Cut only where it would be longer than a reply should carry.
+    const said = String((error as { stderr?: string }).stderr ?? (error as Error).message)
+      .replaceAll(options.token, '[REDACTED]')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-PUSH_SAID_LINES)
+      .join(' ')
+      .slice(0, PUSH_SAID_MAX)
     if (/stale info|\[rejected\]|non-fast-forward|fetch first|already exists/.test(said)) {
       throw new Failure('push_conflict', `${options.branch} moved on GitHub while the agent worked, so it was left as it was: ${said}`, { hint: 'Read the branch and the task thread, then run the task again: it starts from where the branch is now.' })
     }
-    throw new Failure('push_failed', `Pushing ${options.branch} failed: ${said}`, { hint: 'The token needs Contents: write on the repository.' })
+    // The permission is named only when GitHub says access was refused: any other refusal says its own reason.
+    const denied = /Permission to .* denied|returned error: 403|not accessible by integration|Write access to repository not granted/i.test(said)
+    throw new Failure('push_failed', `Pushing ${options.branch} failed: ${said}`, denied ? { hint: 'The token needs Contents: write on the repository.' } : {})
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

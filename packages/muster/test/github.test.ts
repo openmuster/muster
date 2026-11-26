@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { claude, vercel } from '../src/index.ts'
 import type { VercelRule } from '../src/runner/cloud.ts'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Failure } from '../src/failure.ts'
 import { BUNDLE, BUNDLE_MAX, gitRules, githubRepo, openPullRequest, pushBundle } from '../src/runner/github.ts'
 import { tempDir } from './helpers.ts'
 
@@ -121,6 +122,25 @@ describe('GitHub in a sandbox', () => {
     expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base: '--upload-pack=touch /tmp/x', branch: 'mu/task-12', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
     expect(await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'main', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
     expect(await pushBundle({ repo, token: 'ghp_secret', bundle: Buffer.alloc(BUNDLE_MAX + 1), base, branch: 'mu/task-12', expect: null, remote }).catch((error) => error.reason)).toBe('push_failed')
+    // A push the remote refuses says why in the remote's own words, all of them, and names a permission only
+    // when the remote says access was refused.
+    const hook = join(remote, 'hooks', 'pre-receive')
+    const refuse = (words: string) => {
+      writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' ${words} >&2\nexit 1\n`)
+      chmodSync(hook, 0o755)
+    }
+    refuse(`'error: GH013: Repository rule violations found for refs/heads/mu/task-12.' '- Commits must have verified signatures.' 'key ghp_secret'`)
+    const ruled = (await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', expect: null, remote }).catch((error) => error)) as Failure
+    expect(ruled.reason).toBe('push_failed')
+    expect(ruled.message).toContain('GH013: Repository rule violations found for refs/heads/mu/task-12.')
+    expect(ruled.message).toContain('Commits must have verified signatures.')
+    expect(ruled.message).toContain('pre-receive hook declined')
+    expect(ruled.message).not.toContain('ghp_secret')
+    expect(ruled.hint).toBeUndefined()
+    refuse(`'Permission to acme/web.git denied to muster[bot].'`)
+    const denied = (await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', expect: null, remote }).catch((error) => error)) as Failure
+    expect([denied.reason, denied.hint]).toEqual(['push_failed', 'The token needs Contents: write on the repository.'])
+    rmSync(hook)
     await pushBundle({ repo, token: 'ghp_secret', bundle, base, branch: 'mu/task-12', expect: null, remote })
     expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:a.txt'], { encoding: 'utf8' })).toBe('two\n')
     expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%an %s', 'refs/heads/mu/task-12'], { encoding: 'utf8' }).trim()).toBe('fixer the fix')
