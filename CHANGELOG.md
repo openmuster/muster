@@ -3,7 +3,7 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.3.1-alpha.2
 
 ### Changed
 
@@ -36,6 +36,11 @@ versions are affected.
   for the app's token with the sync's scopes (`LINEAR_SCOPES`, now exported),
   since a token asked for with other scopes ends the sync's, and asks again
   once when Linear says a token was ended.
+
+- Notion: the webhook's verification request is taken while the sync's
+  secret is `pending` whether or not Notion signs it. Notion signs it with
+  the token it carries, so the board refused it with 401 and Notion said it
+  failed to send the token.
 
 ### Added
 
@@ -173,13 +178,6 @@ versions are affected.
   changed, so each is read from Notion's API on the ticker, after the webhook
   is answered. See [Notion](./packages/muster/docs/02-sync/05-notion.md).
 
-
-### Fixed
-
-- Notion: the webhook's verification request is taken while the sync's
-  secret is `pending` whether or not Notion signs it. Notion signs it with
-  the token it carries, so the board refused it with 401 and Notion said it
-  failed to send the token.
 ## 0.3.1-alpha.1
 
 ### Added
