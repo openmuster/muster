@@ -7,7 +7,7 @@ import { channelPath } from '../model.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
 import { declared, type Resolved, type Secret, type SyncOptions } from './declare.ts'
-import { SEND_MS, type Inbound, type Provider, type Received, type Remote } from './types.ts'
+import { SEND_MS, type Inbound, type Provider, type Received, type Remote, type WorkingStep } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -670,9 +670,17 @@ export type SlackOptions = SyncOptions & {
   bot?: string
   /** A Slack channel ID to a board channel. Two-way unless `mirror: false`. */
   channels: Record<string, string | { channel: string; mirror?: boolean }>
+  /**
+   * The Slack app is declared an agent: a thread being worked on shows Slack's own "Working…" under it, in
+   * place of a progress message. Needs the app's agent feature turned on in Slack, which can't be turned off again.
+   */
+  agent?: boolean
   api?: string
   now?: () => number
 }
+
+/** How often Slack is told a thread is still being worked on: it stops showing it an hour after it was last told. */
+const SLACK_WORKING_TTL_MS = 50 * 60_000
 
 /**
  * Requests one catch-up tick makes for what was posted while down, shared by the mapped channels, each getting at
@@ -851,6 +859,27 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
       const [channel, ts] = external.split(':')
       await send(fetcher, `${base}/chat.update`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts, text }) })
     },
+    ...(options.agent
+      ? {
+          workingTtl: SLACK_WORKING_TTL_MS,
+          /**
+           * Slack's agent session for the thread, which it makes on the first call and finds again by the channel
+           * and the thread's first message: `processing` shows "Working…", told again whenever the work says
+           * something new, so the hour Slack shows it for starts over, and `active` ends it. Slack shows no
+           * words of ours there, and a message the app posts doesn't end it, so the end is always said.
+           */
+          async working(target: { place: string; threadExternal: string }, step: WorkingStep, _now: { text: string; state: unknown }, fetcher: typeof fetch) {
+            const [channel, ts] = target.threadExternal.split(':')
+            const answer = await send(fetcher, `${base}/agents.sessions.setStatus`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' },
+              body: JSON.stringify({ channel_id: channel, thread_ts: ts, status: step === 'end' ? 'active' : 'processing' }),
+            })
+            if (answer.ok !== true) throw new Failure(`slack_${answer.error ?? 'error'}`, `Slack refused the status: ${answer.error ?? 'unknown'}.`)
+            return null
+          },
+        }
+      : {}),
     async remove(external, _place, fetcher) {
       const [channel, ts] = external.split(':')
       await send(fetcher, `${base}/chat.delete`, { method: 'POST', headers: { authorization: `Bearer ${options.token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ channel, ts }) })
