@@ -75,6 +75,19 @@ async function start(template: 'swarm' | 'factory', env: Record<string, string> 
   return { url, team, dir, page, errors }
 }
 
+/** The same site on a phone: nothing wider than the screen, which is what a page that wraps badly gets wrong first. */
+async function onPhone(url: string, check: (phone: Page) => Promise<void>) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const phone = await context.newPage()
+  try {
+    await phone.goto(url)
+    await check(phone)
+    expect(await phone.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  } finally {
+    await context.close()
+  }
+}
+
 const column = (page: Page, state: string) => page.locator('.col', { has: page.locator('.dim', { hasText: new RegExp(`^${state} \\d+$`) }) })
 
 describe('the swarm template, in a browser', () => {
@@ -122,6 +135,22 @@ describe('the swarm template, in a browser', () => {
     // Back on the launcher, the run is listed and links to its live view.
     await page.goto(url)
     expect(await page.locator('.task a').getAttribute('href')).toBe('/live?run=checkout-limiter')
+
+    // On a phone the form's fields fill their rows, and the board shows only the columns with something in them.
+    await onPhone(url, async (phone) => {
+      const fields = await phone.locator('#slug, #agents, #agent, #runner, #cwd').evaluateAll((all) => all.map((field) => field.getBoundingClientRect().width))
+      expect(fields.length).toBe(5)
+      // Two to a row at most, each a real share of the row: never a narrow box with space left beside it.
+      for (const width of fields) expect(width).toBeGreaterThanOrEqual(160)
+      const row = await phone.locator('.row').first().evaluate((el) => el.getBoundingClientRect().width)
+      expect(fields[2]).toBe(row)
+    })
+    await onPhone(`${url}/live?run=checkout-limiter`, async (phone) => {
+      await phone.locator('.col').first().waitFor({ state: 'attached' })
+      expect(await phone.locator('.col:not(.empty)').count()).toBeGreaterThan(0)
+      expect(await phone.locator('.col.empty').count()).toBeGreaterThan(0)
+      expect(await phone.locator('.col.empty').evaluateAll((all) => all.filter((col) => (col as HTMLElement).offsetHeight > 0).length)).toBe(0)
+    })
     expect(errors).toEqual([])
     await page.close()
   }, 180_000)
@@ -170,6 +199,18 @@ describe('the factory template, in a browser', () => {
     await expect.poll(() => page.locator('.item .text').allTextContents(), { timeout: 15_000 }).toEqual(['The login redirect goes to the wrong host\nSeen on staging.', 'reproduced: the host comes from the Referer header'])
     const thread = await team.readThread({ id: issue.id })
     expect(thread.replies.map((reply) => [reply.text, reply.by.profile])).toEqual([['reproduced: the host comes from the Referer header', null]])
+
+    await onPhone(url, async (phone) => {
+      expect(await phone.locator('h1').textContent()).toBe('factory')
+    })
+    await onPhone(`${url}/board?thread=${issue.id}`, async (phone) => {
+      // Text a phone's browser won't zoom in on when it is tapped.
+      const touch = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+      const tapped = await touch.newPage()
+      await tapped.goto(phone.url())
+      expect(await tapped.locator('textarea[name="text"]').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16)
+      await touch.close()
+    })
     expect(errors).toEqual([])
     await page.close()
   }, 180_000)
