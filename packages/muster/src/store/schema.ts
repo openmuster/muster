@@ -49,8 +49,6 @@ create table if not exists messages (
 );
 create index if not exists messages_thread on messages (thread, id);
 create index if not exists messages_roots on messages (channel, activity) where re is null;
--- The messages that say work is going on, for sync to show on a platform: few, and looked for every tick.
-create index if not exists messages_progress on messages (thread) where json_extract(labels, '$.progress') = 'open';
 
 create table if not exists actors (
   principal text not null,
@@ -182,6 +180,20 @@ create table if not exists sync_files (
   bytes integer not null,
   primary key (key, day)
 ) without rowid;
+
+-- Each progress message as a sync's platform may see it: whether it is open, its words, and when it last
+-- changed (ms). Kept from the log by the sync itself, which leaves out what a caller held to the board
+-- wrote, as deliveries do. Bookkeeping: not in the log.
+create table if not exists sync_progress (
+  key text not null,
+  message integer not null,
+  thread integer not null,
+  open integer not null,
+  text text not null,
+  at integer not null,
+  primary key (key, message)
+) without rowid;
+create index if not exists sync_progress_open on sync_progress (key, open, at);
 
 -- What each sync last told its platform about a thread being worked on: whether it shows as worked on
 -- there (active), the progress message and its words then, what the platform gave back to find the same

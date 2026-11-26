@@ -2,7 +2,8 @@ import { createHmac } from 'node:crypto'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { board, file, slack } from '../src/index.ts'
+import { randomBytes } from 'node:crypto'
+import { board, file, http, listen, mint, slack } from '../src/index.ts'
 import type { Provider } from '../src/sync/types.ts'
 import { clock, tempDir } from './helpers.ts'
 
@@ -192,6 +193,37 @@ describe('sync: a thread being worked on, shown on a platform that can show it',
     expect(steps()).toEqual([])
   })
 
+  it('shows nothing a caller held to the board wrote: not its edit of a progress message, its label on one, or its closing of one', async () => {
+    const { backend, time, daemon, told, steps, thread, begin } = setup()
+    const root = await thread()
+    const progress = await begin(root)
+    const plain = await daemon.reply({ to: root, text: 'notes, not progress' })
+    await backend.syncTick()
+    // The same board over HTTP, for a token that may write but is held to the board.
+    const key = randomBytes(32)
+    const server = await listen({ backend, key, now: () => time.now().getTime() })
+    const held = board({ backend: http({ url: server.url, token: mint(key, { sub: 'local:user:ada', profile: 'workflows', exp: Math.floor(time.now().getTime() / 1000) + 3600, noSync: true }) }) })
+    try {
+      await held.edit({ id: progress.id, text: 'a secret the platform must not see' })
+      await held.label({ id: plain.id, set: { progress: 'open' } })
+      await backend.syncTick()
+      expect(steps()).toEqual(['start'])
+      await held.label({ id: progress.id, set: { progress: 'done' } })
+      await backend.syncTick()
+      expect(steps()).toEqual(['start'])
+      // The daemon's own closing goes out, with the words the platform last had from a caller that may sync.
+      await daemon.label({ id: progress.id, set: { progress: 'open' } })
+      await daemon.label({ id: progress.id, set: { progress: 'done' } })
+      await backend.syncTick()
+      expect(told.map((each) => [each.step, each.text])).toEqual([
+        ['start', 'started card: 3 tasks in general/card-9'],
+        ['end', 'started card: 3 tasks in general/card-9'],
+      ])
+    } finally {
+      await server.close()
+    }
+  })
+
   it('sends the progress message as a comment, and its edits as edits, to a platform with no way of its own to show it', async () => {
     const { backend, daemon, sent, thread, begin } = setup({ plain: true })
     const progress = await begin(await thread())
@@ -209,9 +241,9 @@ describe('sync: a thread being worked on, shown on a platform that can show it',
     const first = setup({ dir })
     const root = await first.thread()
     first.backend.close()
-    // Back to what the release before this wrote: the same tables, without this one and its index.
+    // Back to what the release before this wrote: the same tables, without these two.
     const raw = new DatabaseSync(join(dir, 'main.db'))
-    raw.exec('drop table sync_working; drop index messages_progress; pragma user_version = 9')
+    raw.exec('drop table sync_working; drop table sync_progress; pragma user_version = 9')
     raw.close()
     const again = first.open()
     await board({ backend: again }).as('workflows').reply({ to: root, text: 'started card: 1 tasks in general/card-3', labels: { progress: 'open' } })
