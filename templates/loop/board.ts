@@ -392,8 +392,9 @@ export const sync = {
   slack: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123456789: 'cards/slack' } }),
   // A Linear team, by its key: issues filed there are reports, and the card's replies are comments on them.
   lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), token: env('LINEAR_API_KEY'), teams: { ENG: 'cards/linear' } }),
-  // GitHub issues on your repository, with the card's replies sent back as comments.
-  gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), token: env('GITHUB_TOKEN'), repos: { 'your-org/your-repo': { issues: 'cards/github', mirror: true } } }),
+  // GitHub issues on your repository, with the card's replies sent back as comments, written by the GitHub App
+  // the workers push with (it needs write on Issues too), not by a person's token.
+  gh: github({ secret: env('GITHUB_WEBHOOK_SECRET'), appId: env('GITHUB_APP_ID'), appKey: env('GITHUB_APP_KEY_FILE'), repos: { 'your-org/your-repo': { issues: 'cards/github', mirror: true } } }),
   // A Notion database, by its data source ID: its pages are reports, and the card's replies are comments on them.
   // NOTION_WEBHOOK_SECRET is `pending` until Notion has sent its verification token: see the Notion sync page.
   nt: notion({ secret: env('NOTION_WEBHOOK_SECRET'), token: env('NOTION_TOKEN'), databases: { '00000000000040008000000000000000': 'cards/notion' } }),

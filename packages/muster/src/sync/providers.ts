@@ -2,10 +2,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { Failure } from '../failure.ts'
+import { Failure, misuse } from '../failure.ts'
 import { channelPath } from '../model.ts'
+import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
-import { declared, type Resolved, type SyncOptions } from './declare.ts'
+import { declared, type Resolved, type Secret, type SyncOptions } from './declare.ts'
 import { SEND_MS, type Inbound, type Provider, type Received, type Remote } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -75,20 +76,70 @@ function cutShort(times: number[], since: string, inclusive: boolean, step: numb
 }
 
 export type GitHubOptions = SyncOptions & {
+  /**
+   * A GitHub App's numeric ID, with `appKey`: what the sync sends is then written by the App, not by whoever
+   * owns `token`, and no `token` is needed. `env('NAME')`.
+   */
+  appId?: Secret
+  /** The App's private key: the PEM itself, or the path to its `.pem` file. `env('NAME')`. */
+  appKey?: Secret
   /** The app's own login, so its comments aren't imported back. */
   bot?: string
   /** A repo to a channel, or to a channel for issues and one for pulls. `mirror` sends board replies back. */
   repos: Record<string, string | { issues?: string; pulls?: string; mirror?: boolean }>
   api?: string
+  /** The clock an App's tokens are kept by. */
+  now?: () => number
 }
 
 /**
  * GitHub: issues, pull requests and their comments come in as threads. Nothing goes back unless a repo mirrors.
- * `token` is one that may comment, needed only where a repo mirrors.
+ * `token` is one that may comment, needed only where a repo mirrors; `appId` and `appKey` name a GitHub App
+ * to comment as instead.
  */
-export const github = (options: GitHubOptions): Provider => declared('github', options, githubWith)
+export const github = (options: GitHubOptions): Provider => {
+  if ((options.appId === undefined) !== (options.appKey === undefined)) throw misuse('invalid_sync', 'A github sync needs "appId" and "appKey" together: the App\'s ID and its private key.')
+  return declared('github', options, githubWith, ['appId', 'appKey'])
+}
+
+/** How long before an App's token runs out a new one is made: no request goes out with one about to end. */
+const APP_TOKEN_MARGIN_MS = 5 * 60_000
 
 function githubWith(options: Resolved<GitHubOptions>): Provider {
+  const api = options.api ?? 'https://api.github.com'
+  let app: GithubApp | undefined
+  if (options.appId !== undefined && options.appKey !== undefined) {
+    try {
+      app = githubApp({ GITHUB_APP_ID: options.appId, [options.appKey.includes('-----BEGIN') ? 'GITHUB_APP_PRIVATE_KEY' : 'GITHUB_APP_KEY_FILE']: options.appKey })
+    } catch (error) {
+      throw new Failure('invalid_config', `A github sync's App can't be used: ${(error as Error).message}`, { hint: '"appId" is the App\'s numeric ID, and "appKey" its private key or the path to it.' })
+    }
+  }
+  /**
+   * The App's token for each repository, kept until it is about to run out, and asked for once however many
+   * requests wait on it. One that couldn't be made is asked for again by the next request.
+   */
+  const tokens = new Map<string, Promise<{ token: string; expiresAt: string }>>()
+  const mint = (repo: string, fetcher: typeof fetch, now: number) => {
+    const [owner, name] = repo.split('/') as [string, string]
+    const to = options.repos[repo]
+    // What the sync does there: comments on issues, and on pull requests where it brings those in.
+    const pulls = typeof to === 'string' || (typeof to === 'object' && to.pulls !== undefined)
+    const made = installationToken(app!, { owner, name, slug: repo }, { issues: 'write', metadata: 'read', ...(pulls ? { pull_requests: 'write' as const } : {}) }, { api, fetch: fetcher, now })
+    tokens.set(repo, made)
+    made.catch(() => tokens.get(repo) === made && tokens.delete(repo))
+    return made
+  }
+  /** What a request to `repo` is signed with: the App's token for it when there is an App, or else `token`. */
+  const bearer = async (repo: string, fetcher: typeof fetch): Promise<string> => {
+    if (!app) return `Bearer ${options.token}`
+    const now = (options.now ?? Date.now)()
+    const held = tokens.get(repo) ?? mint(repo, fetcher, now)
+    let token = await held
+    // About to run out: a new one, made once, whoever else was waiting on the old one.
+    if (Date.parse(token.expiresAt) - now < APP_TOKEN_MARGIN_MS) token = await (tokens.get(repo) === held ? mint(repo, fetcher, now) : tokens.get(repo)!)
+    return `Bearer ${token.token}`
+  }
   // GitHub has no API that attaches a file to an issue or a comment: each file is named, and stays on the board.
   const named = (message: { text: string; attachments: { name: string; size: number }[] }, text: string) => withLines(text, message.attachments.map((file) => noteOut(`${file.name} (${sizeOf(file.size)})`, 'GitHub takes no uploads, it is on the board')))
   /**
@@ -200,16 +251,17 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
     },
     async update(external, text, place, fetcher) {
       if (!external.startsWith('comment:')) return
-      await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${place.split('|')[0]}/issues/comments/${external.slice(8)}`, { method: 'PATCH', headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }, body: JSON.stringify({ body: text }) })
+      const repo = place.split('|')[0]!
+      await send(fetcher, `${api}/repos/${repo}/issues/comments/${external.slice(8)}`, { method: 'PATCH', headers: { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }, body: JSON.stringify({ body: text }) })
     },
     async remove(external, place, fetcher) {
       if (!external.startsWith('comment:')) return
-      await fetcher(`${options.api ?? 'https://api.github.com'}/repos/${place.split('|')[0]}/issues/comments/${external.slice(8)}`, { method: 'DELETE', headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' } })
+      const repo = place.split('|')[0]!
+      await fetcher(`${api}/repos/${repo}/issues/comments/${external.slice(8)}`, { method: 'DELETE', headers: { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'user-agent': 'muster' } })
     },
     async catchUp(since, fetcher) {
-      if (!options.token) return []
+      if (!options.token && !app) return []
       const out: Inbound[] = []
-      const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'user-agent': 'muster' }
       const cuts: { resume: string; skipped?: string }[] = []
       const when = (list: any[]) => list.map((each) => Date.parse(String(each.updated_at)))
       /**
@@ -217,13 +269,14 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
        * read so far, not by its number: something changed during the read moves to the end, not past a page already
        * read. Only a whole page changed in the same second goes by number, and that may run a few pages past the cap.
        */
-      const read = async (path: string) => {
+      const read = async (repo: string, path: string) => {
+        const headers = { authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'user-agent': 'muster' }
         const out: any[] = []
         let from = since
         let page = 1
         for (let asked = 1; asked <= GITHUB_CATCHUP_PAGES + CATCHUP_EXTRA_PAGES; asked++) {
           if (asked > GITHUB_CATCHUP_PAGES && page === 1) break
-          const got = (await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
+          const got = (await send(fetcher, `${api}/repos/${repo}/${path}since=${encodeURIComponent(from)}&sort=updated&direction=asc&per_page=100&page=${page}`, { headers })) as any[]
           // Not a list is not "nothing changed": refused, the next catch-up asks from the same point.
           if (!Array.isArray(got)) throw new Failure('platform_refused', 'GitHub did not answer with a list.')
           out.push(...got)
@@ -240,7 +293,7 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
       }
       for (const repo of Object.keys(options.repos)) {
         // Issues and pull requests first, so a comment on one opened while the board was down lands in its thread.
-        const items = await read(`${repo}/issues?state=all&`)
+        const items = await read(repo, 'issues?state=all&')
         const parents = new Map<string, Inbound['parent']>()
         for (const item of items) {
           const isPull = item.pull_request !== undefined
@@ -253,7 +306,7 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
           const filedNow = filing(item)
           out.push({ ...root, author: '', self: false, ...(item.updated_at ? { at: String(item.updated_at) } : {}), id: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, kind: 'labels', external: `catchup:state:${repo}#${item.number}:${item.updated_at ?? ''}`, labels: { state: root.labels!.state!, ...filedNow.labels }, owns: filedNow.owns })
         }
-        const comments = await read(`${repo}/issues/comments?`)
+        const comments = await read(repo, 'issues/comments?')
         for (const comment of comments) {
           const number = String(comment.issue_url ?? '').split('/').pop()
           const isPull = String(comment.html_url ?? '').includes('/pull/')
@@ -266,21 +319,22 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
     },
     mirrors(place) {
       const { to } = mapping(place)
-      return typeof to === 'object' && to.mirror === true && options.token !== undefined
+      return typeof to === 'object' && to.mirror === true && (options.token !== undefined || app !== undefined)
     },
     async deliver(message, target, fetcher) {
-      const headers = { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' }
+      const headersFor = async (repo: string) => ({ authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' })
       if (target.threadExternal === null) {
         // A thread started on the board opens an issue: its first line is the title.
         const repo = target.place.split('|')[0]!
+        const headers = await headersFor(repo)
         const [title, ...rest] = message.text.split('\n')
-        const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
+        const made = await send(fetcher, `${api}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
         return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${made.number}` } }
       }
-      const [repo, number] = target.threadExternal.split('#')
-      const made = await send(fetcher, `${options.api ?? 'https://api.github.com'}/repos/${repo}/issues/${number}/comments`, {
+      const [repo, number] = target.threadExternal.split('#') as [string, string]
+      const made = await send(fetcher, `${api}/repos/${repo}/issues/${number}/comments`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${options.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' },
+        headers: await headersFor(repo),
         body: JSON.stringify({ body: named(message, message.text) }),
       })
       return { external: `comment:${made.id}` }
