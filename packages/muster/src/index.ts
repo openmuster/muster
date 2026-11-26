@@ -24,3 +24,4 @@ export { boardPolicy, applyPolicy, SANDBOX_ROUTES, type NetworkPolicy } from './
 export { vercel, cloudflare, type CloudRunner, type CloudRequest } from './runner/cloud.ts'
 export { loadWorkflows, workflowsPath, type Workflow, type WorkflowStep, type Workers } from './daemon/workflows.ts'
 export { workflowResult } from './daemon/steps.ts'
+export { fenced } from './daemon/runs.ts'
