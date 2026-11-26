@@ -7,6 +7,14 @@ versions are affected.
 
 ### Added
 
+- A run's `started <workflow>: …` reply keeps up with the run: once a task is
+  taken, the daemon edits it to say where each task is (`#42 completed, #43
+  claimed, #44 waiting`), and labels it `progress=open` while the run works
+  and `progress=done` once it is summed up. Synced threads on Slack, GitHub
+  and Notion show the one comment changing; Linear keeps it as first written.
+  The summary is still a reply of its own. Runs started before this keep
+  their reply as it is. See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
+
 - Another round on the same pull request: a `--push` task run again after it
   pushed, reopened with `--round` or answered after it blocked, starts its
   sandbox on `mu/task-<id>` and adds to it, so the pull request stays the
