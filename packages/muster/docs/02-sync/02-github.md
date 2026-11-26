@@ -93,6 +93,41 @@ Files don't sync with GitHub:
   board message's files are named at the end of its text, and stay on the
   board: `[file not sent: fix.patch (2 KB): GitHub takes no uploads, it is on the board]`.
 
+## Who the comments are by
+
+What the sync sends is written by whoever its credential belongs to. A
+personal access token in `token` makes every comment yours. To have them
+written by a GitHub App, name the App in place of the token:
+
+```ts board.ts
+import { board, env, github } from 'muster'
+
+export default board({
+  sync: {
+    gh: github({
+      secret: env('GITHUB_WEBHOOK_SECRET'),
+      appId: env('GITHUB_APP_ID'),
+      appKey: env('GITHUB_APP_KEY_FILE'),
+      repos: { 'acme/web': { issues: 'web/issues', mirror: true } },
+    }),
+  },
+})
+```
+
+- `appId` is the App's numeric ID. `appKey` is its private key: the path to
+  the `.pem` file, or the key itself (`GITHUB_APP_PRIVATE_KEY`). They are the
+  same variables a worker with `--push` reads, so one App can open the pull
+  requests and write the comments.
+- The board makes a token for each repository as it needs one, for that
+  repository alone, and a new one before it runs out within the hour. The App
+  must be installed on the repository with write on Issues, and on Pull
+  requests too where the sync brings those in.
+- Catch-up reads with the App as well, so no `token` is needed. With both set,
+  the App is used.
+- Leave `bot` unset when the same App opens pull requests you want as threads:
+  `bot` drops everything that login did. The board knows the comments it sent
+  without it.
+
 ## Set it up
 
 1. Create a GitHub App, or a repository webhook plus a token.
@@ -103,11 +138,11 @@ Files don't sync with GitHub:
 4. Point the webhook at `https://<host>/api/board/webhooks/gh` with content
    type `application/json`, and set a secret.
 5. Name the secret in the board module's `github()` with `env()`, and the
-   token too if anything goes back. Restart what runs the module.
+   token or the App too if anything goes back. Restart what runs the module.
 
 ## Catching up
 
-After downtime, and when a token is set, the ticker asks each mapped repository for
+After downtime, and when a token or an App is set, the ticker asks each mapped repository for
 the issues and pull requests updated since the last event it received, then
 their comments. An issue opened while the board was down arrives whole, with
 its title, body and labels, and its comments as replies. A close or merge

@@ -16,8 +16,8 @@ each step.
 
 | File | What it is |
 | --- | --- |
-| `board.ts` | Sync from Slack, Linear, GitHub and Notion, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `round`, `settled`, `resume`, `needs-me` |
-| `workflows.json` | `triage`, one step that turns a report into a card, and `card`, spec, work and review, with `--push` for the work step only |
+| `board.ts` | Sync from Slack, Linear, GitHub and Notion, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `stage`, `planned`, `plan-stopped`, `declined`, `round`, `settled`, `resume`, `needs-me` |
+| `workflows.json` | `triage`, one step that turns a report into a card; `planning`, one step that shapes a report with you over rounds; and `card`, spec, work and review, with `--push` for the work step only |
 
 ```bash
 cp workflows.json ~/.config/muster/
@@ -31,10 +31,19 @@ mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDB
 
 | Hold | What is going on |
 | --- | --- |
+| `backlog` | Parked: the source's status says so (Notion's Not started, Linear's Backlog), or someone trusted labelled it `stage=backlog`. Nothing runs until it is ready |
+| `planning` | Notion's Planning, Linear's Triage, or `stage=planning`: the `planning` workflow's agent answers on the card with questions and a draft, and each trusted reply is its next round. Nothing is built until it is ready, and then the triage writes the spec from the plan |
 | `triage` | The `triage` workflow's agent reads the report and the repository, and writes a card: a title on the first line, what to change and how to check it. Or it fails, with why, and the card stays as it is |
 | `approval` | The card's spec is a reply on it, and the report's author isn't trusted. A trusted person labels it `approved=yes`: `mu label 12 approved=yes`, or in the inspector |
 | `working` | The `card` workflow runs on that spec reply: spec, work, review. The work pushes `mu/task-<id>` and opens a pull request. Its screenshots are copied onto the card when the run ends |
-| `edited` | The report's author changed it. It is triaged again, from the new text |
+| `duplicate` | The triage found the same request on another card, and named it. Its spec is on the card: someone trusted labels it `approved=yes` to work it anyway |
+| `declined` | The triage made no card: nothing to change here, or its agent stopped, as its summary on the card says. Edit the report, or move it to ready again, to try again |
+| `edited` | The report's author changed it. It is triaged again, from the new text, or parked again if it was parked |
+
+The loop writes In progress back to Notion or Linear when the work starts,
+and Done when the review approves it; then the card is completed. The stages
+and the statuses are `SOURCES` in `board.ts`: see
+[Stages](../../packages/muster/docs/03-guides/20-a-feedback-loop.md#stages).
 
 A reply on the card by someone trusted, once the run has ended, is another
 round: it goes to the work task, the work and its review are sent back, and
@@ -91,6 +100,7 @@ ten a round, from the card workflow's own workers.
 
 Covered by tests (`packages/muster/test/loop.test.ts`), with the sandboxes as
 stand-ins. Run live on 25 Nov 2026 from an app's token, a Linear team and the
-inspector, through rounds on the same pull request and an approval; not yet
-from Slack or GitHub issues. See "What has been run for real" in the
+inspector, through rounds on the same pull request and an approval; and on 26
+Nov 2026 from Slack, with the thread shown as worked on, and with replies
+written by a GitHub App and a Linear application. See "What has been run for real" in the
 repository's README.

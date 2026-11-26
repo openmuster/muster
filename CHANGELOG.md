@@ -5,7 +5,63 @@ versions are affected.
 
 ## Unreleased
 
+### Fixed
+
+- `templates/loop` writes a Linear issue's status as the sync's own OAuth app
+  when one is set up, not with a personal `LINEAR_API_KEY` left in the
+  environment: comments and status changes come from the same app. It asks
+  for the app's token with the sync's scopes (`LINEAR_SCOPES`, now exported),
+  since a token asked for with other scopes ends the sync's, and asks again
+  once when Linear says a token was ended.
+
 ### Added
+
+- Linear sync can show an issue being worked on with the application's agent
+  session: `linear({ agent: true, appSecret: env('LINEAR_APP_WEBHOOK_SECRET'), … })`,
+  for an application with "Agent session events" turned on for its webhook.
+  While a workflow run on a synced issue is open, the session says where the
+  run is, and its response is the run's last words; the run's `started …`
+  reply is then not a comment. The calls were run against a live workspace on
+  26 Nov 2026. See
+  [Show an issue being worked on](./packages/muster/docs/02-sync/03-linear.md#show-an-issue-being-worked-on).
+
+- A workflow step's `title`: what its pull request and commit are called,
+  recorded on the task by the daemon and never in the agent's text;
+  `{on.title}` is the first line of the message the run was asked on.
+  `templates/loop`'s work step has `"title": "{on.title}"`, so a card's pull
+  request is titled by its spec, not "Make the change for card #12."
+- Slack sync can show a thread being worked on with Slack's own "Working…":
+  `slack({ agent: true, … })`, for a Slack app declared an agent. While a
+  workflow run on a synced thread is open, the board sets the thread's agent
+  session to `processing`, and to `active` once the run's summary is posted;
+  the run's `started …` reply is then not posted to Slack. Run against a
+  live workspace on 26 Nov 2026. See
+  [Show a thread being worked on](./packages/muster/docs/02-sync/04-slack.md#show-a-thread-being-worked-on).
+
+- Linear sync can comment as an app of its own: `linear({ clientId:
+  env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), … })` in
+  place of `token`, for an OAuth application with client credentials tokens
+  turned on. The board asks Linear for the app's token and renews it, so
+  comments and issues are by the app and not by whoever owns a personal API
+  key. `templates/loop` now uses it. Run against a live workspace on 26 Nov
+  2026.
+  See [Who the comments are by](./packages/muster/docs/02-sync/03-linear.md#who-the-comments-are-by).
+
+- GitHub sync can comment as a GitHub App: `github({ appId: env('GITHUB_APP_ID'),
+  appKey: env('GITHUB_APP_KEY_FILE'), … })` in place of `token`. Comments,
+  edits, deletes and catch-up then use a token the board makes for each
+  repository, so what the sync writes is by the App and not by whoever owns
+  a personal token. The App needs write on Issues (and on Pull requests where
+  those are mapped). `templates/loop` now uses the App its workers push with.
+  See [Who the comments are by](./packages/muster/docs/02-sync/02-github.md#who-the-comments-are-by).
+
+- A run's `started <workflow>: …` reply keeps up with the run: once a task is
+  taken, the daemon edits it to say where each task is (`#42 completed, #43
+  claimed, #44 waiting`), and labels it `progress=open` while the run works
+  and `progress=done` once it is summed up. Synced threads on Slack, GitHub
+  and Notion show the one comment changing; Linear keeps it as first written.
+  The summary is still a reply of its own. Runs started before this keep
+  their reply as it is. See [Workflows](./packages/muster/docs/01-concepts/16-workflows.md).
 
 - Another round on the same pull request: a `--push` task run again after it
   pushed, reopened with `--round` or answered after it blocked, starts its
@@ -27,6 +83,8 @@ versions are affected.
   reply as often as not, quoted and fenced as `{thread.text}` is. A message
   deleted since, or edited after the request, starts no run
   (`asked_message_changed`).
+- `fenced(whose, text)`: text someone else wrote, quoted in a task as
+  `{thread.text}` is, in a fence longer than any run of backticks in it.
 - `workflowResult(team, id, owner)`: a workflow step's result for code that
   goes on from it, only when the daemon made the task and the run's own
   worker completed it.
@@ -38,6 +96,19 @@ versions are affected.
   [A feedback loop](./packages/muster/docs/03-guides/20-a-feedback-loop.md).
   - Notion is a source too: a page in a mapped database is a report, in
     `cards/notion`, and the card's replies are comments on it.
+  - Stages: a card from Notion or Linear starts where its status says, and
+    only a ready one (Ready, Todo) is triaged; Not started, Backlog,
+    Planning and Triage park it. The loop writes In progress back when the
+    work starts and Done when the review approves, and completes the card.
+    Elsewhere a trusted `stage` label parks and starts a card. A triage
+    that makes no card holds it `declined`, and an edit or a move to ready
+    tries again. The triage is shown the other cards: `related: #36` labels
+    and links them (in Linear too), and `duplicate-of: #36` holds the card
+    `duplicate` until someone trusted approves it. A card in planning
+    (Planning, Triage, `stage=planning`) gets a planner that answers with
+    questions and a draft; each trusted reply is its next round, and the
+    triage writes the spec from the newest plan. See
+    [Stages](./packages/muster/docs/03-guides/20-a-feedback-loop.md#stages).
   - A task of a run answered and unblocked after the run's workers stopped
     gets a worker of its own (`resume`).
   - [Running the feedback loop](./packages/muster/docs/03-guides/21-running-the-loop.md),

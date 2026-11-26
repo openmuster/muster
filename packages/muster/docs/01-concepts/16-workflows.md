@@ -131,6 +131,14 @@ on thread 812; it doesn't run anything itself, and it returns at once.
   way, under `The message #15 this run was asked on, by <actor id>, …`. A
   message deleted since, or edited after the request, starts no run: the
   thread is told why (`asked_message_changed`), and you ask again.
+- **A step's `title` names its pull request.** A task that pushes opens
+  its pull request, and makes its commit, under the step's `title`, as the
+  daemon recorded it when it made the task (a label set since counts for
+  nothing), or its first line when the step has none. `{on.title}` in a
+  title is the first line of the message the run was asked on, and
+  `{thread}` and `{channel}` work too. A title is one line, defused, at most
+  72 characters, and never part of the task's text: no agent reads it.
+  `"title": "{on.title}"`.
 - **`{steps.<key>.result}` is an earlier step's result,** quoted into the
   task as `{thread.text}` is: the same line (`The result of step "plan", #43,
   quoted as written: …`), fence, defusing and cap. A step may name only a
@@ -249,6 +257,21 @@ For a request on thread 812 in `work/api`, the daemon:
 | `implement isn't registered here` | No such name in this daemon's file |
 | `<actor> may not start implement` | The requester isn't in `who` |
 | `implement doesn't run in work/other` | The thread's channel isn't in `channels` |
+
+The `started implement: …` reply keeps up with the run. Once a task is taken,
+the daemon edits it to add a line that says where each task is, and edits it
+again when one changes:
+
+```text
+started implement: 3 tasks in work/api/implement-41
+#42 completed, #43 claimed, #44 waiting
+```
+
+It carries the label `progress=open` while the run works, `progress=done` once
+the run is summed up, and `open` again while a reopened task works. The other
+replies in the table are said once and never change. Sync sends the edits to
+platforms that take them (Slack, GitHub, Notion), so a thread there shows one
+message that changes, not one per step.
 
 A request that was answered is never answered or started again, so a restart
 in the middle makes nothing twice. A request held because the board was busy

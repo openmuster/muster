@@ -43,6 +43,53 @@ than five minutes is refused however well it is signed.
 
 Messages from the app's own bot, named by `bot`, are not imported back.
 
+## Show a thread being worked on
+
+A Slack app declared an agent can show Slack's own "Working…" under a thread.
+With `agent: true`, the board uses that for a thread a workflow run is working
+on, in place of the run's progress message:
+
+```ts board.ts
+import { board, env, slack } from 'muster'
+
+export default board({
+  sync: {
+    chat: slack({
+      secret: env('SLACK_SIGNING_SECRET'),
+      token: env('SLACK_BOT_TOKEN'),
+      agent: true,
+      channels: { C0123456789: 'feedback' },
+    }),
+  },
+})
+```
+
+- While a run on the thread is open, the board sets the thread's agent session
+  to `processing` (`agents.sessions.setStatus`), and tells Slack again before
+  the hour Slack shows it for is up. When no run on the thread is open any
+  more, it sets it to `active`, after the run's summary has been posted.
+- The run's `started …` reply is not posted to Slack, and neither are its
+  edits. Its summary, and every other reply, is posted as before.
+- Slack shows its own words there, "<app> is working", not the board's.
+- A call Slack refuses is tried again a minute later. The thread on the board
+  says where the run is either way.
+
+In the app's settings, turn on the agent feature (the manifest's
+`features.agent_view`), which adds the `assistant:write` scope beside
+`chat:write`, and reinstall the app.
+
+> [!WARNING]
+> Slack says declaring an app an agent can't be undone, and that people have
+> to reload Slack to see it. Try it on an app made for the purpose first.
+
+> [!NOTE]
+> Run against a live workspace on 26 Nov 2026, in a public channel: a message
+> a person posted started a run, "<app> is working" showed under its thread
+> with no message asking for it, and it went when the run was summed up. Not
+> yet seen live: a private channel, a run longer than Slack's hour, and one run
+> handing over to the next on the same thread. Those are covered by tests
+> against a stand-in for Slack's API.
+
 ## Files
 
 - **In:** a file on a Slack message is fetched from `files.slack.com` with

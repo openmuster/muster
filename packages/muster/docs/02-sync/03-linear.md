@@ -25,6 +25,99 @@ A team, by its key, maps to a channel. Sync is two-way unless a team sets
 `token` is a personal API key (`lin_api_…`) or an OAuth access token; muster
 sends each the way Linear expects.
 
+## Who the comments are by
+
+What the sync sends is written by whoever its credential belongs to. A
+personal API key in `token` makes every comment and issue yours. To have them
+written by an app of its own, name an OAuth application in place of the token:
+
+```ts board.ts
+import { board, env, linear } from 'muster'
+
+export default board({
+  sync: {
+    lin: linear({
+      secret: env('LINEAR_WEBHOOK_SECRET'),
+      clientId: env('LINEAR_CLIENT_ID'),
+      clientSecret: env('LINEAR_CLIENT_SECRET'),
+      teams: { ENG: 'eng' },
+    }),
+  },
+})
+```
+
+- In Linear, create an OAuth application (Settings, API, OAuth applications)
+  and turn on **client credentials tokens** for it. Its name and icon are how
+  it shows on comments.
+- The board asks Linear for the app's token when it first needs one, keeps it
+  for the thirty days it lasts, and asks again before it runs out or when
+  Linear ends it early. Nothing is stored: a board that starts again asks
+  again.
+- `scopes` is what the token may do, `['read', 'write']` unless you say.
+  Changing it ends the app's earlier tokens in the workspace.
+- A client credentials token replaces an installation of the same app made
+  through the authorization page. Use an application of its own for the board.
+- Catch-up and files use the app as well, so no `token` is needed. With both
+  set, the app is used.
+
+> [!NOTE]
+> Run against a live workspace on 26 Nov 2026: a board reply arrived on the
+> issue as a comment by the application, under the application's name. A token
+> running out after thirty days, and one ended early, are covered by tests
+> against a stand-in for Linear's API only.
+
+## Show an issue being worked on
+
+An application can have an agent session on an issue, which Linear shows as
+working. With `agent: true`, the board uses that for an issue a workflow run
+is working on, in place of the run's progress message:
+
+```ts board.ts
+import { board, env, linear } from 'muster'
+
+export default board({
+  sync: {
+    lin: linear({
+      secret: env('LINEAR_WEBHOOK_SECRET'),
+      clientId: env('LINEAR_CLIENT_ID'),
+      clientSecret: env('LINEAR_CLIENT_SECRET'),
+      agent: true,
+      appSecret: env('LINEAR_APP_WEBHOOK_SECRET'),
+      teams: { ENG: 'eng' },
+    }),
+  },
+})
+```
+
+- When a run on the issue starts, the board opens a session there
+  (`agentSessionCreateOnIssue`) and says where the run is as a note that the
+  next one replaces. It says it again when the run says something new, and
+  every 25 minutes: Linear takes a session with nothing new for 30 as stale.
+- When no run on the issue is open any more, the session's response is the
+  run's last words, and the session is complete. Linear writes that response
+  on the issue as a comment by the application. A later round on the same
+  card goes on in the same session.
+- The run's `started …` reply is not posted as a comment, and neither are its
+  edits. Its summary, and every other reply, is a comment as before.
+- A comment by the application's own user is not brought in while sessions
+  are on: the response is one, and the board has no ID to know it by.
+- A call Linear refuses is tried again a minute later.
+
+Linear allows sessions only for an application with a webhook of its own. In
+the application's settings, turn on webhooks, point them at the same address
+as the workspace's (`https://<host>/api/board/webhooks/lin`), tick **Agent
+session events** and nothing else, and name the signing secret Linear shows
+there as `appSecret`. The board checks what arrives with it and answers;
+nothing in it is imported. The token needs no more than `read` and `write`.
+
+> [!NOTE]
+> The calls were run against a live workspace on 26 Nov 2026: a session
+> opened on an issue nobody had mentioned the application in, notes, a
+> response that completed it, and a note that made a completed session active
+> again. The board doing it by itself is covered by tests against a stand-in
+> for Linear's API. A person writing in the session's thread is not handled:
+> it reaches the application's webhook, which the board answers and drops.
+
 `bot` is optional: the user ID whose comments are never imported. Set it only
 when the token acts as a user of its own, such as an OAuth app that posts as
 itself rather than as the person who installed it. With a personal API key, that user is you, and naming it would

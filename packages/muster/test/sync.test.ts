@@ -1,9 +1,10 @@
-import { createHmac } from 'node:crypto'
+import { createHmac, createVerify, generateKeyPairSync } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { board, file, github, linear, slack } from '../src/index.ts'
+import { board, env, file, github, linear, slack } from '../src/index.ts'
+import { envNames, resolveSync } from '../src/sync/declare.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
@@ -194,6 +195,144 @@ describe('sync: GitHub', () => {
   })
 })
 
+describe('sync: GitHub as a GitHub App', () => {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+  const HOUR = 60 * 60_000
+  /** A board whose GitHub sync has an App and no token, and a GitHub that makes installation tokens for it. */
+  function appSetup(repos: Parameters<typeof github>[0]['repos'] = { 'acme/web': { issues: 'web/issues', pulls: 'web/prs', mirror: true } }) {
+    const time = clock()
+    const sent: { method: string; url: string; body: any; auth: string }[] = []
+    let made = 9000
+    let minted = 0
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      const call = { method: init?.method ?? 'GET', url: String(url), body: JSON.parse(String(init?.body ?? '{}')), auth: new Headers(init?.headers).get('authorization') ?? '' }
+      sent.push(call)
+      if (call.url.endsWith('/installation')) return Response.json({ id: 77 })
+      if (call.url.endsWith('/app/installations/77/access_tokens')) return Response.json({ token: `ghs_app_${++minted}`, expires_at: new Date(time.now().getTime() + HOUR).toISOString() }, { status: 201 })
+      if (call.method === 'GET') return Response.json([])
+      made += 1
+      return Response.json({ id: made, number: made }, { status: 201 })
+    }) as typeof fetch
+    const gh = github({ secret: SECRET, appId: '4242', appKey: pem, repos, now: () => time.now().getTime() })
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync: { gh }, fetch: fetcher })
+    const team = board({ backend })
+    let delivery = 0
+    const hook = (event: string, payload: unknown) => {
+      const body = JSON.stringify(payload)
+      return backend.syncReceive('gh', { headers: { 'x-github-event': event, 'x-github-delivery': `d-${++delivery}`, 'x-hub-signature-256': `sha256=${sign(SECRET, body)}` }, body })
+    }
+    const mints = () => sent.filter((call) => call.url.endsWith('/access_tokens'))
+    const comments = () => sent.filter((call) => call.url.includes('/issues/') && call.method !== 'GET')
+    return { team, backend, time, sent, gh, fetcher, hook, mints, comments }
+  }
+
+  it('comments as the App, with a token made for that repository alone, and needs no token of a person', async () => {
+    const { team, backend, hook, sent, mints, comments } = appSetup()
+    await backend.syncTick()
+    await hook('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'maya' } })
+    const thread = (await team.readChannel({ channel: 'web/issues' })).threads[0]!
+    await team.reply({ to: thread.message.id, text: 'fixed in #12' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(comments().map((call) => [call.method, call.url, call.auth, call.body])).toEqual([['POST', 'https://api.github.com/repos/acme/web/issues/7/comments', 'Bearer ghs_app_1', { body: 'fixed in #12' }]])
+    // The token was asked for as the App itself: a JWT its key signed, for one repository and what the sync does there.
+    const asked = sent.find((call) => call.url.endsWith('/installation'))!
+    const [head, body, signature] = asked.auth.replace('Bearer ', '').split('.')
+    expect(createVerify('RSA-SHA256').update(`${head}.${body}`).verify(publicKey, Buffer.from(signature!, 'base64url'))).toBe(true)
+    expect(JSON.parse(Buffer.from(body!, 'base64url').toString()).iss).toBe('4242')
+    expect(mints().map((call) => call.body)).toEqual([{ repositories: ['web'], permissions: { issues: 'write', metadata: 'read', pull_requests: 'write' } }])
+  })
+
+  it('asks for no pull request access where a repository only brings in issues', async () => {
+    const { team, backend, hook, mints } = appSetup({ 'acme/web': { issues: 'web/issues', mirror: true } })
+    await backend.syncTick()
+    await hook('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'maya' } })
+    await team.reply({ to: (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message.id, text: 'on it' })
+    await backend.syncTick()
+    expect(mints().map((call) => call.body.permissions)).toEqual([{ issues: 'write', metadata: 'read' }])
+  })
+
+  it('keeps a token until it is about to run out, and edits and deletes with it too', async () => {
+    const { team, backend, time, hook, mints, comments } = appSetup()
+    await backend.syncTick()
+    await hook('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'maya' } })
+    const thread = (await team.readChannel({ channel: 'web/issues' })).threads[0]!
+    const first = await team.reply({ to: thread.message.id, text: 'one' })
+    await backend.syncTick()
+    time.advance(54 * 60_000)
+    await team.edit({ id: first.id, text: 'one, edited' })
+    await backend.syncTick()
+    expect(mints()).toHaveLength(1)
+    // Within five minutes of its end: a new one, before the request that would have gone out with it.
+    time.advance(2 * 60_000)
+    const second = await team.reply({ to: thread.message.id, text: 'two' })
+    await backend.syncTick()
+    await team.remove({ id: second.id })
+    await backend.syncTick()
+    expect(mints()).toHaveLength(2)
+    expect(comments().map((call) => [call.method, call.auth])).toEqual([['POST', 'Bearer ghs_app_1'], ['PATCH', 'Bearer ghs_app_1'], ['POST', 'Bearer ghs_app_2'], ['DELETE', 'Bearer ghs_app_2']])
+  })
+
+  it('makes one token for requests that wait on it together, and asks again after one that could not be made', async () => {
+    const { gh, fetcher, mints, sent } = appSetup()
+    await Promise.all([gh.update!('comment:1', 'a', 'acme/web|issues', fetcher), gh.update!('comment:2', 'b', 'acme/web|issues', fetcher)])
+    expect(mints()).toHaveLength(1)
+    const down = (async () => new Response('{}', { status: 502 })) as typeof fetch
+    const other = appSetup()
+    await expect(other.gh.update!('comment:1', 'a', 'acme/web|issues', down)).rejects.toMatchObject({ reason: 'github_app_failed' })
+    await other.gh.update!('comment:1', 'a', 'acme/web|issues', other.fetcher)
+    expect(other.sent.at(-1)).toMatchObject({ method: 'PATCH', auth: 'Bearer ghs_app_1' })
+    expect(sent.filter((call) => call.method === 'PATCH')).toHaveLength(2)
+  })
+
+  it('reads what changed while the board was down with the App, where no token is set', async () => {
+    const { gh, fetcher, sent } = appSetup()
+    await gh.catchUp!('2026-01-01T00:00:00Z', fetcher)
+    const lists = sent.filter((call) => call.method === 'GET' && call.url.includes('since='))
+    expect(lists.map((call) => call.auth)).toEqual(['Bearer ghs_app_1', 'Bearer ghs_app_1'])
+    expect(lists.map((call) => new URL(call.url).pathname)).toEqual(['/repos/acme/web/issues', '/repos/acme/web/issues/comments'])
+  })
+
+  it('still brings in what the App itself did elsewhere, such as a pull request it opened, and not its own comment twice', async () => {
+    const { team, backend, hook } = appSetup()
+    await backend.syncTick()
+    // A pull request the same App opened for a runner: not something this sync sent, so it is a thread.
+    await hook('pull_request', { action: 'opened', pull_request: { number: 12, title: 'Fix the footer', body: 'Closes #7', state: 'open' }, repository: repo, sender: { login: 'muster-app[bot]' } })
+    expect((await team.readChannel({ channel: 'web/prs' })).threads.map((each) => each.message.text)).toEqual(['Fix the footer\n\nCloses #7'])
+    await hook('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'maya' } })
+    const thread = (await team.readChannel({ channel: 'web/issues' })).threads[0]!
+    await team.reply({ to: thread.message.id, text: 'fixed in #12' })
+    await backend.syncTick()
+    // GitHub tells the board about the comment the sync just made, as written by the App.
+    await hook('issue_comment', { action: 'created', issue: issue(7), comment: { id: 9001, body: 'fixed in #12' }, repository: repo, sender: { login: 'muster-app[bot]' } })
+    expect((await team.readThread({ id: thread.message.id })).replies.map((reply) => reply.text)).toEqual(['fixed in #12'])
+  })
+
+  it('names the App with env(), says which variables it waits for, and takes the key as a path too', async () => {
+    const waiting = github({ secret: env('GITHUB_WEBHOOK_SECRET'), appId: env('GITHUB_APP_ID'), appKey: env('GITHUB_APP_KEY_FILE'), repos: { 'acme/web': { issues: 'web/issues', mirror: true } } })
+    expect(envNames(waiting)).toEqual(['GITHUB_WEBHOOK_SECRET', 'GITHUB_APP_ID', 'GITHUB_APP_KEY_FILE'])
+    const key = join(tempDir(), 'app.pem')
+    writeFileSync(key, pem)
+    const { gh } = resolveSync({ gh: waiting }, { GITHUB_WEBHOOK_SECRET: SECRET, GITHUB_APP_ID: '4242', GITHUB_APP_KEY_FILE: key })
+    // With an App and no token, a repository that mirrors still sends.
+    expect(gh.mirrors('acme/web|issues')).toBe(true)
+    const reason = (make: () => unknown) => {
+      try {
+        make()
+      } catch (error) {
+        return (error as { reason: string }).reason
+      }
+      return 'made'
+    }
+    expect(reason(() => resolveSync({ gh: waiting }, { GITHUB_WEBHOOK_SECRET: SECRET, GITHUB_APP_ID: '4242' }))).toBe('invalid_config')
+    expect(reason(() => github({ secret: SECRET, appId: '4242', repos: {} }))).toBe('invalid_sync')
+    expect(reason(() => github({ secret: SECRET, appId: '4242', appKey: 'not a key', repos: {} }))).toBe('invalid_config')
+    expect(reason(() => github({ secret: SECRET, appId: 'my-app', appKey: pem, repos: {} }))).toBe('invalid_config')
+    // Neither a token nor an App: nothing goes back, as before.
+    expect(github({ secret: SECRET, repos: { 'acme/web': { issues: 'web/issues', mirror: true } } }).mirrors('acme/web|issues')).toBe(false)
+  })
+})
+
 describe('sync: threads started on the board', () => {
   it('with mirror on, a thread posted in a mapped channel opens an issue, replies follow it there, and the issue coming back is not imported twice', async () => {
     const { team, gh, backend, sent } = setup({ mirror: true })
@@ -349,6 +488,105 @@ describe('sync: Linear', () => {
     const message = { text: 'hi', attachments: [] } as unknown as Parameters<ReturnType<typeof linear>['deliver']>[0]
     for (const token of ['lin_api_key', 'lin_oauth_token', 'Bearer lin_oauth_token']) await linear({ secret: SECRET, token, teams: { ENG: 'eng' } }).deliver(message, target, fetcher, () => null)
     expect(auth).toEqual(['lin_api_key', 'Bearer lin_oauth_token', 'Bearer lin_oauth_token'])
+  })
+})
+
+describe('sync: Linear as its own app', () => {
+  const DAY = 24 * 60 * 60_000
+  /** A board whose Linear sync has an app's client ID and secret and no token, and a Linear that makes tokens for it. */
+  function appSetup(options: { scopes?: string[]; ended?: () => string | null; refuse?: () => boolean } = {}) {
+    const time = clock()
+    const tokens: { type: string | null; form: Record<string, string> }[] = []
+    const calls: { auth: string; input: any }[] = []
+    let comment = 0
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === 'https://api.linear.app/oauth/token') {
+        tokens.push({ type: new Headers(init?.headers).get('content-type'), form: Object.fromEntries(new URLSearchParams(String(init?.body))) })
+        if (options.refuse?.()) return Response.json({ error: 'Error', error_description: 'Client does not support the client_credentials grant type' }, { status: 400 })
+        return Response.json({ access_token: `lin_app_${tokens.length}`, token_type: 'Bearer', expires_in: 2591999, scope: 'read write' })
+      }
+      const auth = new Headers(init?.headers).get('authorization') ?? ''
+      // A token Linear ended early: its secret was rotated, or its scopes changed.
+      if (options.ended?.() === auth) return new Response('{"errors":[{"message":"Authentication required"}]}', { status: 401 })
+      calls.push({ auth, input: JSON.parse(String(init?.body)).variables?.input })
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${++comment}` } } } })
+    }) as typeof fetch
+    const lin = linear({ secret: SECRET, clientId: 'client-1', clientSecret: 'shh', teams: { ENG: 'eng' }, now: () => time.now().getTime(), ...(options.scopes ? { scopes: options.scopes } : {}) })
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync: { lin }, fetch: fetcher })
+    const team = board({ backend })
+    /** An issue that came in from Linear, as the board has it. */
+    const issue = async () => {
+      await backend.syncTick()
+      const body = JSON.stringify({ type: 'Issue', action: 'create', data: { id: 'iss-1', identifier: 'ENG-42', title: 'Crash', team: { key: 'ENG' }, creatorId: 'u-nico', state: { name: 'Todo' } } })
+      await backend.syncReceive('lin', { headers: { 'linear-delivery': 'l-1', 'linear-signature': sign(SECRET, body) }, body })
+      return (await team.readChannel({ channel: 'eng' })).threads[0]!.message.id
+    }
+    return { time, tokens, calls, lin, backend, team, issue }
+  }
+
+  it("comments with the app's own token, asked for with its client ID and secret, and needs no token of a person", async () => {
+    const { team, backend, tokens, calls, lin, issue } = appSetup()
+    expect(lin.mirrors('ENG')).toBe(true)
+    await team.reply({ to: await issue(), text: 'on it' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toEqual([{ type: 'application/x-www-form-urlencoded', form: { grant_type: 'client_credentials', scope: 'read,write', client_id: 'client-1', client_secret: 'shh' } }])
+    expect(calls).toEqual([{ auth: 'Bearer lin_app_1', input: { issueId: 'iss-1', body: 'on it' } }])
+  })
+
+  it('keeps the token for its thirty days, and asks for the next one before it runs out', async () => {
+    const { team, backend, time, tokens, calls, issue } = appSetup()
+    const root = await issue()
+    await team.reply({ to: root, text: 'one' })
+    await backend.syncTick()
+    time.advance(29 * DAY)
+    await team.reply({ to: root, text: 'two' })
+    await backend.syncTick()
+    expect(tokens).toHaveLength(1)
+    // Within five minutes of its end.
+    time.advance(DAY - 4 * 60_000)
+    await team.reply({ to: root, text: 'three' })
+    await backend.syncTick()
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => call.auth)).toEqual(['Bearer lin_app_1', 'Bearer lin_app_1', 'Bearer lin_app_2'])
+  })
+
+  it('asks for a new token when Linear ended the one it has, and sends the comment once', async () => {
+    let ended: string | null = null
+    const { team, backend, tokens, calls, issue } = appSetup({ ended: () => ended })
+    const root = await issue()
+    await team.reply({ to: root, text: 'one' })
+    await backend.syncTick()
+    ended = 'Bearer lin_app_1'
+    await team.reply({ to: root, text: 'two' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => [call.auth, call.input.body])).toEqual([
+      ['Bearer lin_app_1', 'one'],
+      ['Bearer lin_app_2', 'two'],
+    ])
+  })
+
+  it('counts a delivery as failed while Linear makes no token, and asks again on the next try', async () => {
+    let refusing = true
+    const { team, backend, tokens, calls, issue } = appSetup({ refuse: () => refusing })
+    await team.reply({ to: await issue(), text: 'on it' })
+    expect(await backend.syncTick()).toMatchObject({ delivered: 0, failed: 1 })
+    refusing = false
+    expect(await backend.syncTick()).toMatchObject({ delivered: 1, failed: 0 })
+    expect(tokens).toHaveLength(2)
+    expect(calls.map((call) => call.auth)).toEqual(['Bearer lin_app_2'])
+  })
+
+  it('asks for the scopes the module names, names the app with env(), and refuses half an app', async () => {
+    const { team, backend, tokens, issue } = appSetup({ scopes: ['read', 'comments:create'] })
+    await team.reply({ to: await issue(), text: 'on it' })
+    await backend.syncTick()
+    expect(tokens[0]!.form.scope).toBe('read,comments:create')
+    const waiting = linear({ secret: env('LINEAR_WEBHOOK_SECRET'), clientId: env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), teams: { ENG: 'eng' } })
+    expect(envNames(waiting)).toEqual(['LINEAR_WEBHOOK_SECRET', 'LINEAR_CLIENT_ID', 'LINEAR_CLIENT_SECRET'])
+    expect(() => linear({ secret: SECRET, clientId: 'client-1', teams: { ENG: 'eng' } })).toThrow(/clientId.*clientSecret/)
+    // Neither a token nor an app: nothing goes back, as before.
+    expect(linear({ secret: SECRET, teams: { ENG: 'eng' } }).mirrors('ENG')).toBe(false)
   })
 })
 

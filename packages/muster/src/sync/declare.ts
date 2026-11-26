@@ -27,7 +27,7 @@ export type SyncOptions = {
 }
 
 /** A platform's options with its secrets read: what the provider itself is made from. */
-export type Resolved<O> = Omit<O, 'secret' | 'token' | 'filter' | 'filesPerDayMB'> & { secret: string; token?: string }
+export type Resolved<O> = { [K in keyof Omit<O, 'secret' | 'token' | 'filter' | 'filesPerDayMB'>]: Exclude<O[K], Env> } & { secret: string; token?: string }
 
 /** The operator's own command as a filter: text in on stdin, text to keep on stdout, a non-zero exit drops it. */
 export function commandFilter(command: readonly string[], from: NodeJS.ProcessEnv = process.env): (text: string) => string | null {
@@ -43,15 +43,18 @@ type Pending = { names: readonly string[]; resolve(key: string, from: NodeJS.Pro
 /**
  * A platform's provider, from options a module wrote. With every secret written out, it is the provider. With
  * one named by `env()`, it is a stand-in that does nothing until the board reads the environment
- * (`resolveSync`), and says which variables it waits for.
+ * (`resolveSync`), and says which variables it waits for. `more` names a platform's own secrets beside
+ * `secret` and `token` (an app's ID and key), read and checked the same way, each of them optional.
  */
-export function declared<O extends SyncOptions>(type: string, options: O, make: (resolved: Resolved<O>) => Provider): Provider {
+export function declared<O extends SyncOptions>(type: string, options: O, make: (resolved: Resolved<O>) => Provider, more: readonly (keyof O & string)[] = []): Provider {
   const what = `A ${type} sync`
   const secretOk = (value: unknown, required: boolean) => (value === undefined && !required) || (typeof value === 'string' && value.length > 0) || isEnv(value)
   if (!secretOk(options.secret, true)) throw misuse('invalid_sync', `${what} needs a "secret": env('NAME'), the variable that holds its webhook signing secret.`)
   if (!secretOk(options.token, false)) throw misuse('invalid_sync', `${what} has a "token" that is neither env('NAME') nor a string.`)
   // "env:NAME" or env('NAME') written as text is a key anyone reading the module could sign with.
-  for (const field of ['secret', 'token'] as const) {
+  const named = ['secret', 'token', ...more] as (keyof O & string)[]
+  for (const field of more) if (!secretOk(options[field], false)) throw misuse('invalid_sync', `${what} has a "${field}" that is neither env('NAME') nor a string.`)
+  for (const field of named) {
     const value = options[field]
     if (typeof value === 'string' && looksNamed(value)) throw misuse('invalid_sync', `${what} has a "${field}" written as the text "${value}": that would be the key itself.`, "Name the variable with env('NAME'), not as a string.")
   }
@@ -65,7 +68,7 @@ export function declared<O extends SyncOptions>(type: string, options: O, make: 
   if (filesPerDayMB !== undefined && (typeof filesPerDayMB !== 'number' || !(filesPerDayMB > 0))) throw misuse('invalid_sync', `${what} has a "filesPerDayMB" that isn't a number of megabytes, more than 0.`)
   const extras = { ...filtered, ...(filesPerDayMB !== undefined ? { filesPerDay: Math.floor(filesPerDayMB * 1024 * 1024) } : {}) }
   const { filter: _filter, filesPerDayMB: _mb, ...rest } = options
-  const fields = (['secret', 'token'] as const).filter((field) => isEnv(options[field]))
+  const fields = named.filter((field) => isEnv(options[field]))
   if (fields.length === 0) return { ...make(rest as unknown as Resolved<O>), ...extras }
   const names = [...new Set(fields.map((field) => nameOf(options[field] as Env)))]
   const notYet = () => {

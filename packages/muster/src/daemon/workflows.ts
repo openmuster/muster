@@ -5,7 +5,7 @@ import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
 import { githubRepo } from '../runner/github.ts'
 
-export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string>; push?: boolean }
+export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string>; push?: boolean; title?: string }
 export type Workers = { count: number; agent: 'claude' | 'codex'; as: string; runner?: 'local' | 'vercel' | 'cloudflare'; repo?: string; push?: boolean; cwd?: string; timeout?: string }
 export type Workflow = { name: string; description: string; who: string[]; channels: string[]; steps: WorkflowStep[]; workers: Workers; timeout?: string }
 
@@ -96,8 +96,9 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
       if (raw.for !== undefined && typeof raw.for !== 'string') fail(`has a step "${key}" whose "for" isn't a string.`)
       if (raw.labels !== undefined && (!isObject(raw.labels) || !Object.values(raw.labels).every((label) => typeof label === 'string'))) fail(`has a step "${key}" whose "labels" aren't k:v strings.`)
       if (raw.push !== undefined && typeof raw.push !== 'boolean') fail(`has a step "${key}" whose "push" isn't true or false.`)
+      if (raw.title !== undefined && (typeof raw.title !== 'string' || !raw.title.trim() || raw.title.length > 200)) fail(`has a step "${key}" whose "title" isn't text of at most 200 characters.`)
       seen.add(key)
-      return { key, text: raw.text as string, ...(raw.needs !== undefined ? { needs: raw.needs as string[] } : {}), ...(raw.for !== undefined ? { for: raw.for as string } : {}), ...(raw.labels !== undefined ? { labels: raw.labels as Record<string, string> } : {}), ...(raw.push !== undefined ? { push: raw.push as boolean } : {}) }
+      return { key, text: raw.text as string, ...(raw.needs !== undefined ? { needs: raw.needs as string[] } : {}), ...(raw.for !== undefined ? { for: raw.for as string } : {}), ...(raw.labels !== undefined ? { labels: raw.labels as Record<string, string> } : {}), ...(raw.push !== undefined ? { push: raw.push as boolean } : {}), ...(raw.title !== undefined ? { title: raw.title as string } : {}) }
     })
     const refused = unreachableResult(steps)
     if (refused) fail(refused)

@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 9
+export const STORE_VERSION = 10
 
 const DDL = `
 create table if not exists events (
@@ -179,6 +179,37 @@ create table if not exists sync_files (
   day text not null,
   bytes integer not null,
   primary key (key, day)
+) without rowid;
+
+-- Each progress message as a sync's platform may see it: whether it is open, its words, and when it last
+-- changed (ms). Kept from the log by the sync itself, which leaves out what a caller held to the board
+-- wrote, as deliveries do. Bookkeeping: not in the log.
+create table if not exists sync_progress (
+  key text not null,
+  message integer not null,
+  thread integer not null,
+  open integer not null,
+  text text not null,
+  at integer not null,
+  primary key (key, message)
+) without rowid;
+create index if not exists sync_progress_open on sync_progress (key, open, at);
+
+-- What each sync last told its platform about a thread being worked on: whether it shows as worked on
+-- there (active), the progress message and its words then, what the platform gave back to find the same
+-- indicator again (state, JSON), when it was last told (ms), which process is telling it now (claim, ms),
+-- and when a call that failed is tried again (retry_at, ms). Bookkeeping: not in the log.
+create table if not exists sync_working (
+  key text not null,
+  thread integer not null,
+  message integer not null,
+  active integer not null,
+  text text not null,
+  state text,
+  refreshed integer not null,
+  claim integer,
+  retry_at integer not null,
+  primary key (key, thread)
 ) without rowid;
 
 -- Reader bookkeeping. Not a board fact: it is not in the log and a fold doesn't rebuild it.

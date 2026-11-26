@@ -3,7 +3,7 @@ import { duration } from '../cli/args.ts'
 import { OPEN_STATES, type PlanTask } from '../core/tasks.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
-import { actorId, channelScope, inScope, LIMITS, WORKFLOWS_PROFILE, type BoardEvent, type By, type Message } from '../model.ts'
+import { actorId, channelScope, inScope, LIMITS, PROGRESS, WORKFLOWS_PROFILE, type BoardEvent, type By, type Message } from '../model.ts'
 import { pushes, STEP_RESULT, type Workflow } from './workflows.ts'
 
 /**
@@ -43,13 +43,19 @@ export type OpenRuns = {
   deferred: Map<number, Reopened>
   /** How many ticks a reopen has been held by something that wasn't the board's answer, by its seq. */
   reopenTries: Map<number, number>
+  /**
+   * Each run's start reply as this daemon last saw it, by request seq, so a tick that changes nothing reads
+   * and writes nothing. `null` for a run that has none to keep up. A daemon that starts again asks the board
+   * for it by the reply's own key.
+   */
+  progress: Map<number, Message | null>
 }
 
 /** A summed-up run going again: its request, and the first and latest reopen of one of its tasks since its last summary. */
 type Reopened = { asked: BoardEvent; first: number; latest: number; at: string }
 
 /** A new daemon's: nothing known yet, so its first tick rebuilds it from the board. */
-export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map(), made: new Set(), reopened: null, reopensRead: 0, deferred: new Map(), reopenTries: new Map() })
+export const openRuns = (): OpenRuns => ({ open: null, tries: new Map(), crews: new Map(), made: new Set(), reopened: null, reopensRead: 0, deferred: new Map(), reopenTries: new Map(), progress: new Map() })
 
 /** How many ticks a request may be held before the daemon gives up on it, says so, and reads on. */
 export const MAX_TRIES = 5
@@ -99,6 +105,8 @@ const said = (error: unknown): string => {
 export const STEP_LABEL = 'workflow.step'
 /** Whether a run's task pushes, as the daemon labelled it when it made the task, when a step says its own. */
 export const PUSH_LABEL = 'workflow.push'
+/** A step's title, as the daemon made its task: what a pull request from it is called. */
+export const TITLE_LABEL = 'workflow.title'
 /** The name a run's workers act under (`workers.as`), as the daemon labelled each task when it made it. */
 export const WORKERS_LABEL = 'workflow.workers'
 
@@ -112,6 +120,12 @@ const BATCH = 20
 const QUOTE = 200
 /** A label on a run's first message once its summary is said, for people to see. The daemon never reads it. */
 export const REPORTED = 'workflow.reported'
+/**
+ * A label on a run's start reply: `open` while the run works, `done` once it is summed up, and `open` again
+ * while a reopened task works. The reply's text says how far the run is, so a thread shows one message that
+ * keeps up instead of one per step.
+ */
+export { PROGRESS }
 
 /**
  * A worker as `mu` on this machine: `MUSTER_BIN` when it is set, or else the same node and CLI the
@@ -154,7 +168,8 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
 
 /**
  * Fills a step's text, in one pass, by plain replacement: `{thread}`, `{thread.text}` (the asking
- * thread's first message, quoted by `threadQuote`), `{channel}`, `{run}` and `{args.<k>}`. A placeholder it
+ * thread's first message, quoted by `threadQuote`), `{on.text}` and `{on.title}` (the message the run was
+ * asked on, quoted, and its first line as a title), `{channel}`, `{run}` and `{args.<k>}`. A placeholder it
  * doesn't know, or an argument nobody gave, is left as written, and what a value says is never read again
  * as a placeholder. `{steps.<key>.result}` is left for the worker that takes the task, so a value that
  * says `{steps.` is changed to say it with a lookalike brace: only the operator's own text names a result.
@@ -230,13 +245,16 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
   const page = await team.events({ after: cursor, filter: { types: ['workflow.requested'] }, limit: BATCH })
   const owner = (await team.whoami()).principal
   const writer = team.as(WORKFLOWS_PROFILE)
-  const say = async (seq: number, thread: number, text: string) => {
+  const say = async (seq: number, thread: number, text: string, progress = false) => {
     // Keyed, so a request read twice is answered once, and synced like any reply: whoever asked may be
     // on a platform. A thread that has gone since takes no answer; a board that is busy or out of reach
     // holds the request, so it is answered next tick and never passed over unanswered.
-    await writer.reply({ to: thread, text, idempotencyKey: `workflow-${seq}-reply` }).catch((error) => {
+    const reply = await writer.reply({ to: thread, text, ...(progress ? { labels: { [PROGRESS]: 'open' } } : {}), idempotencyKey: `workflow-${seq}-reply` }).catch((error) => {
       if (!(error instanceof Failure) || isTransient(error)) throw error
+      return null
     })
+    // Only a run that started has progress to show: a refusal, or a start that failed, is said once and left.
+    if (progress) deps.runs.progress.set(seq, reply)
   }
   let reached = page.cursor
   for (const event of page.events) {
@@ -258,7 +276,7 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
         out.refused.push(event.seq)
       } else {
         const result = await start(team, writer, workflow, { seq: event.seq, at: event.at, channel, thread, on: typeof asked === 'number' ? asked : thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
-        await say(event.seq, thread, result.text)
+        await say(event.seq, thread, result.text, result.failed === undefined)
         if (result.failed === undefined) out.started.push(event.seq)
         else {
           out.refused.push(event.seq)
@@ -403,7 +421,10 @@ async function reportRuns(team: Board, writer: Board, workflows: Workflow[], own
     try {
       const state = await reportOne(team, writer, workflows, owner, deps, event)
       if (state === 'reported') reported.push(seq)
-      if (state !== 'open') open.delete(seq)
+      if (state !== 'open') {
+        open.delete(seq)
+        deps.runs.progress.delete(seq)
+      }
     } catch (error) {
       // Tried again next tick; it stays open, and holds up no other run.
       why ??= `${(event.data as { name?: string }).name} ${seq}: ${(error as Error).message}`
@@ -416,7 +437,7 @@ async function reportRuns(team: Board, writer: Board, workflows: Workflow[], own
 }
 
 /** A run as the board itself wrote it: its first message and its tasks. Null when there is no run to report on. */
-type Run = { name: string; thread: number; first: Message; tasks: RunTask[]; open: RunTask[]; timeout: number }
+type Run = { name: string; channel: string; thread: number; first: Message; tasks: RunTask[]; open: RunTask[]; timeout: number }
 
 /**
  * Reads one request's run from its own channel. What a run is comes from its request and from what the
@@ -451,6 +472,7 @@ async function readRun(team: Board, workflows: Workflow[], owner: string, asked:
   const workflow = workflows.find((each) => each.name === name && runsIn(each.channels, asked.channel!))
   return {
     name,
+    channel: run,
     thread: asked.thread,
     first,
     tasks,
@@ -471,7 +493,10 @@ async function reportOne(team: Board, writer: Board, workflows: Workflow[], owne
   if (run === null) return 'done'
   const { name, first, tasks, open } = run
   const timedOut = Date.parse(first.at) + run.timeout <= deps.now()
-  if (!timedOut && (open.length > 0 || tasks.length === 0)) return 'open'
+  if (!timedOut && (open.length > 0 || tasks.length === 0)) {
+    await showProgress(writer, deps.runs, seq, run, true)
+    return 'open'
+  }
   let mark = upTo
   try {
     const posted = await writer.reply({ to: run.thread, text: summary(name, tasks), idempotencyKey: `workflow-${seq}-report` })
@@ -487,6 +512,8 @@ async function reportOne(team: Board, writer: Board, workflows: Workflow[], owne
     // news, so one that came after that summary is never hidden by it (one before it may be said again).
     if (error.reason === 'idempotency_mismatch') mark = seq
   }
+  // Before the mark: a daemon that stops here comes back to a run not marked yet, and closes it then.
+  await showProgress(writer, deps.runs, seq, run, false)
   await team.cursorSet(reportedCursor(seq), mark)
   // A hint for people reading the run; nothing reads it back.
   await writer.label({ id: first.id, set: { [REPORTED]: String(seq) }, idempotencyKey: `workflow-${seq}-reported` }).catch((error) => {
@@ -579,7 +606,10 @@ async function reportReopened(team: Board, writer: Board, workflows: Workflow[],
     try {
       const state = await updateOne(team, writer, workflows, owner, deps, reopen)
       if (state === 'updated') updated.push(seq)
-      if (state !== 'open') going.delete(seq)
+      if (state !== 'open') {
+        going.delete(seq)
+        deps.runs.progress.delete(seq)
+      }
     } catch (error) {
       // Tried again next tick; it stays going, and holds up no other run.
       why ??= `${(reopen.asked.data as { name?: string }).name} ${seq}: ${(error as Error).message}`
@@ -633,7 +663,10 @@ async function updateOne(team: Board, writer: Board, workflows: Workflow[], owne
   const run = await readRun(team, workflows, owner, reopen.asked)
   if (run === null) return 'done'
   const timedOut = Date.parse(reopen.at) + run.timeout <= deps.now()
-  if (!timedOut && (run.open.length > 0 || run.tasks.length === 0)) return 'open'
+  if (!timedOut && (run.open.length > 0 || run.tasks.length === 0)) {
+    await showProgress(writer, deps.runs, seq, run, true)
+    return 'open'
+  }
   try {
     // Keyed by the reopen it answers: one update for it, and a new one for a later reopen.
     await writer.reply({ to: run.thread, text: summary(run.name, run.tasks, true), idempotencyKey: `workflow-${seq}-report-${reopen.latest}` })
@@ -641,8 +674,56 @@ async function updateOne(team: Board, writer: Board, workflows: Workflow[], owne
     // As for the first summary: said before the daemon stopped, or a thread that has gone.
     if (!(error instanceof Failure) || (error.reason !== 'idempotency_mismatch' && error.reason !== 'not_found')) throw error
   }
+  await showProgress(writer, deps.runs, seq, run, false)
   await team.cursorSet(reportedCursor(seq), Math.max(upTo, reopen.latest))
   return 'updated'
+}
+
+/** What a run's start reply says when it is written: the words its key was used for, so the same words find it again. */
+const startedText = (name: string, tasks: number, run: string) => `started ${name}: ${tasks} tasks in ${run}`
+
+/**
+ * A run's start reply as it reads now: what it said when the run started, and under it, once a task has
+ * been taken, where each task is. Only what the board itself keeps of each task, never what a worker wrote.
+ */
+function progressText(run: Run): string {
+  const head = startedText(run.name, run.tasks.length, run.channel)
+  if (run.tasks.every((task) => task.state === 'waiting' || task.state === 'ready')) return head
+  return `${head}\n${run.tasks.map((task) => `#${task.id} ${task.stuck !== undefined ? "won't start" : task.state}`).join(', ')}`
+}
+
+/**
+ * Keeps a run's start reply up with the run: its label says whether the run is working, and its text where
+ * each task is. The reply is found by the key it was written under, with the words it was written with, so
+ * nothing more is stored; a run started before replies were labelled answers with a mismatch, and is left
+ * as it is. The label goes first, since it needs no revision: a person's edit in between can cost the text,
+ * never the label. Writes nothing when nothing changed.
+ */
+async function showProgress(writer: Board, runs: OpenRuns, seq: number, run: Run, open: boolean, again = true): Promise<void> {
+  try {
+    let reply = runs.progress.get(seq)
+    if (reply === undefined) {
+      reply = await writer.reply({ to: run.thread, text: startedText(run.name, run.tasks.length, run.channel), labels: { [PROGRESS]: 'open' }, idempotencyKey: `workflow-${seq}-reply` })
+      runs.progress.set(seq, reply)
+    }
+    if (reply === null) return
+    const state = open ? 'open' : 'done'
+    if (reply.labels[PROGRESS] !== state) {
+      reply = await writer.label({ id: reply.id, set: { [PROGRESS]: state } })
+      runs.progress.set(seq, reply)
+    }
+    const text = progressText(run)
+    if (reply.text !== text) runs.progress.set(seq, await writer.edit({ id: reply.id, text, ifRevision: reply.revision }))
+  } catch (error) {
+    // A board that is busy or out of reach is tried again next tick, with the run still open.
+    if (!(error instanceof Failure) || isTransient(error)) throw error
+    // Edited since it was read: read again, once, as a run being summed up has no next tick. Anything else
+    // (no such reply, a thread that has gone, a key used for other words) is the same next time, so the run
+    // goes on without it.
+    if (error.reason !== 'revision_conflict') return void runs.progress.set(seq, null)
+    runs.progress.delete(seq)
+    if (again) await showProgress(writer, runs, seq, run, open, false)
+  }
 }
 
 /**
@@ -653,6 +734,18 @@ async function updateOne(team: Board, writer: Board, workflows: Workflow[], owne
 function defuse(text: string): string {
   return text.replaceAll('@', '\uFF20').replaceAll('<', '\uFF1C').replaceAll('>', '\uFF1E').replaceAll('![', '\uFF01[').replaceAll('](', '] (')
 }
+
+/**
+ * A step's title as the daemon records it on the task: one line, defused, with no backticks or markdown
+ * heading marks, at most TITLE characters. A worker titles the step's pull request and commit by it.
+ */
+export function titleLine(text: string): string {
+  const line = text.split('\n').map((each) => each.trim()).find(Boolean) ?? ''
+  return cut(defuse(line.replace(/^#+\s*/, '').replaceAll('`', "'").replace(/\s+/g, ' ').trim()), TITLE)
+}
+
+/** How long a step's title may be: what a pull request's title shows whole. */
+const TITLE = 72
 
 /** At most `most` characters, never splitting one, with `…` where it was cut. */
 function cut(text: string, most: number): string {
@@ -754,14 +847,17 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
   // A worker's token reaches the run's channel alone, so what it needs of the asking thread is copied in.
   const threadText = workflow.steps.some((step) => step.text.includes('{thread.text}')) ? threadQuote((await team.readThread({ id: on.thread })).message) : undefined
   // The message the run was asked on, a reply as often as not: quoted as it was when it was asked on, or no run.
-  const onText = workflow.steps.some((step) => step.text.includes('{on.text}')) ? askedQuote(await askedMessage(team, on)) : undefined
+  const asked = workflow.steps.some((step) => step.text.includes('{on.text}') || step.title?.includes('{on.title}')) ? await askedMessage(team, on) : undefined
+  const onText = asked && workflow.steps.some((step) => step.text.includes('{on.text}')) ? askedQuote(asked) : undefined
+  // A step's title is never in its text, so no agent reads it as the operator's: the runner names a pull request by it.
+  const titleOf = (title: string) => titleLine(title.replaceAll('{on.title}', asked ? asked.text.split('\n').map((each) => each.trim()).find(Boolean) ?? '' : '').replaceAll('{thread}', String(on.thread)).replaceAll('{channel}', on.channel))
   // Whether a step says its own `push`: then every task says whether it pushes, as the board's own record
   // of what the daemon made, which the worker reads from the task's first event and never from its labels now.
   const perStep = workflow.steps.some((step) => step.push !== undefined)
   const tasks: PlanTask[] = workflow.steps.map((step) => ({
     key: step.key,
     text: fillStep(step.text, { thread: on.thread, ...(threadText !== undefined ? { threadText } : {}), ...(onText !== undefined ? { onText } : {}), channel: on.channel, run, args: on.args }),
-    labels: { ...step.labels, ...labels, [STEP_LABEL]: step.key, [WORKERS_LABEL]: workflow.workers.as, ...(perStep ? { [PUSH_LABEL]: String(step.push ?? workflow.workers.push === true) } : {}) },
+    labels: { ...step.labels, ...labels, [STEP_LABEL]: step.key, [WORKERS_LABEL]: workflow.workers.as, ...(perStep ? { [PUSH_LABEL]: String(step.push ?? workflow.workers.push === true) } : {}), ...(step.title !== undefined && titleOf(step.title) ? { [TITLE_LABEL]: titleOf(step.title) } : {}) },
     ...(step.needs ? { needs: step.needs } : {}),
     ...(step.for !== undefined ? { for: step.for } : {}),
   }))
@@ -814,5 +910,5 @@ async function start(team: Board, writer: Board, workflow: Workflow, on: Request
     if (ended) return ended
     await writer.post({ channel: run, text: `${workflow.name}, asked for by ${actorId(on.by)} on #${on.thread}`, labels: { ...labels, thread: String(on.thread) }, idempotencyKey: `workflow-${on.seq}-run`, noSync: true })
   }
-  return { text: `started ${workflow.name}: ${tasks.length} tasks in ${run}` }
+  return { text: startedText(workflow.name, tasks.length, run) }
 }
