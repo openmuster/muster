@@ -19,6 +19,23 @@ const CLAIM_STALE_MS = 2 * SEND_MS
 type Row = { thread: number; message: number; active: number; text: string; state: string | null; refreshed: number; claim: number | null; retry_at: number }
 
 /**
+ * A reply's words as a platform may see them, up to a place in the log: what it was posted with, or its
+ * latest edit, by a caller not held to the board. Null when it was posted held to the board, or is gone.
+ */
+function syncedText(ctx: Context, thread: number, message: number, upTo: number): string | null {
+  const rows = ctx.db.raw.prepare("select * from events where thread = ? and seq <= ? and type in ('message.posted', 'message.edited', 'message.deleted') order by seq desc").all(thread, upTo) as Parameters<typeof toEvent>[0][]
+  for (const row of rows) {
+    const event = toEvent(row)
+    const data = event.data as Record<string, any>
+    if (event.type === 'message.posted' ? event.seq !== message : data.id !== message) continue
+    if (event.type === 'message.deleted') return null
+    if (event.type === 'message.posted') return data.noSync ? null : String(data.text ?? '')
+    if (!data.noSync) return String(data.text ?? '')
+  }
+  return null
+}
+
+/**
  * Takes in what the log says about progress messages since this platform's place in it, held to what
  * deliveries are held to: a message, an edit or a label change by a caller held to the board (`noSync`), or
  * one that came from this platform, changes nothing here, so nothing such a caller writes is shown outside.
@@ -60,9 +77,10 @@ function takeIn(ctx: Context, key: string): void {
         if (label === undefined) continue
         if (known(data.id)) ctx.db.raw.prepare('update sync_progress set open = ?, at = ? where key = ? and message = ?').run(label === 'open' ? 1 : 0, at, key, data.id)
         else if (label !== null && event.thread !== null && event.thread !== data.id) {
-          // Labelled after it was written: its words are what a delivery of it would carry, if it is one that goes out.
-          const message = ctx.db.raw.prepare('select text from messages where id = ? and deleted = 0 and no_sync = 0').get(data.id) as { text: string } | undefined
-          if (message) ctx.db.raw.prepare('insert or replace into sync_progress (key, message, thread, open, text, at) values (?, ?, ?, ?, ?, ?)').run(key, data.id, event.thread, label === 'open' ? 1 : 0, message.text, at)
+          // Labelled after it was written: its words are the last a caller that may sync gave it, read from the
+          // log and never from the message as it stands, which a caller held to the board may have edited since.
+          const text = syncedText(ctx, event.thread, data.id as number, event.seq)
+          if (text !== null) ctx.db.raw.prepare('insert or replace into sync_progress (key, message, thread, open, text, at) values (?, ?, ?, ?, ?, ?)').run(key, data.id, event.thread, label === 'open' ? 1 : 0, text, at)
         }
       }
     }

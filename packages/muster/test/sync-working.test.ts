@@ -211,12 +211,21 @@ describe('sync: a thread being worked on, shown on a platform that can show it',
       await held.label({ id: progress.id, set: { progress: 'done' } })
       await backend.syncTick()
       expect(steps()).toEqual(['start'])
+      // A message it edited, labelled afterwards by a caller that may sync: shown with the words it had before.
+      await held.edit({ id: plain.id, text: 'another secret' })
+      await daemon.label({ id: plain.id, set: { progress: 'open' } })
+      await backend.syncTick()
+      expect(told.at(-1)).toMatchObject({ step: 'text', text: 'notes, not progress' })
+      await daemon.label({ id: plain.id, set: { progress: 'done' } })
+      await backend.syncTick()
       // The daemon's own closing goes out, with the words the platform last had from a caller that may sync.
       await daemon.label({ id: progress.id, set: { progress: 'open' } })
       await daemon.label({ id: progress.id, set: { progress: 'done' } })
       await backend.syncTick()
       expect(told.map((each) => [each.step, each.text])).toEqual([
         ['start', 'started card: 3 tasks in general/card-9'],
+        ['text', 'notes, not progress'],
+        ['text', 'started card: 3 tasks in general/card-9'],
         ['end', 'started card: 3 tasks in general/card-9'],
       ])
     } finally {
