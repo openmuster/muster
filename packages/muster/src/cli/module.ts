@@ -3,7 +3,7 @@
 //
 // One rule makes everything else work: a process holds one copy of muster. A board made by another copy
 // throws that copy's `Failure`, which this copy's server doesn't recognise, so a `not_found` would leave as a 500.
-//   - The module has no `muster` of its own (a bare ~/.config/muster/board.ts): `import 'muster'` is
+//   - The module has no `muster` of its own (a bare ~/.config/muster/board.ts): `import '@openmuster/muster'` is
 //     answered with this copy, by a resolve hook that only steps in when Node itself finds nothing.
 //   - The module's folder has its own `muster`, another install: the process becomes that install's `mu`
 //     (exec, same pid), so its module and its CLI are one copy again.
@@ -103,7 +103,7 @@ const real = (path: string) => {
   }
 }
 
-/** This copy: the package's root on disk, and the URL its library answers `import 'muster'` with. */
+/** This copy: the package's root on disk, and the URL its library answers `import '@openmuster/muster'` with. */
 export function self(): { root: string; entry: string } {
   const here = import.meta.url
   // From source (the tests run the CLI from src): src/cli/module.ts, beside src/index.ts.
@@ -111,6 +111,9 @@ export function self(): { root: string; entry: string } {
   // Built: a chunk in dist/, beside dist/index.js, which shares its chunks with the CLI.
   return { root: real(fileURLToPath(new URL('../', here))), entry: new URL('./index.js', here).href }
 }
+
+/** What a module imports muster as: its name on npm, and the bare name from before it was published there. */
+const NAMES = ['@openmuster/muster', 'muster']
 
 type Install = { root: string; json: string; version: string; protocol: unknown; bin: string | null }
 
@@ -120,8 +123,9 @@ type Install = { root: string; json: string; version: string; protocol: unknown;
  */
 export function musterFor(path: string): Install | null {
   for (let dir = dirname(path); ; dir = dirname(dir)) {
-    const json = join(dir, 'node_modules', 'muster', 'package.json')
-    if (existsSync(json)) {
+    // The name it is published under, then the one a release tarball installed before it was on npm.
+    const json = NAMES.map((name) => join(dir, 'node_modules', ...name.split('/'), 'package.json')).find((file) => existsSync(file))
+    if (json) {
       const root = real(dirname(json))
       let read: { version?: string; musterModule?: unknown; bin?: Record<string, string> } = {}
       try {
@@ -151,7 +155,7 @@ export function plan(path: string, env: NodeJS.ProcessEnv): Plan {
     throw new Failure('module_two_copies', `${path} resolves muster to ${found.root}, but this mu, exec'd from another, is ${me.root}.`, { hint: "Something between them links one install to another: run the project's own mu." })
   }
   if (found.protocol !== MODULE_PROTOCOL) {
-    throw new Failure('module_version_skew', `${path} has muster ${found.version} at ${found.root}, the first node_modules/muster above it, and that one can't run a board module. This mu is ${VERSION}.`, {
+    throw new Failure('module_version_skew', `${path} has muster ${found.version} at ${found.root}, the first muster in a node_modules above it, and that one can't run a board module. This mu is ${VERSION}.`, {
       hint: `Update muster in that project to a release that loads board modules, or remove ${found.root} so this mu loads the module itself.`,
       data: { module: path, theirs: { version: found.version, root: found.root }, ours: { version: VERSION, root: me.root } },
     })
@@ -274,7 +278,7 @@ export const refusal = () => refused
 
 let hooked = false
 
-/** `import 'muster'` from a module that has none of its own is answered with this copy. */
+/** `import '@openmuster/muster'` from a module that has none of its own is answered with this copy, under its name on npm or the bare `muster` of before. */
 function hook() {
   if (hooked) return
   hooked = true
@@ -284,7 +288,7 @@ function hook() {
       try {
         return next(specifier, context)
       } catch (error) {
-        if (specifier === 'muster' && (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND') return { url: entry, shortCircuit: true }
+        if (NAMES.includes(specifier) && (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND') return { url: entry, shortCircuit: true }
         throw error
       }
     },
@@ -328,7 +332,7 @@ export async function loadBoard(found: ModulePath): Promise<Board> {
   }
   const team = (exported.default ?? exported.team) as (Board & Record<symbol, unknown>) | undefined
   const copy = (team !== null && typeof team === 'object' ? team[Symbol.for('muster.copy')] : undefined) as { version: string; url: string } | undefined
-  if (!copy) throw new Failure('module_not_a_board', `${path} exports no board.`, { hint: "export default board({ ... }), or export const team = board({ ... }), with board from 'muster'." })
+  if (!copy) throw new Failure('module_not_a_board', `${path} exports no board.`, { hint: "export default board({ ... }), or export const team = board({ ... }), with board from '@openmuster/muster'." })
   if (copy !== COPY) {
     throw new Failure('module_two_copies', `${path} made its board with another copy of muster (${copy.version}, ${copy.url}). This mu is ${VERSION}.`, {
       hint: "Something the module imports brings its own muster: give the project one muster, and run that install's mu.",

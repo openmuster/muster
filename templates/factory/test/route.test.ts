@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { board, type Board } from 'muster'
+import { board, type Board } from '@openmuster/muster'
 
 const HERE = fileURLToPath(new URL('..', import.meta.url))
 

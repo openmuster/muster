@@ -6,7 +6,7 @@ description: Channel messages and threads on the board, in both directions.
 ## Map channels
 
 ```ts board.ts
-import { board, env, slack } from 'muster'
+import { board, env, slack } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -50,7 +50,7 @@ With `agent: true`, the board uses that for a thread a workflow run is working
 on, in place of the run's progress message:
 
 ```ts board.ts
-import { board, env, slack } from 'muster'
+import { board, env, slack } from '@openmuster/muster'
 
 export default board({
   sync: {

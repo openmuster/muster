@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": { "dev": "NEXT_TELEMETRY_DISABLED=1 next dev -H 127.0.0.1", "build": "NEXT_TELEMETRY_DISABLED=1 next build", "typecheck": "tsc --noEmit", "test": "vitest run" },
-  "dependencies": { "muster": "workspace:*", "next": "^16.0.0", "react": "^19.0.0", "react-dom": "^19.0.0" },
+  "dependencies": { "@openmuster/muster": "workspace:*", "next": "^16.0.0", "react": "^19.0.0", "react-dom": "^19.0.0" },
   "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "typescript": "^5.9.0", "vitest": "^4.1.12" }
 }

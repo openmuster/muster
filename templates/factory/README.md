@@ -112,11 +112,11 @@ builds, then fails every edge route at runtime.
 
 ## Outside this repository
 
-Here the app uses the `muster` in this checkout (`workspace:*`). In a copy of
+Here the app uses the muster in this checkout (`workspace:*`). In a copy of
 your own, point the dependency at a release instead:
 
 ```json
-"muster": "https://github.com/openmuster/muster/releases/download/v0.3.1-alpha.1/muster-0.3.1-alpha.1.tgz"
+"@openmuster/muster": "0.3.1-alpha.2"
 ```
 
 ## In a Vercel sandbox

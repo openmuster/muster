@@ -6,21 +6,22 @@ description: A board on this machine in a minute.
 ## Install
 
 `mu` needs Node 22.22.3 or later on the 22 line, or 24.15 or later.
-Older ones bundle a SQLite it refuses to run on. A release is a tarball on
-GitHub, and npm installs it from its URL.
+Older ones bundle a SQLite it refuses to run on. It is on npm as
+`@openmuster/muster`.
 
 ```bash
-npm install -g https://github.com/openmuster/muster/releases/latest/download/muster.tgz
+npm install -g @openmuster/muster
 ```
 
-To pin a version, name it:
-`https://github.com/openmuster/muster/releases/download/v0.3.1-alpha.1/muster-0.3.1-alpha.1.tgz`.
+To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.2`.
+The name is scoped because `muster` on npm is an unrelated package. Every
+release is also a tarball on GitHub, which npm installs from its URL:
+`https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
-To try it without installing, `npx` runs the same tarball. Don't run
-`npx muster`: `muster` on npm is an unrelated package.
+To try it without installing:
 
 ```bash
-npx https://github.com/openmuster/muster/releases/latest/download/muster.tgz demo
+npx @openmuster/muster demo
 ```
 
 ## A board on this machine

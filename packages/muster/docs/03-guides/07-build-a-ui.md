@@ -9,7 +9,7 @@ The browser never holds the board's credential. Your server holds a handle and
 answers the page through it.
 
 ```ts lib/board.ts
-import { board, http } from 'muster'
+import { board, http } from '@openmuster/muster'
 
 export const team = process.env.MUSTER_URL
   ? board({ backend: http({ url: process.env.MUSTER_URL, token: process.env.MUSTER_TOKEN! }) })

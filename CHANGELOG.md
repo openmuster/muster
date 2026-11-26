@@ -5,6 +5,17 @@ versions are affected.
 
 ## Unreleased
 
+### Changed
+
+- muster is on npm, as `@openmuster/muster`: `npm install -g @openmuster/muster`,
+  or `npx @openmuster/muster demo` to try it. The name is scoped because
+  `muster` on npm is an unrelated package. Code imports it by that name:
+  `import { board } from '@openmuster/muster'`, and a project lists
+  `@openmuster/muster` in its dependencies. A board module that still imports
+  `'muster'`, and a project that installed a release tarball as
+  `node_modules/muster`, keep working. The tarball on each GitHub release
+  stays, under the same names, and the cloud runners still install from it.
+
 ### Fixed
 
 - The swarm and factory templates fit a phone. The line under the title that

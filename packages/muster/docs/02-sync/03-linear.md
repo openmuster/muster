@@ -6,7 +6,7 @@ description: Issues and comments as threads, in both directions.
 ## Map teams
 
 ```ts board.ts
-import { board, env, linear } from 'muster'
+import { board, env, linear } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -32,7 +32,7 @@ personal API key in `token` makes every comment and issue yours. To have them
 written by an app of its own, name an OAuth application in place of the token:
 
 ```ts board.ts
-import { board, env, linear } from 'muster'
+import { board, env, linear } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -73,7 +73,7 @@ working. With `agent: true`, the board uses that for an issue a workflow run
 is working on, in place of the run's progress message:
 
 ```ts board.ts
-import { board, env, linear } from 'muster'
+import { board, env, linear } from '@openmuster/muster'
 
 export default board({
   sync: {

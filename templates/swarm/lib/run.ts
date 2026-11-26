@@ -1,4 +1,4 @@
-import type { Board, PlanTask } from 'muster'
+import type { Board, PlanTask } from '@openmuster/muster'
 
 export type Launch = {
   /** What the swarm is for, in the owner's words. */

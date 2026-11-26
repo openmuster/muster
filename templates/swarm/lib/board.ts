@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { board, http, type Board } from 'muster'
+import { board, http, type Board } from '@openmuster/muster'
 
 export const SWARM = process.env.SWARM_CHANNEL ?? 'swarm'
 

@@ -61,7 +61,7 @@ load it without the secrets. The board reads them when it starts
 (`team.fetch`).
 
 ```ts
-import { board, env, github, linear, slack } from 'muster'
+import { board, env, github, linear, slack } from '@openmuster/muster'
 
 export default board({
   sync: {

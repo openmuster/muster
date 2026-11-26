@@ -15,15 +15,15 @@ const VERSION = (JSON.parse(readFileSync(join(PACKAGE, 'package.json'), 'utf8'))
 const BUILT = join(PACKAGE, 'dist', 'cli.js')
 
 // A board whose thread reads always fail with `not_found`, thrown with the Failure the module imported.
-const NOT_FOUND = `import { board, file, Failure } from 'muster'
-import type { Board } from 'muster'
+const NOT_FOUND = `import { board, file, Failure } from '@openmuster/muster'
+import type { Board } from '@openmuster/muster'
 const backend = file()
 const team: Board = board({ backend: { ...backend, readThread: async () => { throw new Failure('not_found', 'No thread here.') } } })
 export default team
 `
 
 // A watcher that answers each new thread in "features", as the profile "intake".
-const INTAKE = `import { board } from 'muster'
+const INTAKE = `import { board } from '@openmuster/muster'
 export const team = board({
   watch: {
     intake: {
@@ -73,9 +73,9 @@ function folder(defaultModule?: string) {
 }
 
 /** Another install of this muster (the built one), in a project's node_modules. */
-function install(project: string, edit: (json: Record<string, unknown>) => void = () => {}) {
+function install(project: string, edit: (json: Record<string, unknown>) => void = () => {}, name = '@openmuster/muster') {
   if (!existsSync(BUILT)) throw new Error('build first: pnpm build')
-  const root = join(project, 'node_modules', 'muster')
+  const root = join(project, 'node_modules', ...name.split('/'))
   mkdirSync(root, { recursive: true })
   cpSync(join(PACKAGE, 'dist'), join(root, 'dist'), { recursive: true })
   const json = JSON.parse(readFileSync(join(PACKAGE, 'package.json'), 'utf8')) as Record<string, unknown>
@@ -152,6 +152,22 @@ describe('a board module', () => {
     expect([served.status, served.reason, served.said, served.code]).toEqual([404, 'not_found', 'No thread here.', 0])
   }, 30_000)
 
+  it("a module written before muster was on npm, importing 'muster', is still answered with this copy", async () => {
+    const dir = folder(NOT_FOUND.replaceAll("'@openmuster/muster'", "'muster'"))
+    const served = await serve(dir, [], { built: true })
+    expect([served.status, served.reason, served.said, served.code]).toEqual([404, 'not_found', 'No thread here.', 0])
+  }, 30_000)
+
+  it('a project that installed a release tarball as node_modules/muster still runs its module on that install', async () => {
+    const dir = folder()
+    const project = join(dir, 'project')
+    const theirs = install(project, (json) => void (json.name = 'muster'), 'muster')
+    writeFileSync(join(project, 'board.ts'), NOT_FOUND.replaceAll("'@openmuster/muster'", "'muster'"))
+    const served = await serve(dir, ['--module', join(project, 'board.ts')])
+    expect(served.stdout).toContain(`muster ${VERSION} ${theirs}\n`)
+    expect([served.status, served.reason, served.code]).toEqual([404, 'not_found', 0])
+  }, 60_000)
+
   it('a module whose project has its own muster runs on that install: the same pid becomes its mu, and not_found is still a 404', async () => {
     const dir = folder()
     const project = join(dir, 'project')
@@ -187,11 +203,11 @@ describe('a board module', () => {
   }, 30_000)
 
   it.each([
-    ['an enum', `import { board } from 'muster'\nenum Kind { A }\nexport default board()\n`, /no enums, namespaces or parameter properties/],
-    ['a type imported without import type', `import { board, Board } from 'muster'\nconst team: Board = board()\nexport default team\n`, /import type/],
-    ['a file of its own imported without .ts', `import { board } from 'muster'\nimport { x } from './lib'\nexport default board()\n`, /with \.ts/],
+    ['an enum', `import { board } from '@openmuster/muster'\nenum Kind { A }\nexport default board()\n`, /no enums, namespaces or parameter properties/],
+    ['a type imported without import type', `import { board, Board } from '@openmuster/muster'\nconst team: Board = board()\nexport default team\n`, /import type/],
+    ['a file of its own imported without .ts', `import { board } from '@openmuster/muster'\nimport { x } from './lib'\nexport default board()\n`, /with \.ts/],
     ['no board', `export default 1\n`, /export default board/],
-    ['a watcher that is wrong', `import { board } from 'muster'\nexport default board({ watch: { lead: { tail: { chanel: 'x' }, run: () => {} } } })\n`, /Watcher "lead" has "chanel" in its tail/],
+    ['a watcher that is wrong', `import { board } from '@openmuster/muster'\nexport default board({ watch: { lead: { tail: { chanel: 'x' }, run: () => {} } } })\n`, /Watcher "lead" has "chanel" in its tail/],
   ])('a module with %s fails to load, and says what to change', async (_, source, said) => {
     const dir = folder()
     writeFileSync(join(dir, 'lib.ts'), 'export const x = 1\n')
@@ -251,7 +267,7 @@ describe('a board module', () => {
   })
 
   it('mu daemon run on a module that fails to load says so loudly and exits 0, so a service manager leaves it stopped', async () => {
-    const dir = folder(`import { board } from 'muster'\nenum Kind { A }\nexport default board()\n`)
+    const dir = folder(`import { board } from '@openmuster/muster'\nenum Kind { A }\nexport default board()\n`)
     const ran = await cli(dir, ['daemon', 'run'])
     expect(ran.code).toBe(0)
     expect(ran.stderr).toMatch(/^error: board module not loaded: .*board\.ts failed to load: .*\n {2}A board module runs with Node's type stripping/)
@@ -268,7 +284,7 @@ describe('a board module', () => {
     const seen = join(dir, 'env')
     const gate = join(dir, 'gate.sh')
     writeFileSync(gate, `#!/bin/sh\ncase "$MUSTER_CHANNEL" in work/skip) echo '{"wake": false}';; esac\n`, { mode: 0o755 })
-    writeFileSync(join(dir, 'config', 'board.ts'), `import { board, command } from 'muster'
+    writeFileSync(join(dir, 'config', 'board.ts'), `import { board, command } from '@openmuster/muster'
 export default board({
   watch: {
     lead: {
@@ -299,7 +315,7 @@ export default board({
   }, 60_000)
 
   it('mu serve on a module that fails to load serves the board anyway, with a loud error', async () => {
-    const dir = folder(`import { board } from 'muster'\nthrow new Error('the module blew up')\nexport default board()\n`)
+    const dir = folder(`import { board } from '@openmuster/muster'\nthrow new Error('the module blew up')\nexport default board()\n`)
     const served = await serve(dir)
     expect(served.stderr).toMatch(/^error: board module not loaded: .*board\.ts failed to load: the module blew up\n/m)
     expect(served.stderr).toContain("none of its watchers run until it is fixed and the server restarted")
@@ -454,8 +470,8 @@ const pidOf = (holder: string | null | undefined) => Number(/:(\d+):[0-9a-f]+$/.
 describe('a daemon on a board module, as a service', () => {
   it('install names the service for the board the module opens, so two modules for two boards never share one', async () => {
     const dir = folder()
-    writeFileSync(join(dir, 'a.ts'), `import { board } from 'muster'\nexport default board({ name: 'work' })\n`)
-    writeFileSync(join(dir, 'b.ts'), `import { board } from 'muster'\nexport default board({ dir: '${join(dir, 'elsewhere')}', name: 'work' })\n`)
+    writeFileSync(join(dir, 'a.ts'), `import { board } from '@openmuster/muster'\nexport default board({ name: 'work' })\n`)
+    writeFileSync(join(dir, 'b.ts'), `import { board } from '@openmuster/muster'\nexport default board({ dir: '${join(dir, 'elsewhere')}', name: 'work' })\n`)
     const env = fakeLaunchctl(dir)
     const a = JSON.parse((await cli(dir, ['daemon', 'install', '--module', join(dir, 'a.ts'), '--json'], { env })).stdout) as { installed: string; log: string }
     const b = JSON.parse((await cli(dir, ['daemon', 'install', '--module', join(dir, 'b.ts'), '--json'], { env })).stdout) as { installed: string; log: string }
@@ -473,7 +489,7 @@ describe('a daemon on a board module, as a service', () => {
   it('a project whose muster crashes is a start that counts: after five, it stops restarting instead of looping under launchd', async () => {
     const dir = folder()
     const { module } = project(dir)
-    writeFileSync(join(dir, 'project', 'node_modules', 'muster', 'dist', 'cli.js'), 'process.exit(1)\n')
+    writeFileSync(join(dir, 'project', 'node_modules', '@openmuster', 'muster', 'dist', 'cli.js'), 'process.exit(1)\n')
     for (let i = 1; i < RESTART_LIMIT; i++) expect((await cli(dir, ['daemon', 'run', '--module', module])).code).toBe(1)
     const parked = start(dir, [BIN, 'daemon', 'run', '--module', module])
     await until(() => parked.errors().includes('stopped restarting'))
@@ -527,7 +543,7 @@ describe('a daemon on a board module, as a service', () => {
   it("what a re-exec'd daemon starts doesn't inherit the re-exec: its watchers see no MUSTER_REEXEC*, and it keeps its pid", async () => {
     const dir = folder()
     const marker = join(dir, 'env.json')
-    const { module } = project(dir, `import { board } from 'muster'
+    const { module } = project(dir, `import { board } from '@openmuster/muster'
 import { writeFileSync } from 'node:fs'
 export default board({ watch: { seen: { tail: { channel: 'features' }, as: 'seen', run: () => writeFileSync('${marker}', JSON.stringify(Object.keys(process.env).filter((key) => key.startsWith('MUSTER_REEXEC') || key === 'MUSTER_LAUNCH'))) } } })
 `)
@@ -572,7 +588,7 @@ export default board({ watch: { seen: { tail: { channel: 'features' }, as: 'seen
   }, 150_000)
 
   it('daemon status reads a watcher where its host does, whatever profile the module exported, and counts only what it matches', async () => {
-    const dir = folder(`import { board } from 'muster'
+    const dir = folder(`import { board } from '@openmuster/muster'
 export default board({ watch: { failing: { tail: { channel: 'features' }, run: () => { throw new Error('not today') } } } }).as('someone')
 `)
     await post(dir, 'general', 'board exists')
@@ -587,7 +603,7 @@ export default board({ watch: { failing: { tail: { channel: 'features' }, run: (
   it('daemon run stops its watchers, and lets a run in flight finish, before it closes the board', async () => {
     const dir = folder()
     const marker = join(dir, 'started')
-    writeFileSync(join(dir, 'config', 'board.ts'), `import { board } from 'muster'
+    writeFileSync(join(dir, 'config', 'board.ts'), `import { board } from '@openmuster/muster'
 import { writeFileSync } from 'node:fs'
 export default board({ watch: { slow: { tail: { channel: 'features' }, as: 'slow', run: async () => { writeFileSync('${marker}', ''); await new Promise((resolve) => setTimeout(resolve, 1500)) } } } })
 `)
@@ -624,7 +640,7 @@ export default board({ watch: { slow: { tail: { channel: 'features' }, as: 'slow
         else json.musterModule = marker
       })
       const error = (JSON.parse((await cli(there, ['daemon', 'status', '--json', '--module', module])).stdout) as { module: { error: { reason: string; message: string; hint: string } } }).module.error
-      expect([error.reason, error.message, error.hint]).toEqual(['module_version_skew', expect.stringContaining(`at ${muster}, the first node_modules/muster above it`), expect.stringContaining(`remove ${muster}`)])
+      expect([error.reason, error.message, error.hint]).toEqual(['module_version_skew', expect.stringContaining(`at ${muster}, the first muster in a node_modules above it`), expect.stringContaining(`remove ${muster}`)])
     }
   }, 60_000)
 })
@@ -667,8 +683,8 @@ describe('the board modules the docs show', () => {
     const dir = folder()
     const project = join(dir, 'project')
     mkdirSync(join(project, 'lib'), { recursive: true })
-    mkdirSync(join(project, 'node_modules'))
-    symlinkSync(PACKAGE, join(project, 'node_modules', 'muster'))
+    mkdirSync(join(project, 'node_modules', '@openmuster'), { recursive: true })
+    symlinkSync(PACKAGE, join(project, 'node_modules', '@openmuster', 'muster'))
     writeFileSync(join(project, 'lib', 'board.ts'), blocks('lib/board.ts')[0]!)
     writeFileSync(join(project, 'host.ts'), blocks('host.ts')[0]!)
     await post(dir, 'general', 'board exists')

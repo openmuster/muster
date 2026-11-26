@@ -236,7 +236,7 @@ describe('the daemon', () => {
     const served = await cli(dir, ['serve', '--port', '0', '--json'])
     expect([served.code, served.stdout]).toEqual([1, ''])
     expect(JSON.parse(served.stderr).error).toMatchObject({ reason: 'config_retired', data: { files: [left], porting: PORTING_URL } })
-    writeFileSync(join(dir, 'board.ts'), "import { board } from 'muster'\nexport default board()\n")
+    writeFileSync(join(dir, 'board.ts'), "import { board } from '@openmuster/muster'\nexport default board()\n")
     expect((await cli(dir, ['serve', '--port', '0', '--module', join(dir, 'board.ts')])).stderr).toContain(said)
     // Status still answers, and says what is wrong.
     const status = await cli(dir, ['daemon', 'status', '--json'])
@@ -520,7 +520,7 @@ describe('the restart guard', () => {
   it('check says the daemon stopped restarting, not only that nothing ticks', async () => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
-    writeFileSync(join(dir, 'board.ts'), "import { board } from 'muster'\nexport default board({ watch: { lead: { tail: { channel: 'work' }, run: () => {} } } })\n")
+    writeFileSync(join(dir, 'board.ts'), "import { board } from '@openmuster/muster'\nexport default board({ watch: { lead: { tail: { channel: 'work' }, run: () => {} } } })\n")
     await cli(dir, ['post', 'general', 'board exists'])
     stoppedAgo(recordOf(dir), 0)
     const run = await cli(dir, ['daemon', 'check', 'lead', '--json', '--module', join(dir, 'board.ts')])
@@ -593,7 +593,7 @@ describe('checking a watcher', () => {
     const dir = tempDir()
     mkdirSync(join(dir, 'config'), { recursive: true })
     const module = join(dir, 'board.ts')
-    writeFileSync(module, `import { board, command } from 'muster'
+    writeFileSync(module, `import { board, command } from '@openmuster/muster'
 export default board({
   watch: {
     lead: { tail: ${JSON.stringify(tail)}, as: 'lead', run: command(({ event }) => ${run}) },

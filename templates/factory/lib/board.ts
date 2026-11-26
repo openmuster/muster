@@ -4,7 +4,7 @@
 // and the sync's catch-up and sending (`team.start()`).
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { board, command, env, github, http, type Duration } from 'muster'
+import { board, command, env, github, http, type Duration } from '@openmuster/muster'
 
 export const FACTORY = process.env.FACTORY_CHANNEL ?? 'factory'
 

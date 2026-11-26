@@ -9,7 +9,7 @@ function read(): string {
     const file = join(dir, 'package.json')
     if (existsSync(file)) {
       const found = JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string }
-      if (found.name === 'muster' && found.version) return found.version
+      if ((found.name === '@openmuster/muster' || found.name === 'muster') && found.version) return found.version
     }
     dir = dirname(dir)
   }

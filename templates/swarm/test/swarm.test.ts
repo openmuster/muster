@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { board, loadWorkflows } from 'muster'
+import { board, loadWorkflows } from '@openmuster/muster'
 import { describe, expect, it } from 'vitest'
 import { launch, workerArgv } from '../lib/run.ts'
 import { snapshot } from '../lib/swarm.ts'
