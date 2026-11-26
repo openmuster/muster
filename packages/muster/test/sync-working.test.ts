@@ -482,8 +482,13 @@ describe('sync: Linear as an agent shows an issue being worked on', () => {
     const event = { type: 'AgentSessionEvent', action: 'prompted', agentSession: { id: 's-1', issueId: 'iss-1' }, agentActivity: { content: { type: 'prompt', body: 'and the header?' } } }
     expect((await hook(event, APP_SECRET)).status).toBe(200)
     expect((await hook(event, 'someone-else')).status).toBe(401)
+    // Issues and comments it signs are not the workspace's word: an application can be installed in another
+    // workspace, and what it sends from there must not become threads and replies here.
+    expect((await hook({ type: 'Comment', action: 'create', data: { id: 'c-other', body: 'from elsewhere', issueId: 'iss-1', userId: 'u-eve', issue: { team: { key: 'ENG' } } } }, APP_SECRET)).status).toBe(200)
+    expect((await hook({ type: 'Issue', action: 'create', data: { ...ISSUE, id: 'iss-other', title: 'From elsewhere' } }, APP_SECRET)).status).toBe(200)
     await backend.syncTick()
     expect((await team.readThread({ id: root })).replies).toEqual([])
+    expect((await team.readChannel({ channel: 'eng' })).threads.map((thread) => thread.message.text)).toEqual(['Crash'])
   })
 
   it('sends the progress message as a comment when the app has no agent sessions on', async () => {

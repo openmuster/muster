@@ -540,7 +540,11 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
           },
         }
       : {}),
-    parse({ body }) {
+    parse({ headers, body }) {
+      // Only what the workspace's own webhook signed is brought in. The application's webhook is checked and
+      // answered, and no more: an application can be installed elsewhere, and what it sends about another
+      // workspace's issues and comments must never land on this board.
+      if (!same(headers['linear-signature'] ?? '', hmac(options.secret, body))) return []
       const payload = JSON.parse(body) as Record<string, any>
       const data = payload.data ?? {}
       // Known by what Linear signed, as a GitHub delivery is: the `linear-delivery` header isn't signed, so an
