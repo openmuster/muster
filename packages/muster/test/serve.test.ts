@@ -542,4 +542,51 @@ describe('serve', () => {
     await reader.cancel().catch(() => {})
     await server.close()
   })
+
+  it("a token made for a sandbox calls the routes a sandbox may and no others, whatever network it is behind", async () => {
+    const { as, owner, raw, token, server, time } = await served()
+    const can = { 'work/': ['read', 'post', 'react', 'label'] as const }
+    const sandbox = token({ profile: 'fixer', can: can as never, sandbox: true })
+    const agent = as({ profile: 'fixer', can: can as never, sandbox: true })
+    // The work of a task is open to it.
+    const task = await agent.post({ channel: 'work/web', text: 'fix the header' })
+    expect((await agent.taskList({ channel: 'work/web' })).tasks).toEqual([])
+    expect((await agent.reply({ to: task.id, text: 'on it' })).by.profile).toBe('fixer')
+    expect((await agent.readThread({ id: task.id })).replies.map((reply) => reply.text)).toEqual(['on it'])
+    expect(await (await raw('/whoami', { headers: { authorization: `Bearer ${sandbox}` } })).json()).toMatchObject({ ok: { profile: 'fixer', sandbox: true } })
+    // What a board does later, and what starts work elsewhere, is not: the same token without the mark may.
+    await owner.post({ channel: 'work/web', text: 'a thread' })
+    expect(await reason(agent.scheduleCreate({ channel: 'work/web', text: 'later', every: 600 }))).toBe('forbidden')
+    expect(await reason(agent.scheduleList())).toBe('forbidden')
+    expect(await reason(agent.scheduleCancel({ id: 1 }))).toBe('forbidden')
+    expect(await reason(agent.cursorSet('mine', 1))).toBe('forbidden')
+    expect(await reason(agent.cursorGet('mine'))).toBe('forbidden')
+    expect(await reason(agent.workflowRequest({ thread: task.id, workflow: 'fix' } as never))).toBe('forbidden')
+    const unmarked = as({ profile: 'fixer', can: can as never })
+    expect((await unmarked.scheduleCreate({ channel: 'work/web', text: 'later', every: 600 })).id).toBeDefined()
+    await unmarked.cursorSet('mine', 1)
+    // Nor are the routes outside the board's own, the ones that take no token included: the token closes them.
+    const post = (path: string, authorization?: string) => raw(path, { method: 'POST', headers: { 'content-type': 'application/json', ...(authorization ? { authorization } : {}) }, body: JSON.stringify({ args: [{}] }) })
+    for (const path of ['/mcp', '/joinAsk', '/joinPoll', '/joinList', '/tokenExchange', '/tokenCreate', '/tokenList', '/nothing']) {
+      const answer = await post(path, `Bearer ${sandbox}`)
+      expect([path, answer.status, (await answer.json()).error.reason]).toEqual([path, 403, 'forbidden'])
+    }
+    expect((await raw('/feed?channel=work/web', { headers: { authorization: `Bearer ${sandbox}` } })).status).toBe(403)
+    expect((await raw('/whoami', { method: 'POST', headers: { authorization: `Bearer ${sandbox}` } })).status).toBe(403)
+    // Without a token those routes answer as they did.
+    expect((await (await post('/joinAsk')).json()).error.reason).toBe('joins_closed')
+    // A sandbox's token that ran out opens nothing either: it is refused as any other is.
+    time.advance(3601_000)
+    expect((await post('/head', `Bearer ${sandbox}`)).status).toBe(401)
+    await server.close()
+  })
+
+  it('a token is made for a sandbox only when asked for exactly that', async () => {
+    const { as, key, time, server } = await served()
+    const claims = async (request: Record<string, unknown>) => verify(key, (await as().backend.tokens.create({ profile: 'fixer', can: { 'work/': ['read', 'post'] }, ttl: 600, ...request } as never)).token, time.now().getTime())
+    expect((await claims({ sandbox: true })).sandbox).toBe(true)
+    expect('sandbox' in (await claims({}))).toBe(false)
+    expect('sandbox' in (await claims({ sandbox: 'yes' }))).toBe(false)
+    await server.close()
+  })
 })

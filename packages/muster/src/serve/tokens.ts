@@ -73,7 +73,7 @@ export const PERMISSIONS: Permission[] = ['read', 'post', 'react', 'label', 'man
 /** The longest a token made over HTTP lives. One for a person, made on the board's machine, has no such cap. */
 export const REMOTE_TTL_MAX = 24 * 3600
 
-export type MintRequest = { profile?: string | null; can?: Record<string, string[]>; ttl: number; noSync?: boolean }
+export type MintRequest = { profile?: string | null; can?: Record<string, string[]>; ttl: number; noSync?: boolean; sandbox?: boolean }
 
 /**
  * Makes a token. `maker` is who asks: null on the board's own machine, where the owner may make any
@@ -114,7 +114,7 @@ export function mintToken(key: Buffer, registry: Registry, maker: { principal: s
     exp = Math.min(exp, held.exp)
   }
   const id = randomBytes(9).toString('base64url')
-  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote || maker.workload ? { minted: true } : {}), ...(request.noSync || maker.claims?.noSync ? { noSync: true } : {}) }
+  const claims: Claims = { sub: maker.principal, profile, ...(Object.keys(can).length ? { can } : {}), exp, jti: id, ...(remote || maker.workload ? { minted: true } : {}), ...(request.noSync || maker.claims?.noSync ? { noSync: true } : {}), ...(request.sandbox === true ? { sandbox: true } : {}) }
   const record: TokenRecord = { id, profile, can: Object.keys(can).length ? can : null, exp, at: Math.floor(now / 1000), revoked: false }
   registry.record(record)
   return { token: mint(key, claims), record }
