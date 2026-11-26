@@ -11,8 +11,8 @@ versions are affected.
   `slack({ agent: true, … })`, for a Slack app declared an agent. While a
   workflow run on a synced thread is open, the board sets the thread's agent
   session to `processing`, and to `active` once the run's summary is posted;
-  the run's `started …` reply is then not posted to Slack. Not yet run
-  against a live workspace. See
+  the run's `started …` reply is then not posted to Slack. Run against a
+  live workspace on 26 Nov 2026. See
   [Show a thread being worked on](./packages/muster/docs/02-sync/04-slack.md#show-a-thread-being-worked-on).
 
 - Linear sync can comment as an app of its own: `linear({ clientId:
@@ -20,7 +20,8 @@ versions are affected.
   place of `token`, for an OAuth application with client credentials tokens
   turned on. The board asks Linear for the app's token and renews it, so
   comments and issues are by the app and not by whoever owns a personal API
-  key. `templates/loop` now uses it. Not yet run against a live workspace.
+  key. `templates/loop` now uses it. Run against a live workspace on 26 Nov
+  2026.
   See [Who the comments are by](./packages/muster/docs/02-sync/03-linear.md#who-the-comments-are-by).
 
 - GitHub sync can comment as a GitHub App: `github({ appId: env('GITHUB_APP_ID'),
