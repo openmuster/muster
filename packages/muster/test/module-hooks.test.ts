@@ -42,8 +42,11 @@ async function receiver(options: { delay?: number } = {}) {
       const raw = Buffer.concat(chunks).toString('utf8')
       const delivery = String(request.headers['muster-delivery'])
       const expected = `v1=${createHmac('sha256', KEY).update(`${delivery}.${String(request.headers['muster-timestamp'])}.${raw}`).digest('hex')}`
+      // The answer is taken as the request arrives, before it is recorded: an answer a test queues once it has
+      // seen this request is for the next one, never this one.
+      const status = answers.shift() ?? 200
       got.push({ delivery, signed: request.headers['muster-signature'] === expected, event: (JSON.parse(raw) as { event: Got['event'] }).event })
-      setTimeout(() => response.writeHead(answers.shift() ?? 200).end(), options.delay ?? 0)
+      setTimeout(() => response.writeHead(status).end(), options.delay ?? 0)
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -165,7 +168,8 @@ describe('module hooks from the command line', () => {
   }, 60_000)
 
   it('mu serve with the module sends its hooks too', async () => {
-    const there = await receiver()
+    // Slow to answer, so the 500 below is queued while the first delivery still waits for its answer: it must go to the next.
+    const there = await receiver({ delay: 150 })
     const { dir, module } = folder(there.url)
     await post(dir, 'general', 'board exists')
     const child = spawn(process.execPath, [BIN, 'serve', '--port', '0', '--module', module], {
