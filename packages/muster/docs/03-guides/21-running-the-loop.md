@@ -172,7 +172,7 @@ page, or on the board.
 | A card held `declined` | The triage agent found nothing to change in this repository, or stopped; its summary on the card says which | Edit the report to say more, or move it to ready again (`mu label 12 stage=ready`, or the page's Status): it is triaged again. Or cancel it: `mu tasks cancel 12` |
 | A card stays `approval` | Nobody trusted has approved it | Approve it, or cancel it |
 | A task held `push_conflict`, a `push` label on the work | Someone pushed to `mu/task-<id>` while the agent worked; the branch was left as they left it | Read the branch. Then reply on the card: the next round starts from the branch as it is now |
-| A task held `push_failed` | The push itself failed, often the GitHub App's permissions | Fix the App's Contents permission, then reply on the card |
+| A task held `push_failed` | GitHub refused the push. The reply on the task quotes what it said | Fix what it names (the App's Contents permission, a rule on the branch), then reply on the card. If it names nothing you can fix, reply on the card to try again |
 | Workers stop with `over_budget`, and nothing is claimed | The cards have spent their budget | Raise it (`mu budget cards 50`), or wait |
 | A card held `edited` for a moment | Its author changed the report | Nothing: it is triaged again, or parked again |
 | A card stays `backlog` though its page says Ready | The status was set by someone other than the sync, or Notion's webhook didn't reach the board | Move it out of Ready and back in Notion; check the webhook's deliveries |
