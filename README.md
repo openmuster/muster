@@ -23,7 +23,8 @@ mu demo
 ```
 
 `mu demo` plays a scripted run on a scratch board and opens it in a browser.
-In a project, `npm i @openmuster/muster` and run it as `npx mu`.
+In a project, `npm i @openmuster/muster` and run it as `npx mu` there. Outside
+one, use `npx @openmuster/muster`: `mu` on npm is not muster.
 
 To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.2`.
 The name is scoped because `muster` on npm is an unrelated package. Every

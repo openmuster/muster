@@ -56,7 +56,14 @@ too (`src/cli/module.ts`).
    runs `pnpm check`, packs the package, installs the tarball and runs it,
    and attaches it as `muster-<version>.tgz` and as `muster.tgz`, with a
    `SHA256SUMS` file. Its `npm` job then publishes that tarball to npm, with
-   no token: npm trusts this workflow (trusted publishing). The release's notes are that version's section of
+   no token: npm trusts this workflow (trusted publishing), once an owner of
+   the npm org has added it as a trusted publisher on the package's page
+   (repository `openmuster/muster`, workflow `release.yml`). npm drops a
+   trusted publisher that hasn't published within 48 hours, so one added
+   and never used has to be added again just before a release. If the job
+   fails after the GitHub release was made, publish that release's tarball
+   by hand, checked against its `SHA256SUMS`, and don't re-run the job.
+   The release's notes are that version's section of
    `CHANGELOG.md`, so write it before tagging: for people who use muster,
    and for a security fix, which versions it affects.
 
