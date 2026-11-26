@@ -2,7 +2,8 @@
 
 import { Pause, Play } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
-import { CHAPTERS, chapterMs, frameAt, type Board } from './cues'
+import { AppView, TOOL } from './apps'
+import { ALL_CHAPTERS as CHAPTERS, chapterMs, frameAt, type Board } from './cues'
 
 /** `prefers-reduced-motion`, read once the page is live. */
 function useReducedMotion(): boolean {
@@ -79,7 +80,7 @@ export function Story({ code }: { code: string }) {
   const board = shown.board
 
   return (
-    <section aria-label="muster in three short scenes">
+    <section aria-label="muster in short scenes">
       <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Scenes" onKeyDown={onKey}>
         {CHAPTERS.map((item, at) => (
           <button
@@ -115,7 +116,8 @@ export function Story({ code }: { code: string }) {
           <span className="font-mono text-xs text-fd-muted-foreground">{chapter.file}</span>
         </div>
 
-        <div className="grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        {/* A tool's own view needs the room a board thread doesn't; its commands are short. */}
+        <div className={`grid ${chapter.view ? 'lg:grid-cols-2' : 'lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]'}`}>
           <div className="min-h-52 lg:min-h-92 border-fd-border p-4 lg:border-r">
             {chapter.code ? (
               // Highlighted on the server from text of ours, never from anything a visitor sends.
@@ -141,10 +143,12 @@ export function Story({ code }: { code: string }) {
 
           <div className="min-h-52 lg:min-h-92 border-t border-fd-border p-4 lg:border-t-0" aria-live="off">
             <div className="flex items-center justify-between gap-3 text-xs text-fd-muted-foreground">
-              <span className="font-mono">#work</span>
-              <span>the board</span>
+              <span className="font-mono">#{chapter.channel ?? 'work'}</span>
+              <span>{chapter.view ? `in ${TOOL[chapter.view]}, synced to the board` : 'the board'}</span>
             </div>
-            {board ? (
+            {chapter.view && shown.app ? (
+              <AppView chapter={chapter} app={shown.app} />
+            ) : board ? (
               <div className="mt-3">
                 <div className="flex items-start gap-2">
                   <span className="font-mono text-xs text-fd-muted-foreground">#1</span>
