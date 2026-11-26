@@ -30,6 +30,13 @@ export type Permission = 'read' | 'post' | 'react' | 'label' | 'manage'
 
 export type By = { principal: string; profile: string | null }
 
+/**
+ * A label on a message that says where some work is, such as a run's start reply: `open` while the work
+ * goes on, `done` once it has ended. Sync shows a thread with an open one as being worked on, on a platform
+ * that can show that.
+ */
+export const PROGRESS = 'progress'
+
 export type Attachment = { id: string; name: string; type: string; size: number }
 
 export type Message = {

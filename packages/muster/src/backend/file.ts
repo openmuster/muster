@@ -18,6 +18,7 @@ import { sameProcess } from '../process.ts'
 import { ensureSchema } from '../store/schema.ts'
 import { openDb, ownerOnly, type Db } from '../store/sqlite.ts'
 import { catchUp, deliverPending, holdCatchUp, importPending, readPending, receive, type Sync } from '../sync/engine.ts'
+import { workingPending } from '../sync/working.ts'
 import { resolveSync } from '../sync/declare.ts'
 import { fetchFiles } from '../sync/files.ts'
 import { boardKey } from '../serve/token.ts'
@@ -270,6 +271,8 @@ export function file(options: FileOptions = {}): Backend {
       await fetchFiles(ctx(), sync, options.fetch ?? fetch)
       const inbound = importPending(ctx(), sync)
       const outbound = await deliverPending(ctx(), sync, options.fetch ?? fetch)
+      // After what was said has gone out, so a run's summary is there before the thread stops showing as worked on.
+      await workingPending(ctx(), sync, options.fetch ?? fetch)
       const skipped = [...caught.skipped, ...inbound.stale, ...outbound.stale]
       return { imported: inbound.imported, delivered: outbound.delivered, failed: inbound.failed + outbound.failed, ...(skipped.length ? { skipped } : {}) }
     },

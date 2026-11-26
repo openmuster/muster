@@ -4,7 +4,7 @@ import { whileBusy, type Db } from './sqlite.ts'
  * The version of the tables below. A file with a newer one is refused; an older one gets the tables it
  * lacks. Every statement is `if not exists`, so the upgrade from any earlier version is to run them all.
  */
-export const STORE_VERSION = 9
+export const STORE_VERSION = 10
 
 const DDL = `
 create table if not exists events (
@@ -49,6 +49,8 @@ create table if not exists messages (
 );
 create index if not exists messages_thread on messages (thread, id);
 create index if not exists messages_roots on messages (channel, activity) where re is null;
+-- The messages that say work is going on, for sync to show on a platform: few, and looked for every tick.
+create index if not exists messages_progress on messages (thread) where json_extract(labels, '$.progress') = 'open';
 
 create table if not exists actors (
   principal text not null,
@@ -179,6 +181,23 @@ create table if not exists sync_files (
   day text not null,
   bytes integer not null,
   primary key (key, day)
+) without rowid;
+
+-- What each sync last told its platform about a thread being worked on: whether it shows as worked on
+-- there (active), the progress message and its words then, what the platform gave back to find the same
+-- indicator again (state, JSON), when it was last told (ms), which process is telling it now (claim, ms),
+-- and when a call that failed is tried again (retry_at, ms). Bookkeeping: not in the log.
+create table if not exists sync_working (
+  key text not null,
+  thread integer not null,
+  message integer not null,
+  active integer not null,
+  text text not null,
+  state text,
+  refreshed integer not null,
+  claim integer,
+  retry_at integer not null,
+  primary key (key, thread)
 ) without rowid;
 
 -- Reader bookkeeping. Not a board fact: it is not in the log and a fold doesn't rebuild it.

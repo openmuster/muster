@@ -3,7 +3,7 @@ import { duration } from '../cli/args.ts'
 import { OPEN_STATES, type PlanTask } from '../core/tasks.ts'
 import { Failure } from '../failure.ts'
 import type { Board } from '../handle.ts'
-import { actorId, channelScope, inScope, LIMITS, WORKFLOWS_PROFILE, type BoardEvent, type By, type Message } from '../model.ts'
+import { actorId, channelScope, inScope, LIMITS, PROGRESS, WORKFLOWS_PROFILE, type BoardEvent, type By, type Message } from '../model.ts'
 import { pushes, STEP_RESULT, type Workflow } from './workflows.ts'
 
 /**
@@ -123,7 +123,7 @@ export const REPORTED = 'workflow.reported'
  * while a reopened task works. The reply's text says how far the run is, so a thread shows one message that
  * keeps up instead of one per step.
  */
-export const PROGRESS = 'progress'
+export { PROGRESS }
 
 /**
  * A worker as `mu` on this machine: `MUSTER_BIN` when it is set, or else the same node and CLI the

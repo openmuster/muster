@@ -113,7 +113,21 @@ export type ProviderExtras = {
   read?(event: Inbound, fetcher: typeof fetch): Promise<Inbound[]>
   /** Runs on text as it comes in: returns what to keep, or null to drop the event. From the operator's config. */
   filter?(text: string): string | null
+  /**
+   * Shows on the platform that a synced thread is being worked on, where the platform has a way to show it
+   * that isn't a message. Called when the work starts, when what it says changed (`text`), every `workingTtl`
+   * while it goes on (`refresh`), and when it ends. `now.text` is the progress message as it reads; `now.state`
+   * is whatever the last call for this thread returned (null on the first), kept for it across restarts: what
+   * the platform gave to find the same indicator again. A provider with this gets no comment for a progress
+   * message: the indicator is how the platform shows it. Best effort: a throw is tried again in a while.
+   */
+  working?(target: { place: string; threadExternal: string }, step: WorkingStep, now: { text: string; state: unknown }, fetcher: typeof fetch): Promise<unknown>
+  /** How long the platform keeps showing it without being told again, in milliseconds. None: until it is told to stop. */
+  workingTtl?: number
 }
+
+/** Why `working` is called: see there. */
+export type WorkingStep = 'start' | 'text' | 'refresh' | 'end'
 
 export const DELIVERY_ATTEMPTS = 5
 
