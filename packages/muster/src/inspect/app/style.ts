@@ -54,6 +54,8 @@ aside { position: fixed; inset: 0 auto 0 0; z-index: var(--z-drawer); width: var
 .scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity var(--duration) var(--ease-out); }
 .app.menu .scrim { opacity: 1; pointer-events: auto; }
 .board { padding: ${s(3.5)} ${s(4)}; border-bottom: var(--hairline) solid var(--line); display: flex; flex-direction: column; }
+.board b { display: flex; align-items: center; gap: ${s(2)}; }
+.board .mark { flex: none; }
 .board span { color: var(--dim); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 nav { flex: 1; overflow: auto; padding: ${s(2)}; }
 nav + nav { flex: none; overflow: visible; border-top: var(--hairline) solid var(--line); }

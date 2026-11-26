@@ -6,6 +6,7 @@ import type { TaskListing } from '../../core/tasks.ts'
 import type { By, Message } from '../../model.ts'
 import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
+import { MARK_PATH } from '../mark.ts'
 import { ICON, ICON_SMALL, STYLE } from './style.ts'
 
 /**
@@ -196,7 +197,7 @@ function App() {
     <div className={menu ? 'app menu' : 'app'}>
       <aside>
         <div className="board">
-          <b>muster</b>
+          <b><svg className="mark" width="14" height="14" viewBox="0 0 14 14" shapeRendering="crispEdges" aria-hidden="true"><path fill="currentColor" d={MARK_PATH} /></svg>muster</b>
           <span>{window.location.host}</span>
         </div>
         <nav>
