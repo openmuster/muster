@@ -5,6 +5,12 @@ versions are affected.
 
 ## Unreleased
 
+### Fixed
+
+- `templates/loop` writes a Linear issue's status as the sync's own OAuth app
+  when one is set up, not with a personal `LINEAR_API_KEY` left in the
+  environment: comments and status changes come from the same app.
+
 ### Added
 
 - A workflow step's `title`: what its pull request and commit are called,

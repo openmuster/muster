@@ -397,23 +397,26 @@ async function setStatus(team: Board, card: number, stage: 'working' | 'done', s
 let appToken: { id: string; token: string; until: number } | undefined
 
 /**
- * How the loop signs what it writes to a source: its token when the environment has one, or for a Linear
- * OAuth app, the app's own token, asked for with its client credentials as its sync asks (the same scopes, so
- * the sync's token stays good). Null when it has nothing to write with.
+ * How the loop signs what it writes to a source. A Linear OAuth app, when its client ID and secret are set,
+ * comes first: the loop then writes as the same app its sync comments as, never as whoever owns a key also
+ * left in the environment. Its token is asked for with the client credentials, as its sync asks (the same
+ * scopes, so the sync's token stays good). Otherwise the source's token. Null when it has neither.
  */
 async function authOf(source: Source): Promise<string | null> {
-  const token = process.env[source.token]
-  // A Linear personal API key goes as it is; everything else is a bearer token.
-  if (token) return source.type === 'linear' && (token.startsWith('lin_api_') || /^bearer /i.test(token)) ? token : `Bearer ${token}`
   const id = source.clientId ? process.env[source.clientId] : undefined
   const secret = source.clientSecret ? process.env[source.clientSecret] : undefined
-  if (source.type !== 'linear' || !id || !secret) return null
-  if (appToken?.id === id && appToken.until > Date.now() + 60_000) return `Bearer ${appToken.token}`
-  const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
-  const got = await answer(await fetch(new URL('/oauth/token', api).href, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'read,write', client_id: id, client_secret: secret }).toString() }))
-  if (typeof got?.access_token !== 'string' || !got.access_token) throw new Error('Linear made no token for the app')
-  appToken = { id, token: got.access_token, until: Date.now() + (Number(got.expires_in) || 0) * 1000 }
-  return `Bearer ${appToken.token}`
+  if (source.type === 'linear' && id && secret) {
+    if (appToken?.id === id && appToken.until > Date.now() + 60_000) return `Bearer ${appToken.token}`
+    const api = process.env.LOOP_LINEAR_API ?? 'https://api.linear.app/graphql'
+    const got = await answer(await fetch(new URL('/oauth/token', api).href, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'read,write', client_id: id, client_secret: secret }).toString() }))
+    if (typeof got?.access_token !== 'string' || !got.access_token) throw new Error('Linear made no token for the app')
+    appToken = { id, token: got.access_token, until: Date.now() + (Number(got.expires_in) || 0) * 1000 }
+    return `Bearer ${appToken.token}`
+  }
+  const token = process.env[source.token]
+  if (!token) return null
+  // A Linear personal API key goes as it is; everything else is a bearer token.
+  return source.type === 'linear' && (token.startsWith('lin_api_') || /^bearer /i.test(token)) ? token : `Bearer ${token}`
 }
 
 /** A platform's answer as JSON, or what it said went wrong. */

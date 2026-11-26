@@ -632,9 +632,10 @@ describe('templates/loop', () => {
       expect((await made.team.readThread({ id: run.work!.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
     })
 
-    it("with no API key, the loop writes as the sync's own Linear app: its token is asked for once, with the app's client credentials", async () => {
+    it("with the sync's Linear app set up, the loop writes as that app, even with a personal key also set: its token is asked for once", async () => {
       const made = await fromLinear()
-      delete process.env.LINEAR_API_KEY
+      // The personal key stays in the environment, as it does on a board that moved its sync to the app.
+      expect(process.env.LINEAR_API_KEY).toBe('lin_api_key')
       Object.assign(process.env, { LINEAR_CLIENT_ID: 'app-id', LINEAR_CLIENT_SECRET: 'app-secret' })
       const { id, card } = await made.file('Todo')
       await made.complete((await made.run(card, 'triage'))!.triage!.id, SPEC)

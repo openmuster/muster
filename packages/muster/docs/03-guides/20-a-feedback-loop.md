@@ -110,8 +110,8 @@ one waits, and nothing runs for it.
   card. A write that fails is said on the card, as `loop`, and the card goes
   on. Notion's integration needs the "Update content" capability for it.
   Linear's status is written by the same OAuth app its sync comments as
-  (`LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`), or with `LINEAR_API_KEY`
-  when that is set.
+  (`LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`), even when a `LINEAR_API_KEY`
+  is also set; with no app, by that key.
 - **A parked card that is edited** stays parked, and is triaged from its new
   text when it is moved to ready.
 
