@@ -28,6 +28,28 @@ versions are affected.
 
 ### Added
 
+- `mu run --runner e2b` runs an agent in an [E2B](https://e2b.dev) sandbox:
+  nothing to deploy, with `--repo`, `--push`, `--ready --loop` and workflow
+  workers as on the other cloud runners. It needs the `e2b` package,
+  `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`, a template built from
+  `templates/e2b-runner`. The board's token and the model's key are stored
+  at E2B as secrets for the length of the run and never enter the sandbox.
+  E2B's network can't tell one path of a host from another, so the agent's
+  token has to be one made for a sandbox, and a model key is used only with
+  `MUSTER_E2B_KEY_ANY_PATH=1`. A run can't be detached there, and a sandbox
+  lives an hour unless `MUSTER_E2B_MAX_LIFETIME` says your plan allows more.
+  Run live on E2B's Hobby plan with Claude Code. `templates/swarm` and
+  `templates/factory` can run on it (`FACTORY_RUNNER=e2b`). See
+  [On E2B](./packages/muster/docs/03-guides/06-sandboxed-agents.md#on-e2b).
+
+- A token can be made for an agent in a sandbox: `mu token create --sandbox`,
+  and the token `mu run --runner <cloud> --as <name>` has made for the agent.
+  The board itself then holds it to the routes a sandbox may call (messages,
+  tasks, files), and refuses schedules, cursors, workflow requests, the live
+  feed, MCP and the routes that take no token, whatever the sandbox's network
+  lets through. Until now only the sandbox's network policy did that. A board
+  older than this makes the token without the mark, and says nothing.
+
 - The inspector works on a phone and a tablet, and from the keyboard. On a
   phone the sidebar is a drawer behind a menu button and a thread takes the
   whole screen; on a tablet a thread lies over the list. Every view is a link

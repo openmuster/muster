@@ -13,7 +13,7 @@ import { LIMITS } from '../src/model.ts'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.md') ? [join(dir, entry.name)] : []))
-const pages = [...walk(join(root, 'packages/muster/docs')), ...walk(join(root, 'skills')), ...['swarm/README.md', 'swarm/JOIN.md', 'factory/README.md', 'factory/AGENT.md', 'queue/README.md', 'cloudflare-runner/README.md'].map((page) => join(root, 'templates', page))]
+const pages = [...walk(join(root, 'packages/muster/docs')), ...walk(join(root, 'skills')), ...['swarm/README.md', 'swarm/JOIN.md', 'factory/README.md', 'factory/AGENT.md', 'queue/README.md', 'cloudflare-runner/README.md', 'e2b-runner/README.md'].map((page) => join(root, 'templates', page))]
 
 /** Every `mu ...` command line in a page's code: fenced blocks and inline code. */
 function commandLines(text: string): string[] {

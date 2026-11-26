@@ -41,9 +41,9 @@ export const agentEnv = (env: Env): Env => Object.fromEntries(AGENT_ENV.filter((
 /** The agent's command, as words: FACTORY_AGENT split on spaces, or Claude Code headless. */
 export const agentWords = (env: Env): string[] => (env.FACTORY_AGENT ?? 'claude --print').split(' ').filter(Boolean)
 
-/** `mu run`'s words for one wake in a Vercel sandbox. */
+/** `mu run`'s words for one wake in a cloud sandbox: Vercel's, or E2B's with FACTORY_RUNNER=e2b. */
 export function sandboxWords(task: number, env: Env): string[] {
-  return ['run', String(task), '--runner', 'vercel', '--agent', 'claude', '--as', 'factory', ...(env.FACTORY_REPO ? ['--repo', env.FACTORY_REPO] : []), ...(env.FACTORY_PUSH === '1' ? ['--push'] : [])]
+  return ['run', String(task), '--runner', env.FACTORY_RUNNER === 'e2b' ? 'e2b' : 'vercel', '--agent', 'claude', '--as', 'factory', ...(env.FACTORY_REPO ? ['--repo', env.FACTORY_REPO] : []), ...(env.FACTORY_PUSH === '1' ? ['--push'] : [])]
 }
 
 /** Runs a command with this process's output, `input` on its stdin, and resolves with how it exited. */
@@ -57,22 +57,23 @@ function run(words: string[], options: { input?: string; env?: Env } = {}): Prom
 }
 
 /**
- * In a Vercel sandbox: the wake becomes a task in factory-runs, outside factory/, so the watcher never sees
+ * In a cloud sandbox: the wake becomes a task in factory-runs, outside factory/, so the watcher never sees
  * it and people's channels don't fill with instructions. The agent's token reaches both, for an hour. The
  * task is keyed by the event that woke it, so a wake tried again makes no second task.
  */
 async function inSandbox(team: Board, thread: string, env: Env): Promise<number> {
   const made = await team.taskCreate({ channel: 'factory-runs', text: brief(thread), labels: { wake: thread }, ...(env.MUSTER_EVENT ? { idempotencyKey: `factory-wake-${env.MUSTER_EVENT}` } : {}) })
   const permissions = ['read', 'post', 'react', 'label']
-  const { token } = await team.backend.tokens.create({ profile: 'factory', can: { 'factory/': permissions, 'factory-runs': permissions }, ttl: 3600 })
-  // Only `mu run` gets the sandbox's settings (Vercel, the GitHub App, MUSTER_SANDBOX_URL): it starts the
+  const { token } = await team.backend.tokens.create({ profile: 'factory', can: { 'factory/': permissions, 'factory-runs': permissions }, ttl: 3600, sandbox: true })
+  // The token is one for a sandbox: the board holds it to the routes a sandbox may call, which E2B's network can't.
+  // Only `mu run` gets the sandbox's settings (Vercel or E2B, the GitHub App, MUSTER_SANDBOX_URL): it starts the
   // sandbox and pushes from here. The agent in the sandbox gets none of them, only its token for the board.
   return run(['mu', ...sandboxWords(made.task.id, env)], { env: { ...env, MUSTER_AGENT_TOKEN: token } })
 }
 
-/** One wake: the agent on this machine, or in a Vercel sandbox with FACTORY_RUNNER=vercel. Resolves with its exit code. */
+/** One wake: the agent on this machine, or in a cloud sandbox with FACTORY_RUNNER=vercel or e2b. Resolves with its exit code. */
 export async function wake(thread: string, env: Env = process.env): Promise<number> {
-  if (env.FACTORY_RUNNER === 'vercel') {
+  if (env.FACTORY_RUNNER === 'vercel' || env.FACTORY_RUNNER === 'e2b') {
     const team = board()
     try {
       return await inSandbox(team, thread, env)

@@ -135,6 +135,12 @@ reach the wake only with `FACTORY_RUNNER=vercel` in the host's environment,
 and from there only `mu run`: never an agent on this machine. See muster's
 guide, Agents in cloud sandboxes.
 
+`FACTORY_RUNNER=e2b` does the same in an E2B sandbox, with `E2B_API_KEY`,
+`MUSTER_E2B_TEMPLATE` and, to use a model key there,
+`MUSTER_E2B_KEY_ANY_PATH=1`. In either sandbox the agent's token is one made
+for a sandbox, so the board refuses it `mu schedule`: a wake that needs to
+come back later says so in a reply.
+
 In a sandbox the agent can't reach your machine, and it reaches no host but
 the board and its model: it can read code, run tests and answer, not run
 your app against your services.

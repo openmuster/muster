@@ -44,7 +44,7 @@ worker=$(mu workflow list --json | node -e '
 const w = JSON.parse(require("fs").readFileSync(0, "utf8")).workflows.find((each) => each.name === "card")
 if (!w) { console.error("answer.sh: no card workflow in workflows.json"); process.exit(1) }
 const k = w.workers
-const cloud = k.runner === "vercel" || k.runner === "cloudflare"
+const cloud = k.runner === "vercel" || k.runner === "cloudflare" || k.runner === "e2b"
 const out = [...(cloud ? ["--runner", k.runner] : ["--cwd", k.cwd]), "--agent", k.agent, "--as", k.as + "-answer"]
 if (k.repo) out.push("--repo", k.repo)
 if (k.push || w.steps.some((step) => step.push === true)) out.push("--push")

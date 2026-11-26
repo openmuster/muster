@@ -35,6 +35,26 @@ sets none for you on your own machine. The templates are Next.js apps: their
 scripts turn Next's telemetry off. The Cloudflare runner template logs why a
 run ended to your Worker's logs, and nothing the run printed unless you ask.
 
+## What a sandbox provider holds
+
+A cloud run's credentials never enter its sandbox. Who adds them to its
+requests differs. On Vercel they are in the sandbox's own network policy and
+go with the sandbox. On Cloudflare your Worker holds them. On E2B they are
+stored as secrets in your E2B project for the length of the run, under
+random names, and removed when it ends: a run that is killed leaves them
+until the next run removes the ones older than 26 hours. A secret there can
+be attached to a sandbox by anyone who holds the project's API key, so give
+muster a project of its own.
+
+E2B adds a credential to every request to its host and can't tell one path
+from another. The board therefore holds a sandbox's token to a sandbox's
+routes itself (`mu token create --sandbox`), and a model key is used on E2B
+only with `MUSTER_E2B_KEY_ANY_PATH=1`. Closing a sandbox's way out there
+leaves open connections open, so the runner ends the processes an install
+left running before the agent's credentials are stored. Code that became
+root in the sandbox could avoid that, and a DNS lookup can carry data out
+while any host is open.
+
 ## What stays on disk
 
 A board is a SQLite file and a folder of attachments, readable only by you.

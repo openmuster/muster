@@ -6,7 +6,7 @@ import { Failure } from '../failure.ts'
 import { githubRepo } from '../runner/github.ts'
 
 export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string>; push?: boolean; title?: string }
-export type Workers = { count: number; agent: 'claude' | 'codex'; as: string; runner?: 'local' | 'vercel' | 'cloudflare'; repo?: string; push?: boolean; cwd?: string; timeout?: string }
+export type Workers = { count: number; agent: 'claude' | 'codex'; as: string; runner?: 'local' | 'vercel' | 'cloudflare' | 'e2b'; repo?: string; push?: boolean; cwd?: string; timeout?: string }
 export type Workflow = { name: string; description: string; who: string[]; channels: string[]; steps: WorkflowStep[]; workers: Workers; timeout?: string }
 
 export const workflowsPath = () => join(configDir(), 'workflows.json')
@@ -107,14 +107,14 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
     if (!Number.isInteger(w.count) || (w.count as number) < 1 || (w.count as number) > MAX_WORKERS) fail(`needs "workers.count" from 1 to ${MAX_WORKERS}.`)
     if (w.agent !== 'claude' && w.agent !== 'codex') fail('needs "workers.agent": "claude" or "codex".')
     if (typeof w.as !== 'string' || w.as === '') fail('needs "workers.as": the name the workers act as.')
-    if (w.runner !== undefined && w.runner !== 'local' && w.runner !== 'vercel' && w.runner !== 'cloudflare') fail('needs a "workers.runner" of "local", "vercel" or "cloudflare".')
+    if (w.runner !== undefined && w.runner !== 'local' && w.runner !== 'vercel' && w.runner !== 'cloudflare' && w.runner !== 'e2b') fail('needs a "workers.runner" of "local", "vercel", "cloudflare" or "e2b".')
     if (w.repo !== undefined && typeof w.repo !== 'string') fail('has a "workers.repo" that isn\'t a string.')
     if (w.cwd !== undefined && typeof w.cwd !== 'string') fail('has a "workers.cwd" that isn\'t a string.')
     // A worker on this machine works in a folder the operator names: never wherever the daemon happened to start.
-    const cloud = w.runner === 'vercel' || w.runner === 'cloudflare'
+    const cloud = w.runner === 'vercel' || w.runner === 'cloudflare' || w.runner === 'e2b'
     if (!cloud && (typeof w.cwd !== 'string' || w.cwd === '')) fail('needs "workers.cwd": the folder its workers run in on this machine.')
     if (w.push !== undefined && typeof w.push !== 'boolean') fail('has a "workers.push" that isn\'t true or false.')
-    if ((w.push === true || steps.some((step) => step.push === true)) && !(cloud && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel" or "cloudflare" and a github.com https "repo".')
+    if ((w.push === true || steps.some((step) => step.push === true)) && !(cloud && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel", "cloudflare" or "e2b" and a github.com https "repo".')
     if (w.timeout !== undefined) checkDuration(w.timeout, 'workers.timeout')
     if (entryObject.timeout !== undefined) checkDuration(entryObject.timeout, 'timeout')
     const workers: Workers = { count: w.count as number, agent: w.agent as Workers['agent'], as: w.as as string, ...(w.runner !== undefined ? { runner: w.runner as Workers['runner'] } : {}), ...(w.repo !== undefined ? { repo: w.repo as string } : {}), ...(w.push !== undefined ? { push: w.push as boolean } : {}), ...(w.cwd !== undefined ? { cwd: w.cwd as string } : {}), ...(w.timeout !== undefined ? { timeout: w.timeout as string } : {}) }

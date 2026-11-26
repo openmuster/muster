@@ -72,12 +72,12 @@ agent died goes back to the queue on its own.
 - **Starting agents on tasks.** `mu run` starts Claude Code or Codex on a
   task, on this machine or, experimentally, in a cloud sandbox:
 
-  | | On this machine | Vercel Sandbox | Cloudflare container |
-  | --- | --- | --- | --- |
-  | Credentials in the agent's reach | Yours | None | None |
-  | Clones `--repo` | No | Yes, with dependencies | Yes, with dependencies (pnpm, npm, yarn) |
-  | `--push` opens a pull request | No | Yes | Yes |
-  | A worker's tasks each get their own | Process | Sandbox | Container |
+  | | On this machine | Vercel Sandbox | Cloudflare container | E2B sandbox |
+  | --- | --- | --- | --- | --- |
+  | Credentials in the agent's reach | Yours | None | None | None |
+  | Clones `--repo` | No | Yes, with dependencies | Yes, with dependencies (pnpm, npm, yarn) | Yes, with dependencies |
+  | `--push` opens a pull request | No | Yes | Yes | Yes |
+  | A worker's tasks each get their own | Process | Sandbox | Container | Sandbox |
   | Registered workflows | Yes | Yes | Yes |
 | Another round on the same pull request, and `templates/loop` | Run live on 25 Nov 2026 against a scratch board through a tunnel, Claude Code in Vercel sandboxes, on a private repository with a GitHub App. A report posted with an app's token, held for triage, triaged by an agent into a title and a spec, worked by the `card` workflow (spec, work, review) as a pull request; a reply on the card sent the work and its review back, the second round started on `mu/task-<id>` and added a commit to the same pull request, and the review applied both rounds' changes in order. The same from a Linear issue: the spec and the run's summaries as comments on it, and a comment on the issue starting the second round on its pull request. An untrusted author's report held for approval: its own `approved=yes` did nothing, the owner's started the work. Not run live: Slack, GitHub issues, screenshots relayed to a card, a refused push (`push_conflict`), a Cloudflare runner on a branch |
   | Run for real with | Claude Code, Codex | Claude Code | Claude Code |
@@ -143,6 +143,7 @@ been used against the real thing, and what has not.
 | Outgoing webhooks | Working, by tests against a real HTTP receiver on the same machine: deliveries checked with the verify code the docs print, a changed body, another secret and a late replay refused, retries after a 4xx, 5xx, timeout or refused connection, a restart resuming from the cursor, an event passed over after eight tries, redirects not followed, and one hook's dead receiver not holding up another. Not sent to a third-party service |
 | Registered workflows | Covered by tests, security-reviewed; not yet run live |
 | `mu run --ready --loop --runner cloudflare`, a container per task, and workflows on Cloudflare | Covered by tests against a stand-in Worker and GitHub; not run live |
+| `mu run --runner e2b` and `templates/e2b-runner` | Run live on 26 Nov 2026 against a scratch board through a tunnel, on E2B's Hobby plan, with Claude Code. Run: the template built; a task worked from start to end with the board's token and the model's key stored at E2B for the run and gone after, the sandbox removed and the agent's token revoked; inside, the environment held placeholders, schedules, cursors, tokens, joins and the feed were refused by the board, and no other host was reached; a private repository cloned with a GitHub App's read token and its dependencies installed; `--push` opening a pull request; a `--ready --loop` worker giving two tasks a sandbox and a pull request each; a kept snapshot made by one run and started from by the next. Checked on E2B itself: a credential is added only to the host it is for, a secret that is removed stops being added at once, and closing a sandbox's way out leaves open connections open, which is why the runner ends what an install left running. Not run: Codex, workflows from the daemon, a self-hosted E2B |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 

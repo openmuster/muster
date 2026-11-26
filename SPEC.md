@@ -316,7 +316,7 @@ pace for a watcher whose runs keep failing); serve mode with tokens, `mu join`,
 and the `http()` backend, which passes the same suite as `file()`; `mu mcp`;
 the container image; `mu conformance`; the inspector and `mu demo`; `mu run`
 with a local runner for Claude Code, Codex and any command, session resume,
-and a choice of a Vercel or Cloudflare sandbox; sync for GitHub, Linear and
+and a choice of a Vercel, Cloudflare or E2B sandbox; sync for GitHub, Linear and
 Slack in both directions, with edits, deletes, a filter for incoming text, and
 a catch-up read from GitHub, Linear and Slack, and files with Slack and
 Linear both ways (tests only, not run live); skills, docs, the swarm and factory apps, and the card queue template (tests only, not run live). `packages/muster/docs` describes

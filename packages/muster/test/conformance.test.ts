@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -159,6 +159,265 @@ export const Sandbox = { async create(options) {
     expect(at((e) => e.update === 'deny-all')).toBeLessThan(at((e) => e.deleted))
     expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, runner: 'vercel', run: 'sbx_44', exit: 0 })
     expect(run.code).toBe(0)
+  })
+
+  /** A stand-in for the `e2b` package that logs every call. Its agent command exits with `exit`, thrown as the real one throws it. */
+  const fakeE2b = (dir: string, opts: { exit?: number; after?: number; checkout?: string; bundled?: string; file?: string; snapshots?: boolean } = {}) => {
+    const log = join(dir, 'e2b.log')
+    mkdirSync(join(dir, 'e2b'), { recursive: true })
+    writeFileSync(join(dir, 'e2b', 'index.mjs'), `import { appendFileSync } from 'node:fs'
+const log = (entry) => appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + '\\n')
+const secrets = new Map()
+const exited = (exitCode) => Object.assign(new Error('exit status ' + exitCode), { name: 'CommandExitError', exitCode, stdout: '' })
+export const Secret = {
+  create: async (name, value) => (secrets.set(name, value), log({ secret: name, value })),
+  destroy: async (name) => (log({ destroyed: name }), secrets.delete(name)),
+  list: () => ({ hasNext: false, nextItems: async () => [] }),
+  fill: (name) => '\${e2b.secrets.' + name + '}',
+}
+let snaps = 0
+export const Sandbox = { async create(template, options) {
+  log({ create: options, template })
+  return {
+    ...(${JSON.stringify(Boolean(opts.snapshots))} ? { createSnapshot: async () => ({ snapshotId: 'snap_' + process.pid + '_' + ++snaps }) } : {}),
+    sandboxId: 'sbx_e2b',
+    commands: { async run(cmd, o = {}) {
+      log({ run: cmd, options: o })
+      if (o.background) return { pid: 1, wait: () => new Promise((resolve, reject) => setTimeout(() => (log({ exited: ${opts.exit ?? 0} }), ${opts.exit ?? 0} ? reject(exited(${opts.exit ?? 0})) : resolve({ exitCode: 0, stdout: '' })), ${opts.after ?? 50})) }
+      return { exitCode: 0, stdout: cmd.includes('left $left') ? 'left 0' : cmd.includes('$HOME') ? '/home/user' : cmd.includes('git rev-parse HEAD &&') ? ${JSON.stringify(opts.checkout ?? `${'a'.repeat(40)}\nmain`)} : cmd.includes('bundle create') ? ${JSON.stringify(opts.bundled ?? 'unchanged')} : '' }
+    } },
+    files: { read: async (path) => { log({ read: path }); if (${JSON.stringify(opts.file ?? null)} === null) throw new Error('none'); return (async function* () { yield Buffer.from(${JSON.stringify(opts.file ?? '')}, 'base64') })() } },
+    updateNetwork: async (network) => log({ network, held: [...secrets.keys()] }),
+    kill: async () => log({ killed: true }),
+  }
+} }\n`)
+    return { env: { MUSTER_E2B_SDK: join(dir, 'e2b', 'index.mjs'), E2B_API_KEY: 'e2b_account_key', MUSTER_E2B_TEMPLATE: 'muster-agents', MUSTER_E2B_BASE: 'off' }, read: async () => (await import('node:fs')).readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) }
+  }
+  const marked = { ...board, MUSTER_AGENT_TOKEN: agent({ profile: 'fixer', can: { 'work/': ['read', 'post', 'react', 'label'] }, sandbox: true }) }
+
+  it('e2b: runs mu run in a sandbox made from your template, stays with it, and leaves nothing stored when it ends', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir, { exit: 3, after: 200 })
+    const run = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env: { ...marked, ...sdk.env } })
+    const lines = await sdk.read()
+    expect(lines[0]).toMatchObject({ template: 'muster-agents', create: { apiKey: 'e2b_account_key', timeoutMs: 40 * 60_000, envs: { MUSTER_TOKEN: 'set-by-the-network-policy', MUSTER_TASK: '12' } } })
+    // This release is installed there, then mu run is what runs: the same command, with the agent's 30 minutes.
+    expect(lines.find((e) => e.run)!.run).toMatch(/^'npm' 'install' '-g' 'https:\/\/github\.com\/.*muster-.*\.tgz'$/)
+    expect(lines.find((e) => e.run && e.options.background)!.run).toMatch(/\| 'mu' 'run' '12' .*'--timeout' '30m'/)
+    // The board's token is stored for the run and gone after it; the sandbox is removed once what ran in it exited.
+    const stored = lines.filter((e) => e.secret)
+    expect(stored.map((e) => e.value)).toEqual([`Bearer ${marked.MUSTER_AGENT_TOKEN}`])
+    const at = (match: (entry: any) => boolean) => lines.findIndex(match)
+    expect(at((e) => e.exited !== undefined)).toBeLessThan(at((e) => e.killed))
+    expect(at((e) => e.killed)).toBeLessThan(at((e) => e.destroyed === stored[0].secret))
+    expect(JSON.stringify(lines.filter((e) => !e.secret))).not.toContain(marked.MUSTER_AGENT_TOKEN)
+    // It says how the run in the sandbox ended, and fails as it did.
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: 12, runner: 'e2b', run: 'sbx_e2b', exit: 3 })
+    expect(run.code).toBe(1)
+  })
+
+  it('e2b: says what it needs before anything is started', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const reasonOf = async (env: Record<string, string | undefined>, args: string[] = []) => errorOf((await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json', ...args], { env: { ...marked, ...sdk.env, ...env } as never })).stderr)
+    expect((await reasonOf({ E2B_API_KEY: '' })).reason).toBe('runner_not_configured')
+    expect((await reasonOf({ MUSTER_E2B_TEMPLATE: '' })).reason).toBe('runner_not_configured')
+    expect((await reasonOf({ MUSTER_E2B_SDK: join(dir, 'nowhere.mjs') })).reason).toBe('runner_not_installed')
+    // A token the board wouldn't hold to a sandbox's routes: E2B can't hold it to them either.
+    expect((await reasonOf({ MUSTER_AGENT_TOKEN: board.MUSTER_AGENT_TOKEN })).reason).toBe('agent_token_unmarked')
+    // A model key goes to every path of its provider's host there, so it is used only when that is accepted by name.
+    const unscoped = await reasonOf({ ANTHROPIC_API_KEY: 'sk-real-key' })
+    expect(unscoped).toMatchObject({ reason: 'model_key_unscoped', hint: expect.stringContaining('MUSTER_E2B_KEY_ANY_PATH=1') })
+    expect(existsSync(join(dir, 'e2b.log'))).toBe(false)
+    const accepted = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env: { ...marked, ...sdk.env, ANTHROPIC_API_KEY: 'sk-real-key', MUSTER_E2B_KEY_ANY_PATH: '1' } })
+    expect(accepted.code, accepted.stderr).toBe(0)
+    const lines = await sdk.read()
+    expect(lines.filter((e) => e.network).at(-2).network.allowOut).toEqual(['board.example.com', 'api.anthropic.com'])
+    expect(lines.filter((e) => e.secret).map((e) => e.value)).toContain('sk-real-key')
+    expect(JSON.stringify(lines.filter((e) => !e.secret))).not.toContain('sk-real-key')
+  })
+
+  it("e2b: what would be refused is refused once, before a worker claims a task or a token is made, and a run can't be detached", async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const local = { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env }
+    const worker = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'e2b', '--agent', 'claude', '--as', 'agent-1', '--json'], { env: { ...local, ANTHROPIC_API_KEY: 'sk-real-key' } })
+    expect([worker.code, errorOf(worker.stderr).reason]).toEqual([1, 'model_key_unscoped'])
+    for (const id of ids) expect(await stateOf(dir, id)).toBe('ready')
+    expect((await cli(dir, ['token', 'list'])).stdout).toBe('no tokens\n')
+    // A secret of yours is a model key too, and the way out names it.
+    const named = await cli(dir, ['run', String(ids[0]), '--runner', 'e2b', '--agent', 'claude', '--as', 'agent-1', '--json'], { env: { ...local, MUSTER_E2B_MODEL_SECRET: 'my-key' } })
+    expect(errorOf(named.stderr)).toMatchObject({ reason: 'model_key_unscoped', hint: expect.stringContaining('unset MUSTER_E2B_MODEL_SECRET') })
+    // Detached, nothing would ever remove what E2B stores for the run.
+    const detached = await cli(dir, ['run', String(ids[0]), '--runner', 'e2b', '--agent', 'claude', '--as', 'agent-1', '--detach', '--json'], { env: local })
+    expect([detached.code, errorOf(detached.stderr).reason]).toEqual([2, 'detach_unsupported'])
+    expect((await cli(dir, ['token', 'list'])).stdout).toBe('no tokens\n')
+    expect(existsSync(join(dir, 'e2b.log'))).toBe(false)
+  })
+
+  it("e2b: a secret of yours is the model's key there, and none is read from this machine", async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const run = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env: { ...marked, ...sdk.env, ANTHROPIC_API_KEY: 'sk-real-key', MUSTER_E2B_KEY_ANY_PATH: '1', MUSTER_E2B_MODEL_SECRET: 'my-anthropic-key' } })
+    expect(run.code, run.stderr).toBe(0)
+    const lines = await sdk.read()
+    expect(lines.filter((e) => e.network).at(-2).network.rules['api.anthropic.com'][0].transform.headers['x-api-key']).toBe('${e2b.secrets.my-anthropic-key}')
+    expect(JSON.stringify(lines)).not.toContain('sk-real-key')
+    expect(lines.some((e) => e.destroyed === 'my-anthropic-key')).toBe(false)
+    // With no key here at all, nothing warns that the agent can't reach its model: the secret is how it does.
+    const bare = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude'], { env: { ...marked, ...sdk.env, MUSTER_E2B_KEY_ANY_PATH: '1', MUSTER_E2B_MODEL_SECRET: 'my-anthropic-key' } })
+    expect(bare.stderr).not.toContain('ANTHROPIC_API_KEY is not set')
+    expect((await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude'], { env: { ...marked, ...sdk.env } })).stderr).toContain('ANTHROPIC_API_KEY is not set')
+  })
+
+  it("e2b: a run that wouldn't fit in the longest a sandbox lives there is refused, and a worker gets what fits", async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const env = { ...marked, ...sdk.env }
+    // 55 minutes for the agent and ten to set up and settle is more than the hour a sandbox lives.
+    const long = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--timeout', '55m', '--json'], { env })
+    expect([long.code, errorOf(long.stderr).reason]).toEqual([1, 'timeout_too_long'])
+    expect(errorOf(long.stderr).hint).toContain('MUSTER_E2B_MAX_LIFETIME')
+    expect(existsSync(join(dir, 'e2b.log'))).toBe(false)
+    // No plan runs one longer than a day, and what a run stores is removed as left behind once it is older than that.
+    const over = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env: { ...env, MUSTER_E2B_MAX_LIFETIME: '48h' } })
+    expect([over.code, errorOf(over.stderr).reason]).toEqual([2, 'timeout_too_long'])
+    // A plan that allows longer says so.
+    expect((await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--timeout', '55m', '--json'], { env: { ...env, MUSTER_E2B_MAX_LIFETIME: '24h' } })).code).toBe(0)
+    expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeoutMs).toBe(65 * 60_000)
+    // A worker with no --timeout: not the two hours it gets elsewhere, but what fits.
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'e2b', '--agent', 'claude', '--as', 'fixer', '--json'], { env })
+    expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeoutMs).toBe(50 * 60_000)
+    await cli(dir, ['run', '--ready', 'work/', '--runner', 'e2b', '--agent', 'claude', '--as', 'fixer', '--json'], { env: { ...env, MUSTER_E2B_MAX_LIFETIME: '24h' } })
+    expect((await sdk.read()).filter((e) => e.create).at(-1).create.timeoutMs).toBe(2 * 60 * 60_000)
+  })
+
+  it('e2b: the first run keeps a snapshot with this release installed and writes it down; the next starts from it', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir, { snapshots: true })
+    const env = { ...marked, ...sdk.env, MUSTER_E2B_BASE: '', MUSTER_CONFIG: join(dir, 'config') }
+    expect((await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env })).code).toBe(0)
+    let lines = await sdk.read()
+    const first = lines.filter((e) => e.create)
+    // A base from the template, with nothing of the run in it, then the run from the snapshot, closed.
+    expect(first.map((e) => [e.template.replace(/snap_\d+_1/, 'snap'), e.create.metadata.muster, Object.keys(e.create.envs).length > 0])).toEqual([['muster-agents', 'base', false], ['snap', 'run', true]])
+    expect(lines.filter((e) => e.run?.includes("'npm' 'install'"))).toHaveLength(1)
+    const written = JSON.parse(readFileSync(join(dir, 'config', 'e2b-bases.json'), 'utf8'))
+    expect(Object.values(written)).toEqual([first[1].template])
+    // The account's key is not what the record is kept under.
+    expect(JSON.stringify(written)).not.toContain('e2b_account_key')
+    // Another run, another process: no base is made, and nothing is installed again.
+    expect((await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--json'], { env })).code).toBe(0)
+    lines = (await sdk.read()).slice(lines.length)
+    expect(lines.filter((e) => e.create).map((e) => e.template)).toEqual([first[1].template])
+    expect(lines.some((e) => e.run?.includes("'npm' 'install'"))).toBe(false)
+  })
+
+  it('e2b: the token mu run has made for a named agent is one the runner takes', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const id = JSON.parse((await cli(dir, ['tasks', 'create', 'work/web', 'fix the header', '--json'])).stdout).task.id
+    const run = await cli(dir, ['run', String(id), '--runner', 'e2b', '--agent', 'claude', '--as', 'fixer', '--json'], { env: { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env } })
+    expect(run.code, run.stderr).toBe(0)
+    expect(JSON.parse(run.stdout)).toMatchObject({ task: id, runner: 'e2b', exit: 0 })
+    // Made for this run and revoked when it ended.
+    expect((await cli(dir, ['token', 'list'])).stdout).toMatch(/fixer  work\/web=read,post,react,label  .*revoked\n$/)
+  })
+
+  it('e2b: a --ready --loop worker gives each task a sandbox of its own, with its own token stored and removed', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    const ids: number[] = []
+    for (const text of ['first', 'second']) ids.push(JSON.parse((await cli(dir, ['tasks', 'create', 'swarm/web', text, '--json'])).stdout).task.id)
+    const run = await cli(dir, ['run', '--ready', 'swarm/web', '--loop', '--wait', '1s', '--runner', 'e2b', '--agent', 'claude', '--as', 'agent-1'], { env: { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env } })
+    expect(run.code, run.stderr).toBe(0)
+    const lines = await sdk.read()
+    const created = lines.filter((e) => e.create)
+    expect(created).toHaveLength(2)
+    expect(lines.filter((e) => e.run && e.options.background).map((e) => Number(/'run' '(\d+)'/.exec(e.run)?.[1]))).toEqual(ids)
+    expect(new Set(created.map((e) => e.create.envs.MUSTER_CLAIM_TOKEN)).size).toBe(2)
+    // One task's time each, not a worker's: the sandbox is the task's.
+    expect(created.map((e) => e.create.timeoutMs)).toEqual([40 * 60_000, 40 * 60_000])
+    // Two tokens, each stored for its own sandbox and gone with it.
+    const stored = lines.filter((e) => e.secret)
+    expect(new Set(stored.map((e) => e.value)).size).toBe(2)
+    expect(lines.filter((e) => e.destroyed).map((e) => e.destroyed).sort()).toEqual(stored.map((e) => e.secret).sort())
+    expect(lines.filter((e) => e.killed)).toHaveLength(2)
+  })
+
+  it('e2b: --push reads the agent\'s changes out of a closed sandbox and opens the pull request from here, the clone\'s token stored only while it clones', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { readFileSync } = await import('node:fs')
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args], { encoding: 'utf8' }).trim()
+    const work = tempDir()
+    const remote = join(tempDir(), 'web.git')
+    git(work, 'init', '-q', '-b', 'main')
+    writeFileSync(join(work, 'README.md'), 'hello\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'base')
+    const base = git(work, 'rev-parse', 'HEAD')
+    execFileSync('git', ['clone', '-q', '--bare', work, remote])
+    writeFileSync(join(work, 'README.md'), 'hello, fixed\n')
+    git(work, 'commit', '-q', '-am', 'the fix')
+    execFileSync('git', ['-C', work, 'bundle', 'create', join(work, 'mu.bundle'), `${base}..HEAD`], { stdio: 'ignore' })
+    const api = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        const parsed = body ? JSON.parse(body) : null
+        const json = (status: number, value: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.url === '/repos/acme/web/installation') return json(200, { id: 9 })
+        const branches = branchAnswer(remote, req.url)
+        if (branches) return json(...branches)
+        if (req.url === '/app/installations/9/access_tokens') return json(201, { token: parsed.permissions.contents === 'write' ? 'ghs_write' : 'ghs_read', expires_at: '2030-01-01T00:00:00Z' })
+        json(201, { html_url: 'https://github.com/acme/web/pull/7' })
+      })
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    const dir = tempDir()
+    const sdk = fakeE2b(dir, { checkout: `${base}\nmain`, bundled: 'bundle', file: readFileSync(join(work, 'mu.bundle')).toString('base64') })
+    const env = { MUSTER_SANDBOX_URL: marked.MUSTER_URL, MUSTER_AGENT_TOKEN: marked.MUSTER_AGENT_TOKEN, ...sdk.env, ...appEnv(), MUSTER_GITHUB_API: `http://127.0.0.1:${(api.address() as { port: number }).port}`, MUSTER_GITHUB_REMOTE: remote }
+    try {
+      const run = await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--as', 'fixer', '--repo', 'https://github.com/acme/web.git', '--no-install', '--push', '--json'], { env })
+      expect(JSON.parse(run.stdout), run.stderr).toMatchObject({ task: 12, exit: 0, pr: 'https://github.com/acme/web/pull/7' })
+      expect(execFileSync('git', ['-C', remote, 'show', 'refs/heads/mu/task-12:README.md'], { encoding: 'utf8' })).toBe('hello, fixed\n')
+      const lines = await sdk.read()
+      const read = Buffer.from('x-access-token:ghs_read').toString('base64')
+      // The read token is a stored secret while GitHub is open to clone, and removed before the agent's credentials exist.
+      const clone = lines.find((e) => e.secret && e.value === `Basic ${read}`)
+      const gone = lines.findIndex((e) => e.destroyed === clone.secret)
+      expect(gone).toBeGreaterThan(-1)
+      expect(gone).toBeLessThan(lines.findIndex((e) => e.secret && e.value.startsWith('Bearer mu1.')))
+      // After the agent the sandbox reaches nothing, and only then is the bundle made and read.
+      const exited = lines.findIndex((e) => e.exited !== undefined)
+      expect(lines[exited + 1]).toMatchObject({ network: { denyOut: ['0.0.0.0/0'] } })
+      expect(lines[exited + 1].network.allowOut).toBeUndefined()
+      // What the agent left running is ended before anything is read out.
+      expect(lines[exited + 2].run).toContain('left $left')
+      const bundled = lines.findIndex((e) => e.run?.includes('bundle create'))
+      expect(bundled).toBeGreaterThan(exited + 2)
+      expect(lines[bundled].options).toMatchObject({ cwd: '/home/user/web', envs: { MU_BASE: base, MU_NAME: 'fixer' } })
+      expect(lines.findIndex((e) => e.killed)).toBeGreaterThan(bundled)
+      // The write token is made and used here: it is never stored at E2B, nor sent to the sandbox.
+      expect(readFileSync(join(dir, 'e2b.log'), 'utf8')).not.toMatch(/ghs_write/)
+      expect(readFileSync(join(dir, 'e2b.log'), 'utf8')).not.toContain(Buffer.from('x-access-token:ghs_write').toString('base64'))
+    } finally {
+      api.close()
+    }
+  })
+
+  it('the token made for a named agent is marked for a sandbox, so the board holds it to a sandbox\'s routes', async () => {
+    const dir = tempDir()
+    const sdk = fakeSdk(dir)
+    const id = JSON.parse((await cli(dir, ['tasks', 'create', 'work/web', 'fix the header', '--json'])).stdout).task.id
+    const run = await cli(dir, ['run', String(id), '--runner', 'vercel', '--agent', 'claude', '--as', 'fixer', '--json'], { env: { MUSTER_SANDBOX_URL: 'https://board.example.com/api/board', ...sdk.env, MUSTER_VERCEL_BASE: 'off' } })
+    expect(run.code, run.stderr).toBe(0)
+    // The token is where the sandbox's requests get it: in the policy, on the way out.
+    const sent = JSON.stringify(await sdk.read()).match(/Bearer (mu1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/)?.[1]
+    expect(sent).toBeDefined()
+    expect(JSON.parse(Buffer.from(sent!.split('.')[1]!, 'base64url').toString('utf8'))).toMatchObject({ profile: 'fixer', can: { 'work/web': ['read', 'post', 'react', 'label'] }, sandbox: true, noSync: true })
   })
 
   it('vercel: one length of time sets the agent\'s timeout, the sandbox\'s, which outlives it, and the token\'s', async () => {

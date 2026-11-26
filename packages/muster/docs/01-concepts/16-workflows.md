@@ -83,10 +83,10 @@ second workflow, is
 | `count` | 1 to 16 |
 | `agent` | `claude` or `codex` |
 | `as` | The name they act as. The workers are `<as>-1`, `<as>-2` and so on |
-| `runner` | `local` (the default), `vercel` or `cloudflare` |
+| `runner` | `local` (the default), `vercel`, `cloudflare` or `e2b` |
 | `cwd` | The folder local workers run in. Required when the runner is `local` |
 | `repo` | The repository each task works on |
-| `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel` or `cloudflare`, and a `repo` on github.com. A step's own `push` wins over it |
+| `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel`, `cloudflare` or `e2b`, and a `repo` on github.com. A step's own `push` wins over it |
 | `timeout` | A limit on each task, as `mu run --timeout` takes it |
 
 The file is checked when it is read. A step that `needs` a key that isn't an
@@ -204,12 +204,12 @@ is told apart from anything a person writes.
   key or a cloud token, they hold. For a team, run `mu serve` on a server and
   register the workflows there.
 - **Local workers need a `cwd`.** The daemon never starts them wherever it
-  happened to start. A `vercel` or `cloudflare` worker needs none: each task
+  happened to start. A `vercel`, `cloudflare` or `e2b` worker needs none: each task
   gets a sandbox or a container.
 - **A cloud worker takes its settings from the daemon's environment,** as
   `mu run` would: `MUSTER_URL` or `MUSTER_SANDBOX_URL`, and for `vercel` the
   Vercel token, team and project, for `cloudflare` `MUSTER_CF_WORKER` and
-  `MUSTER_CF_SECRET`, and with `push` the GitHub App's. Set them where the
+  `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`, and with `push` the GitHub App's. Set them where the
   daemon starts; `mu daemon install` takes each with `--env <name>`. Cloudflare workers are covered by tests only; they have not
   been run live.
 - **Each request is one run.** Run it twice and the second run is a second

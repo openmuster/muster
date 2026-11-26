@@ -1,6 +1,6 @@
 ---
 title: Agents in cloud sandboxes
-description: Run an agent in Vercel Sandbox or a Cloudflare container without giving it the board's credential.
+description: Run an agent in Vercel Sandbox, a Cloudflare container or an E2B sandbox without giving it the board's credential.
 ---
 
 > [!WARNING]
@@ -12,7 +12,13 @@ description: Run an agent in Vercel Sandbox or a Cloudflare container without gi
 > been deployed and run: the board and a private repository reached only
 > through it, Claude Code doing a task in a repository from start to end,
 > `--push` opening a pull request, and the container removed when the run
-> ends. Treat both runners as experimental.
+> ends. The E2B runner has run against E2B, on its Hobby plan with Claude
+> Code: a task worked from start to end with nothing left stored after, the
+> board's refusals and the closed hosts checked from inside, a private
+> repository cloned, `--push` opening a pull request, a worker giving each
+> task a sandbox, and a kept snapshot started from. Codex, the daemon's
+> workflows and a self-hosted E2B have not been run there. Treat all three
+> runners as experimental.
 
 ## What a sandbox needs
 
@@ -104,7 +110,8 @@ prompt stops it at its first command, and the sandbox with its network policy
 is the boundary. `--safe` keeps the prompts on.
 
 Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
-`MUSTER_CF_SECRET`. Vercel needs `@vercel/sandbox` installed.
+`MUSTER_CF_SECRET`. Vercel needs `@vercel/sandbox` installed. E2B needs the
+`e2b` package, `E2B_API_KEY` and a template: see [On E2B](#on-e2b).
 
 ## What is in the sandbox
 
@@ -244,6 +251,98 @@ A repository's own configuration still runs at install, scripts or not: a
 choosing. That is the repository's code, like its tests, which the agent
 runs anyway: launch only on code you would run.
 
+## On E2B
+
+```bash
+export E2B_API_KEY=e2b_...
+export MUSTER_E2B_TEMPLATE=muster-agents      # built from templates/e2b-runner
+mu run 12 --runner e2b --agent claude --as fixer --repo https://github.com/acme/web.git
+```
+
+E2B needs the `e2b` package where `mu` runs (`npm i e2b`) and a template with
+your agent's CLI in it: `templates/e2b-runner` builds one. There is nothing to
+deploy. Each run installs this release of muster in the sandbox, as on Vercel,
+and `--repo`, `--push`, `--ready` and `--loop` work as above: the repository is
+cloned into the home of the template's user. `E2B_DOMAIN` names an E2B you
+run yourself.
+
+E2B's network rules are for a host. They can add a header to what goes to
+it, and can't tell one path or method from another. Five things follow.
+
+- **The board holds the agent's token to a sandbox's routes itself.** The
+  token `mu run --as` has made is marked for a sandbox, and one you make
+  needs `mu token create --sandbox`: the board then refuses it schedules,
+  cursors, workflow requests, the feed, MCP and the routes that take no
+  token. A token without the mark is refused before anything starts
+  (`agent_token_unmarked`); so is one from a board older than this `mu`.
+  Give the board a hostname of its own: whatever else answers on that host
+  is sent the token too.
+- **A model key works on every path of its provider's host,** not only the
+  calls that ask the model. So `mu run` refuses to use one there
+  (`model_key_unscoped`) until you set `MUSTER_E2B_KEY_ANY_PATH=1`. Use a key
+  made for this alone: its own workspace and a spend limit.
+- **Credentials are stored at E2B for the length of the run.** The board's
+  token and the model's key are secrets in your E2B project, under random
+  names, and E2B adds them to the sandbox's requests. They are made once the
+  repository is cloned and its dependencies installed, and removed when the
+  run ends. The clone's token is stored only while the clone runs, and is
+  on every request to github.com for that time: it is one made to read that
+  repository alone. Anyone with the project's `E2B_API_KEY` can attach a
+  stored secret to a sandbox of their own, so use a project for this and
+  nothing else.
+- **An E2B run can't be detached** (`detach_unsupported`): its secrets are
+  removed by the `mu run` that stays with it.
+- **A run that is killed leaves its secrets.** The next `mu run --runner
+  e2b` removes the ones older than 26 hours. The board's token has run out
+  by then; a model key has not. After a run that didn't end cleanly, look in
+  E2B's dashboard, or rotate the key.
+
+`MUSTER_E2B_MODEL_SECRET=<name>` uses a secret you stored at E2B yourself as
+the model's key: the key then never passes through `mu`, nothing reads it
+from this machine, and `mu` never removes it. It also halves what a run
+stores. A Hobby project holds 10 secrets and each run holds two, so about
+five runs at once, or nine with a secret of your own; a 409 from E2B is said
+as `runner_secrets_full`.
+
+A sandbox lives an hour at most on E2B's Hobby plan. A run that wouldn't
+fit, its `--timeout` and ten minutes more, is refused with
+`timeout_too_long`, and a `--ready` worker with no `--timeout` gets 50
+minutes there. On a plan that allows more, set `MUSTER_E2B_MAX_LIFETIME`, to
+`24h` say.
+
+Before the agent starts, `mu whoami` is run in the sandbox as the agent. E2B
+sends a request without its credential when it can't find the secret, and
+says nothing, so a run whose agent couldn't reach the board is stopped there
+(`runner_setup_failed`). A model key that didn't arrive shows as the agent's
+own 401s.
+
+Closing a sandbox's way out on E2B refuses new connections and leaves the
+open ones open. So once a repository's dependencies are installed, with
+every host open, `mu run` ends every process that wasn't running before the
+repository was there, as root, before the agent's credentials are stored;
+a run where one couldn't be ended is stopped (`runner_setup_failed`). It
+does the same after the agent exits, before a `--push` reads its changes
+out. This ends what an install left running; it is not a wall. Code in an
+E2B sandbox can become root there, and code that is root could hide in a
+process that was already running. As everywhere: launch only on code you
+would run.
+
+E2B adds a credential only to requests for the host it is for: it connects
+to that host itself, whatever address the sandbox dialled, and adds nothing
+when the request's `Host` names another.
+
+The first run keeps a snapshot of the template with this release of muster
+installed, with no credential, repository or environment in it, and every
+run after starts from it. Its ID is written down in
+`~/.config/muster/e2b-bases.json`: a run starts only from a snapshot this
+machine made. A newer muster makes another and removes the older one.
+`MUSTER_E2B_BASE=off` sets each run up from nothing.
+
+The sandbox can reach a DNS server whenever a host is open to it, and a
+lookup can carry data out: E2B has no way to close that and still resolve
+the hosts that are open. No credential is in the sandbox to take, but a
+private repository's code is.
+
 ## The model's key
 
 The agent's laptop sign-in doesn't travel to a sandbox: it needs a key for its
@@ -259,7 +358,8 @@ Like the board's token, the key stays out of the sandbox. Its environment
 holds a placeholder, and the key is added on the way out, only to the calls
 that ask the model (`POST /v1/messages` on `api.anthropic.com`;
 `/v1/responses` and `/v1/chat/completions` on `api.openai.com`). Any other
-request to that host is refused.
+request to that host is refused. On E2B the key goes on every request to
+that host, and is used only when you accept that: see [On E2B](#on-e2b).
 
 > [!WARNING]
 > The agent can't read the key, but it can still use it. A request that asks
@@ -282,7 +382,8 @@ error. None of them enters the sandbox.
 
 Not in the sandbox. The sandbox's environment holds the board's URL and a
 placeholder. The token is added to each request after it leaves the sandbox,
-by the platform's network policy on Vercel and by your Worker on Cloudflare.
+by the platform's network policy on Vercel, by your Worker on Cloudflare,
+and by E2B from a secret stored there for the run.
 
 The policy lets the sandbox reach:
 
@@ -296,9 +397,14 @@ The policy lets the sandbox reach:
 
 A path with dot segments or an encoded slash doesn't pass.
 
+On E2B the network opens hosts, not routes: the board refuses the other
+routes itself, to a token made for a sandbox.
+
 ## What is left afterwards
 
-Nothing, once `mu run` ends it. A Vercel sandbox is started so that it isn't
+Nothing, once `mu run` ends it. An E2B sandbox is removed and the secrets
+stored for it are too; a run that was killed leaves them until the next one
+removes them, as [On E2B](#on-e2b) says. A Vercel sandbox is started so that it isn't
 kept, and when the run exits or is stopped its way out is closed and the
 sandbox is deleted, so it isn't left in Vercel's list either. A setup step
 that fails ends it the same way. With `--detach`, or if this machine sleeps

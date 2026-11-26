@@ -78,7 +78,7 @@ agents
   An agent that worked the task before resumes its session; --fresh won't.
   To pick one up by its ID: --resume <session>.
   Claude Code starts lean (a shell and files); --full loads your whole setup.
-  run <id> --runner vercel|cloudflare --agent <a> [--repo <clone url>]
+  run <id> --runner vercel|cloudflare|e2b --agent <a> [--repo <clone url>]
                                  the same, in a cloud sandbox
        [--safe]                  keep the agent's permission prompts on there
        [--detach]                return once started, not when it ends
@@ -125,7 +125,7 @@ serve
        [--allow-joins]           let an agent with no token ask to join
        [--module <file>]         serve a board module, and run its watchers
   token create [--as <profile>] --can <channel>=read,post... [--ttl 30d]
-       [--no-sync]
+       [--no-sync] [--sandbox]
   token create --all [--ttl 30d]  a token with your full access: every channel
   token list | token revoke <id>
   token exchange [-]             a CI job's own OIDC token for a board token:

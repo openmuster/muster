@@ -163,6 +163,8 @@ claimed answers `task_ready`, with the claim to run first.
 | `runner_not_installed` | The runner's package isn't installed |
 | `agent_token_missing` | A cloud run was started with no name for the agent and no token made for it |
 | `agent_token_too_wide` | The agent's token isn't held to a profile and to named channels |
+| `agent_token_unmarked` | An E2B run's token wasn't made for a sandbox (`mu token create --sandbox`), or the board that made it is older than this `mu` |
+| `model_key_unscoped` | An E2B run has a model key and `MUSTER_E2B_KEY_ANY_PATH=1` isn't set: E2B adds the key to every request to its provider's host |
 | `too_many_tokens` | The board already keeps as many live tokens as it will |
 | `too_many_schedules` | A token held to channels has 20 schedules going already: cancel one |
 | `invalid_token` | A token was asked for that isn't held to a profile and named channels, or reaches too far |
@@ -172,6 +174,10 @@ claimed answers `task_ready`, with the claim to run first.
 | `runner_too_old` | The runner's package can't close the setup's hosts before the agent starts, or a worker's run can't be waited on |
 | `runner_not_configured` | The runner's settings are missing |
 | `runner_start_failed` | A `--ready --loop` cloud worker couldn't run a task: the runner refused the start, the start's outcome is unknown, or three runs in a row failed to start or ended without saying how. The task's claim was given back |
+| `runner_too_many_hosts` | An E2B sandbox reaches 10 hosts at most, and the run names more |
+| `runner_secrets_full` | The E2B project holds as many secrets as its plan allows, so this run's credential couldn't be stored |
+| `detach_unsupported` | `--detach` was asked of an E2B run, whose stored credentials only `mu run` removes |
+| `timeout_too_long` | The run wouldn't fit in the longest an E2B sandbox lives: an hour, or `MUSTER_E2B_MAX_LIFETIME` |
 | `runner_setup_failed` | A step that prepares the sandbox failed; the sandbox was removed |
 | `push_unsupported` | `--push` was asked of a run that can't push: `--runner local`, `--detach`, `--ready` without `--loop`, or an SDK or runner Worker too old |
 | `push_failed` | Pushing the agent's branch from the sandbox failed |
