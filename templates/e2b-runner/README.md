@@ -6,8 +6,8 @@ Cloudflare runner there is nothing to deploy. E2B runs the sandbox, and `mu`
 on your machine starts it, watches it and removes it.
 
 > [!WARNING]
-> Run against E2B once, on its Hobby plan with Claude Code. Treat it as
-> experimental.
+> Run against E2B on its Hobby plan, with Claude Code and with Codex. Treat
+> it as experimental.
 
 ## Build it
 

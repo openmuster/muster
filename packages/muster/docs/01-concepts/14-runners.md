@@ -84,12 +84,13 @@ See [Running agents](../03-guides/05-running-agents.md) for local runs and
 | `--ready --loop` | One agent after another, here | A sandbox per task, started from here | A container per task, started from here (covered by tests only, not run live) | A sandbox per task, started from here |
 | Registered workflows | Yes | Yes | Yes (covered by tests only, not run live) | Yes |
 | Default `--timeout` | None | 30 minutes | 30 minutes with `--push` or for a worker's task; otherwise an hour, set by the Worker | 30 minutes; a sandbox lives an hour at most unless `MUSTER_E2B_MAX_LIFETIME` says more |
-| Agents | Claude Code, Codex, or any command | Claude Code and Codex, which the sandbox image has | Claude Code, which the template's image installs; set `AGENT_PACKAGE` for another | Claude Code and Codex, in the template you build (Codex has not finished a task live) |
+| Agents | Claude Code, Codex, or any command | Claude Code and Codex, which the sandbox image has | Claude Code, which the template's image installs; set `AGENT_PACKAGE` for another | Claude Code and Codex, in the template you build |
 
 The cloud runners are experimental. What has been run against the real
 services, and what hasn't, is in the README's
 [What has been run for real](https://github.com/openmuster/muster#what-has-been-run-for-real).
-Codex has not yet been run in either cloud.
+Codex has been run on E2B, and not yet in a Vercel sandbox or a Cloudflare
+container.
 
 ## Which agents
 
