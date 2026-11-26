@@ -266,3 +266,77 @@ describe('sync: a thread being worked on, shown on a platform that can show it',
     again.close()
   })
 })
+
+describe('sync: Slack as an agent shows a thread being worked on', () => {
+  /** A board synced with a Slack channel by an app declared an agent, and a Slack that takes its calls. */
+  function agent(options: { refuse?: () => string | null } = {}) {
+    const time = clock()
+    const sent: { method: string; auth: string | null; body: any }[] = []
+    let made = 9000
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      const method = String(url).split('/').pop()!
+      sent.push({ method, auth: new Headers(init?.headers).get('authorization'), body: JSON.parse(String(init?.body ?? '{}')) })
+      const error = method === 'agents.sessions.setStatus' ? options.refuse?.() : null
+      return Response.json(error ? { ok: false, error } : { ok: true, ts: `1700000000.${++made}` })
+    }) as typeof fetch
+    const chat = slack({ secret: SECRET, token: 'xoxb', bot: 'B0BOT', agent: true, channels: { C123: 'general' }, now: () => time.now().getTime() })
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync: { chat }, fetch: fetcher })
+    const team = board({ backend })
+    const thread = async () => {
+      await backend.syncTick()
+      const body = JSON.stringify({ type: 'event_callback', event_id: 'Ev1', event: { type: 'message', user: 'U1', channel: 'C123', text: 'the footer says 2025', ts: '1700000000.000100' } })
+      const stamp = String(Math.floor(time.now().getTime() / 1000))
+      await backend.syncReceive('chat', { headers: { 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${createHmac('sha256', SECRET).update(`v0:${stamp}:${body}`).digest('hex')}` }, body })
+      return (await team.readChannel({ channel: 'general' })).threads[0]!.message.id
+    }
+    const statuses = () => sent.filter((call) => call.method === 'agents.sessions.setStatus').map((call) => call.body.status)
+    return { time, sent, statuses, backend, team, daemon: team.as('workflows'), thread }
+  }
+
+  it("sets the thread's session to processing while a run works and to active when it ends, and posts only the summary", async () => {
+    const { backend, daemon, sent, thread } = agent()
+    const root = await thread()
+    const progress = await daemon.reply({ to: root, text: 'started card: 3 tasks in general/card-9', labels: { progress: 'open' } })
+    await backend.syncTick()
+    expect(sent).toEqual([{ method: 'agents.sessions.setStatus', auth: 'Bearer xoxb', body: { channel_id: 'C123', thread_ts: '1700000000.000100', status: 'processing' } }])
+    // What the run says next starts Slack's hour over; Slack shows none of its words.
+    await daemon.edit({ id: progress.id, text: 'started card: 3 tasks in general/card-9\n#11 claimed, #13 waiting, #15 waiting' })
+    await backend.syncTick()
+    await daemon.reply({ to: root, text: 'card finished: 3 completed, 0 failed, 0 canceled' })
+    await daemon.label({ id: progress.id, set: { progress: 'done' } })
+    await backend.syncTick()
+    expect(sent.slice(1).map((call) => [call.method, call.body.status ?? call.body.text])).toEqual([
+      ['agents.sessions.setStatus', 'processing'],
+      ['chat.postMessage', 'card finished: 3 completed, 0 failed, 0 canceled'],
+      ['agents.sessions.setStatus', 'active'],
+    ])
+  })
+
+  it('tells Slack again before its hour is up, while the run still works', async () => {
+    const { backend, time, daemon, statuses, thread } = agent()
+    await daemon.reply({ to: await thread(), text: 'started card: 3 tasks in general/card-9', labels: { progress: 'open' } })
+    await backend.syncTick()
+    time.advance(49 * MIN)
+    await backend.syncTick()
+    expect(statuses()).toEqual(['processing'])
+    time.advance(MIN)
+    await backend.syncTick()
+    expect(statuses()).toEqual(['processing', 'processing'])
+  })
+
+  it('takes a refusal from Slack as a failure, and tries again in a minute', async () => {
+    let error: string | null = 'feature_disabled'
+    const { backend, time, daemon, statuses, thread } = agent({ refuse: () => error })
+    const progress = await daemon.reply({ to: await thread(), text: 'started card: 3 tasks in general/card-9', labels: { progress: 'open' } })
+    await backend.syncTick()
+    error = null
+    await backend.syncTick()
+    expect(statuses()).toEqual(['processing'])
+    time.advance(MIN)
+    await backend.syncTick()
+    // Told once it took it: the end is then said too.
+    await daemon.label({ id: progress.id, set: { progress: 'done' } })
+    await backend.syncTick()
+    expect(statuses()).toEqual(['processing', 'processing', 'active'])
+  })
+})

@@ -7,6 +7,14 @@ versions are affected.
 
 ### Added
 
+- Slack sync can show a thread being worked on with Slack's own "Working…":
+  `slack({ agent: true, … })`, for a Slack app declared an agent. While a
+  workflow run on a synced thread is open, the board sets the thread's agent
+  session to `processing`, and to `active` once the run's summary is posted;
+  the run's `started …` reply is then not posted to Slack. Not yet run
+  against a live workspace. See
+  [Show a thread being worked on](./packages/muster/docs/02-sync/04-slack.md#show-a-thread-being-worked-on).
+
 - Linear sync can comment as an app of its own: `linear({ clientId:
   env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), … })` in
   place of `token`, for an OAuth application with client credentials tokens
