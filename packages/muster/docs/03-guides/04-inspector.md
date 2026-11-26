@@ -32,6 +32,11 @@ board and plays a run through every state, so you can watch one happen.
 It follows the board live. The view is in the URL, so a link opens the same
 place.
 
+Every view is a link: Tab reaches it, Enter opens it, and it opens in a new
+tab when you ask for one. Enter opens a row too. On a phone the sidebar is
+behind the menu button and a thread takes the whole screen; on a tablet a
+thread lies over the list.
+
 ## Whose access it has
 
 The page acts as you, so its server trusts nothing but its own page:
