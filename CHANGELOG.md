@@ -126,6 +126,13 @@ versions are affected.
   changed, so each is read from Notion's API on the ticker, after the webhook
   is answered. See [Notion](./packages/muster/docs/02-sync/05-notion.md).
 
+
+### Fixed
+
+- Notion: the webhook's verification request is taken while the sync's
+  secret is `pending` whether or not Notion signs it. Notion signs it with
+  the token it carries, so the board refused it with 401 and Notion said it
+  failed to send the token.
 ## 0.3.1-alpha.1
 
 ### Added

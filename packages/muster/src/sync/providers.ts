@@ -1168,13 +1168,15 @@ function notionWith(options: Resolved<NotionOptions>): Provider {
       // While the sync waits for its token (`secret` is `pending`), the one request Notion can't sign, that token, is all
       // it takes: `pending` is no secret, so nothing signed with it is believed. Once it has its secret, nothing unsigned is.
       if (options.secret === NOTION_PENDING) {
-        if (signature === undefined && isVerification(body)) return
+        // Notion signs even this request, with the very token it carries, so its signature can't be checked here:
+        // the token's shape is all there is to go on, and all it can do is be written down once (`challenge`).
+        if (isVerification(body)) return
         throw bad()
       }
       if (!same(signature ?? '', `sha256=${hmac(options.secret, body)}`)) throw bad()
     },
-    challenge({ headers, body }) {
-      if (headers['x-notion-signature'] !== undefined || options.secret !== NOTION_PENDING || !isVerification(body)) return null
+    challenge({ body }) {
+      if (options.secret !== NOTION_PENDING || !isVerification(body)) return null
       // Written for the operator alone, never answered or logged, and never over one already there (nor through a link
       // put in its place): the first token stays. Anyone can send one, so a token Notion didn't send fails when it is
       // pasted into Notion's Verify: check it there, or delete the file and have Notion send it again.
