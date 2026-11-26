@@ -7,6 +7,14 @@ versions are affected.
 
 ### Added
 
+- Linear sync can comment as an app of its own: `linear({ clientId:
+  env('LINEAR_CLIENT_ID'), clientSecret: env('LINEAR_CLIENT_SECRET'), … })` in
+  place of `token`, for an OAuth application with client credentials tokens
+  turned on. The board asks Linear for the app's token and renews it, so
+  comments and issues are by the app and not by whoever owns a personal API
+  key. `templates/loop` now uses it. Not yet run against a live workspace.
+  See [Who the comments are by](./packages/muster/docs/02-sync/03-linear.md#who-the-comments-are-by).
+
 - GitHub sync can comment as a GitHub App: `github({ appId: env('GITHUB_APP_ID'),
   appKey: env('GITHUB_APP_KEY_FILE'), … })` in place of `token`. Comments,
   edits, deletes and catch-up then use a token the board makes for each
