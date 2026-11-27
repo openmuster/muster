@@ -9,8 +9,10 @@ before you change how anything behaves.
 
 ```bash
 pnpm install
-pnpm check          # build, typecheck and test, in that order
+pnpm check          # build, typecheck, lint, knip and test, in that order
 pnpm test           # tests only
+pnpm lint           # oxlint, warnings fail; layer rules in .oxlintrc.json
+pnpm knip           # unused files, exports and dependencies; see knip.json
 ```
 
 ## Docs
@@ -131,18 +133,29 @@ store  <-  policy  <-  backend (file, http)  <-  board() handle  <-  CLI and UIs
   handle.
 - Request shapes are shared between the server and the handle.
 
+`.oxlintrc.json` checks the arrows that hold today: the store imports
+nothing above it, the policy layer (`src/core`) only the store, the CLI no
+store, no `node:sqlite` and no network module, and only types from
+`src/core`. `src/serve` and `src/sync` still open the store themselves.
+
 ## Rules the code keeps
 
-| Rule | Meaning |
-| --- | --- |
-| A single log | Each fact on a board is one event. Tables are updated in the same transaction and can be rebuilt from the log alone |
-| The board says who wrote it | Authorship, mentions and `board.*` labels come from the verified caller, never from a request body |
-| No commands in the database | What runs is code the operator wrote: watchers, sync and outgoing webhooks are declared in a board module, a file outside any board, with secrets named by `env()`. A row says what happened, never what to run or where to send it |
-| Deadlines are stored, not timed | Nothing depends on a timer having gone off |
-| Leave judgment to the model | No keyword or emoji triggers, no automatic decoration, no rules that guess what a message means. Pass on what was written and give agents tools |
-| No favourite agent | The core reads no agent-specific environment variables and assumes no particular terminal or vendor |
-| Erasable TypeScript | No enums, namespaces or parameter properties, so tests can run the CLI from source |
-| The CLI is a product | Plain text in columns, a line per fact, errors as data, exit codes 0, 1, 2, 130 and 143. `--json` prints exactly one document |
+When a correction from the maintainer repeats a rule already here, and
+nothing enforces it, enforce it with a test or a lint rule rather than
+restating it, and name that in the table. A new rule gets a row.
+"Judgment" means nothing checks the rule yet: a reviewer has to.
+
+| Rule | Meaning | Enforced by |
+| --- | --- | --- |
+| A single log | Each fact on a board is one event. Tables are updated in the same transaction and can be rebuilt from the log alone | `test/store.test.ts` (a fold of the log rebuilds every table) |
+| The board says who wrote it | Authorship, mentions and `board.*` labels come from the verified caller, never from a request body | `test/serve.test.ts` (a token can't forge who wrote); the conformance suite, `src/conformance.ts`, run by `test/conformance.test.ts` (reserved labels) |
+| No commands in the database | What runs is code the operator wrote: watchers, sync and outgoing webhooks are declared in a board module, a file outside any board, with secrets named by `env()`. A row says what happened, never what to run or where to send it | Judgment |
+| Deadlines are stored, not timed | Nothing depends on a timer having gone off | Partly: `test/leases.test.ts` (a lapsed lease), `test/daemon.test.ts` (slots missed while down); otherwise judgment |
+| Leave judgment to the model | No keyword or emoji triggers, no automatic decoration, no rules that guess what a message means. Pass on what was written and give agents tools | Judgment |
+| No favourite agent | The core reads no agent-specific environment variables and assumes no particular terminal or vendor | `test/agents-env.test.ts` (variables); the terminal and vendor part is judgment |
+| Erasable TypeScript | No enums, namespaces or parameter properties, so tests can run the CLI from source | `erasableSyntaxOnly` in `tsconfig.base.json`, through `pnpm typecheck` |
+| The CLI is a product | Plain text in columns, a line per fact, errors as data, exit codes 0, 1, 2, 130 and 143. `--json` prints exactly one document | `test/cli.test.ts` (exit codes, one `--json` document); the layout is judgment |
+| The layers point one way | See Structure: the CLI calls the handle, the policy layer sits on the store | `no-restricted-imports` in `.oxlintrc.json`, through `pnpm lint` |
 
 ## Credit
 

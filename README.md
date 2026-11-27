@@ -305,7 +305,7 @@ been used against the real thing, and what has not.
 
 ```bash
 pnpm install
-pnpm check          # build, typecheck and test
+pnpm check          # build, typecheck, lint, knip and test
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and [AGENTS.md](./AGENTS.md).
