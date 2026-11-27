@@ -98,9 +98,11 @@ export const CHAPTERS: Chapter[] = [
 ]
 
 /**
- * The same work arriving from the tools people already use. Each follows its sync page: what comes in
- * becomes a thread with labels, `mu tasks create <id>` makes it a task, and the agent's replies go back
- * as comments (on GitHub, where the repository sets `mirror`).
+ * The same work arriving from the tools people already use, run by hand. Each follows its sync page: what
+ * comes in becomes a thread with labels, `mu tasks create <id>` makes it a task, and the agent's replies go
+ * back as comments (on GitHub, where the repository sets `mirror`). `mu wait` prints what it prints: the
+ * event, credited as sync credits it (a Linear or Notion user's ID, a Slack member ID, a GitHub login).
+ * The loop template does the waiting, and the In progress and Done moves, by itself.
  */
 export const SYNC_CHAPTERS: Chapter[] = [
   {
@@ -114,9 +116,12 @@ export const SYNC_CHAPTERS: Chapter[] = [
     channel: 'eng',
     app: { column: 'Backlog', tags: [], comments: [] },
     cues: [
-      { at: 300, app: { column: 'Todo', tag: 'agent', note: 'maya moved it to Todo and labelled it agent' } },
-      { at: 900, type: 'mu wait eng --label tag.agent=agent --timeout 1h' },
-      { at: 2400, out: '#7  ENG-42  Fix the login redirect  state=todo  tag.agent=agent' },
+      { at: 300, type: 'mu wait eng --label tag.agent=agent --timeout 1h' },
+      { at: 2400, app: { column: 'Todo', tag: 'agent', note: 'maya moved it to Todo and labelled it agent' } },
+      { at: 2400, out: '12      labels.changed    #7      5b1e0c3a-9d2f-4a6e-8c71-2f4b9e0d7a13 · 0s' },
+      { at: 2400, out: '    state=todo tag.agent=agent' },
+      { at: 2400, out: '' },
+      { at: 2400, out: 'next: mu wait eng --after 12' },
       { at: 2900, type: 'mu tasks create 7' },
       { at: 3500, out: 'created  #7  ready' },
       { at: 3900, type: 'mu run 7 --agent claude --as worker-1' },
@@ -135,10 +140,14 @@ export const SYNC_CHAPTERS: Chapter[] = [
     view: 'github',
     ref: 'acme/web#7',
     channel: 'web/prs',
-    app: { column: 'open', tags: ['bug'], checks: 'failing', comments: [], note: 'ci failed on the last push' },
+    app: { column: 'open', tags: ['bug'], checks: 'pending', comments: [], note: 'maya pushed 9f8e7d6' },
     cues: [
       { at: 300, type: "mu wait web/prs --label 'ci.ci=failure' --timeout 1h" },
-      { at: 1900, out: '#12  acme/web#7  Fix the login redirect  ci.ci=failure' },
+      { at: 1900, app: { checks: 'failing', note: 'ci failed on maya\'s push' } },
+      { at: 1900, out: '18      labels.changed    #12     maya · 0s' },
+      { at: 1900, out: '    ci.ci=failure' },
+      { at: 1900, out: '' },
+      { at: 1900, out: 'next: mu wait web/prs --after 18' },
       { at: 2400, type: 'mu tasks create 12' },
       { at: 3000, out: 'created  #12  ready' },
       { at: 3400, type: 'mu run 12 --agent claude --as worker-1' },
@@ -159,9 +168,12 @@ export const SYNC_CHAPTERS: Chapter[] = [
     channel: 'support',
     app: { column: '', tags: [], comments: [] },
     cues: [
-      { at: 300, app: { comment: { by: 'maya', text: 'the login redirect loops on Safari again' } } },
-      { at: 900, type: 'mu wait support --timeout 1h' },
-      { at: 1900, out: '#21  maya  the login redirect loops on Safari again' },
+      { at: 300, type: 'mu wait support --timeout 1h' },
+      { at: 1900, app: { comment: { by: 'maya', text: 'the login redirect loops on Safari again' } } },
+      { at: 1900, out: '21      message.posted    #21     U07MAYA4K2 · 0s' },
+      { at: 1900, out: '    the login redirect loops on Safari again' },
+      { at: 1900, out: '' },
+      { at: 1900, out: 'next: mu wait support --after 21' },
       { at: 2400, type: 'mu tasks create 21' },
       { at: 3000, out: 'created  #21  ready' },
       { at: 3400, type: 'mu run 21 --agent claude --as worker-1' },
@@ -182,9 +194,12 @@ export const SYNC_CHAPTERS: Chapter[] = [
     channel: 'docs',
     app: { column: 'Not started', tags: [], comments: [] },
     cues: [
-      { at: 300, app: { column: 'Ready for agent', note: 'maya set its Status' } },
-      { at: 900, type: 'mu wait docs --label state=ready-for-agent --timeout 1h' },
-      { at: 2600, out: '#30  Write the Q4 launch notes  state=ready-for-agent' },
+      { at: 300, type: 'mu wait docs --label state=ready-for-agent --timeout 1h' },
+      { at: 2600, app: { column: 'Ready for agent', note: 'maya set its Status' } },
+      { at: 2600, out: '33      labels.changed    #30     8c4f2e91-3a6b-4d0e-b7c5-1f9a2d6e3b48 · 0s' },
+      { at: 2600, out: '    state=ready-for-agent' },
+      { at: 2600, out: '' },
+      { at: 2600, out: 'next: mu wait docs --after 33' },
       { at: 3100, type: 'mu tasks create 30' },
       { at: 3700, out: 'created  #30  ready' },
       { at: 4100, type: 'mu run 30 --agent claude --as writer' },
