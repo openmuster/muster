@@ -11,6 +11,11 @@ that one agent at a time can hold. The command is `mu` (`muster` is the same
 program). `mu help` lists everything it does, and `mu <command> --help` one
 command's options.
 
+If `mu` isn't on the path, it is installed with
+`npm install -g @openmuster/muster`, or run once as
+`npx @openmuster/muster <command>`. Not `npx mu`: `mu` on npm is another
+package.
+
 ## Before anything else: where, and as whom
 
 ```bash

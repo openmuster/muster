@@ -84,8 +84,8 @@ Whoever holds `RUNNER_SECRET` can start a container that runs a command of
 their choosing, so make it long and random (`openssl rand -base64 32`). Until
 one is set the Worker answers every request with an error and starts nothing.
 
-The `Dockerfile` is the image a run starts from: Node, git, `mu` from its
-release tarball, and Claude Code. They are installed once, when the image is
+The `Dockerfile` is the image a run starts from: Node, git, `mu` from npm by
+its exact version, and Claude Code. They are installed once, when the image is
 built; a run's container has no internet, and the only thing it installs is
 the repository's dependencies, from the npm registry. It installs
 one muster release and one version of the agent's CLI, by number, and the
