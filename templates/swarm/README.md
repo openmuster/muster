@@ -56,5 +56,5 @@ Here the app uses the muster in this checkout (`workspace:*`). In a copy of
 your own, point the dependency at a release instead:
 
 ```json
-"@openmuster/muster": "0.3.1-alpha.2"
+"@openmuster/muster": "0.3.1-alpha.3"
 ```

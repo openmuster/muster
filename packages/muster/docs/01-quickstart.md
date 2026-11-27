@@ -13,7 +13,7 @@ Older ones bundle a SQLite it refuses to run on. It is on npm as
 npm install -g @openmuster/muster
 ```
 
-To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.2`.
+To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.3`.
 Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
