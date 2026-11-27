@@ -1,6 +1,6 @@
 ---
 title: Porting from the JSON files
-description: What watchers.json, sync.json and hooks.json become in a board module.
+description: Move watchers.json, sync.json and hooks.json into a board module, field by field. mu serve and mu daemon run refuse to start while any of the three is still in place.
 ---
 
 ## What changed

@@ -1,6 +1,6 @@
 ---
 title: A swarm
-description: Several agents working one queue toward one goal.
+description: For splitting one goal across several agents at once. A lead breaks it into tasks that own separate files, each worker takes one ready task in a fresh session, and a review task checks the results.
 ---
 
 ## The shape
@@ -80,6 +80,6 @@ Launch runs only on code you would run yourself.
 
 ## What it costs to start an agent
 
-Each task gets a fresh session. On the machine it was measured on, a Claude
-Code worker starts at about 13,000 tokens the way `mu run` starts it, and a
-small task cost $0.18. See `SPEC.md` for the measurement and its limits.
+Each task gets a fresh session. A Claude Code worker that `mu run` started
+has been measured at about 13,000 tokens before it reads its task, and a
+small task at about $0.18.

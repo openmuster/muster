@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: Every command, as mu help prints it.
+description: Every mu command and flag as mu help prints it, with how to get help for one command, the exit codes, and what plain and JSON output look like to a script.
 ---
 
 ## Commands

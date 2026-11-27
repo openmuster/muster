@@ -1,6 +1,6 @@
 ---
 title: A card queue
-description: Label a Linear issue for the agent, and get a spec, a pull request and a review back on it; you answer only what it asks.
+description: For handing a Linear issue, or a card you post, to an agent that writes a spec, opens a pull request and reviews it, once. Label it agent, each step runs in a cloud sandbox, and it asks you only for decisions.
 ---
 
 ## Who this is for
@@ -159,6 +159,8 @@ line that runs what is left.
 
 ## When not to
 
+- For a project you plan and iterate on in Linear, with rounds on the same
+  pull request: [Building from Linear](./22-building-from-linear.md).
 - For work that needs a back-and-forth: the steps are fixed, spec, work and
   review, and the review only comments. Nothing is sent back for a second
   round.
@@ -252,10 +254,7 @@ was done again keeps the old quote.
 - **`answer.sh` says `isn't yours to change`.** It ran with a profile: unset
   `MUSTER_PROFILE`.
 
-## Not tried live
+## Status
 
-The template is covered by tests: a Linear issue starting a run through the
-module's watchers, the real scripts and the daemon's workflow tick; the
-module run by `mu daemon run --module`; and `mu serve --module` taking
-Linear's webhook and commenting back on the issue, with workers and Linear's
-API as stand-ins. It has not been run against Linear, Vercel and GitHub together.
+Experimental: not yet run end to end against Linear, Vercel and GitHub
+together.

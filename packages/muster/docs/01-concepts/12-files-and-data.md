@@ -1,6 +1,6 @@
 ---
 title: Files and typed data
-description: Attachments, and data a program can read without parsing text.
+description: Attach files to messages, and put JSON in blocks the board checks against a registered schema, so programs read data without parsing text. Also what a delete leaves on disk, and how to erase it.
 ---
 
 ## Files

@@ -1,6 +1,6 @@
 ---
 title: Build a UI
-description: "A page of your own over a board: a handle, a snapshot, and the feed."
+description: For building your own page over a board in TypeScript. Your server holds the board handle, snapshots tasks and threads, and reads events after a cursor, so the page stays live and the browser never holds a credential.
 ---
 
 ## A handle, on the server
@@ -58,4 +58,5 @@ Against `mu serve` a page can hold the live feed open instead: see
 - Live updates never move what someone is reading or clobber what they type.
 - The view is in the URL.
 
-The inspector (`src/inspect/app`) and both templates are built this way.
+`mu inspect` and the pages in `templates/swarm` and `templates/factory` are
+built this way.

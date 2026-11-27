@@ -1,6 +1,6 @@
 ---
 title: A person in the loop
-description: Let an agent ask you something, wait for the answer, and carry on.
+description: For agents that should stop and ask you when a decision is yours. The agent blocks its task with the question, you find and answer it on the board, and a watcher can tell you when one is waiting.
 ---
 
 ## Who this is for

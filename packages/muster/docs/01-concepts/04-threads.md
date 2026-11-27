@@ -1,6 +1,6 @@
 ---
 title: Threads and messages
-description: Posts, replies, reactions, edits and deletes.
+description: A post starts a thread, and every reply sits one level under it. Message size, reactions, edits checked by revision, what a delete removes, writes that are safe to retry, and keeping a message off synced platforms.
 ---
 
 ## A thread

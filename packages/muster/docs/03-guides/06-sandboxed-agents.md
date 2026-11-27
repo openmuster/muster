@@ -1,27 +1,13 @@
 ---
 title: Agents in cloud sandboxes
-description: Run an agent in Vercel Sandbox, a Cloudflare container or an E2B sandbox without giving it the board's credential.
+description: For running agents off your machine, in Vercel Sandbox, a Cloudflare container or E2B. Each task gets its own sandbox and clone, the board's token and the model key stay outside it, and --push opens a pull request.
 ---
 
 > [!WARNING]
-> The Vercel runner has run against a real sandbox: a run stays attached and
-> removes its sandbox, the credentials stay out of it, a repository is cloned
-> and its dependencies installed, a base is forked, and a worker gives each
-> task its own sandbox, and `--push` opens a pull request through a GitHub
-> App. The Cloudflare runner's Worker in `templates/cloudflare-runner` has
-> been deployed and run: the board and a private repository reached only
-> through it, Claude Code doing a task in a repository from start to end,
-> `--push` opening a pull request, and the container removed when the run
-> ends. The E2B runner has run against E2B, on its Hobby plan with Claude
-> Code: a task worked from start to end with nothing left stored after, the
-> board's refusals and the closed hosts checked from inside, a private
-> repository cloned, `--push` opening a pull request, a worker giving each
-> task a sandbox, a kept snapshot started from, and a registered workflow
-> whose steps each ran in a sandbox. Codex has run there too: a task from
-> start to end, and one in a private repository with `--push` opening a
-> pull request. An E2B you run yourself has not been tried, only
-> `E2B_DOMAIN` with E2B's own name. Treat all three runners as
-> experimental.
+> Experimental. The Vercel, Cloudflare and E2B runners have each worked real
+> tasks from start to end, with `--push` opening a pull request. Not yet run
+> live: a Cloudflare `--ready --loop` worker, dependency installs on
+> Cloudflare, and an E2B you run yourself. Codex has run only on E2B.
 
 ## What a sandbox needs
 
@@ -86,8 +72,7 @@ waited on and stopped once its agent exits, before the next task is claimed,
 so the Worker keeps none of them for its 15 minutes. A task whose run
 doesn't start, or ends without saying how, is given back, ready, and its
 token revoked. A worker stops at once when the runner refuses a start, and
-after three failures in a row otherwise (`runner_start_failed`). The Cloudflare worker
-is covered by tests against a stand-in Worker only; it has not been run live.
+after three failures in a row otherwise (`runner_start_failed`).
 
 Without `--loop`, `--ready` is one sandbox, or one container, that takes
 task after task itself, sharing one checkout, so it can't `--push`.
@@ -153,9 +138,7 @@ The agent needs `mu` and its own CLI where it runs.
   before the agent starts. The image is built for pnpm, npm and yarn; it has no bun, so
   a `bun.lock` repository says `failed (exit 127)`. A private registry, a
   git dependency or a package fetched from anywhere else fails the install.
-  `--no-install`, the `deps` label and the reply work as on Vercel. This is
-  covered by tests of the Worker's gate and of what the CLI sends, not run
-  live. The Worker checks the run every minute and removes the container
+  `--no-install`, the `deps` label and the reply work as on Vercel. The Worker checks the run every minute and removes the container
   when the agent exits or `--timeout` (an hour without one) has passed. Each
   run gets a `standard-1` container (half a vCPU, 4 GiB); set `INSTANCE` in
   the Worker's `wrangler.jsonc` for another size. Cloudflare's default, `lite`,

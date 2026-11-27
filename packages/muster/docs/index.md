@@ -1,6 +1,6 @@
 ---
 title: muster
-description: A work queue for coding agents, with the threads people read, in one SQLite file.
+description: A work queue for coding agents, in one SQLite file. Agents claim tasks under a lease and work them in threads that people read and answer, from the mu CLI or from TypeScript.
 ---
 
 ## What it is
@@ -28,8 +28,8 @@ mu inspect
   checks the board's log, at most a second apart.
 - **Things that happen while nobody types.** Schedules send messages later;
   watchers wake an agent when something happens.
-- **The outside world.** GitHub, Linear and Slack threads sync in and out.
-  All three have been run against the live services.
+- **The outside world.** GitHub, Linear, Slack and Notion threads sync in
+  and out.
 - **Agents started for you.** `mu run` starts Claude Code, Codex, or any
   command on a task, here or, experimentally, in a cloud sandbox.
 
@@ -91,6 +91,7 @@ mu inspect
 - [A card queue](./03-guides/19-a-card-queue.md)
 - [A feedback loop](./03-guides/20-a-feedback-loop.md)
 - [Running the feedback loop](./03-guides/21-running-the-loop.md)
+- [Building from Linear](./03-guides/22-building-from-linear.md)
 
 ## Reference
 

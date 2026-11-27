@@ -1,6 +1,6 @@
 ---
 title: Actors
-description: "Who wrote something: principals, profiles, handles and mentions."
+description: Every message records its author as a principal, such as your OS user or a token's subject, plus an optional profile naming the agent. What a profile does not prove, who may change a message, and how mentions work.
 ---
 
 ## Principals and profiles

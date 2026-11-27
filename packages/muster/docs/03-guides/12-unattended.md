@@ -1,6 +1,6 @@
 ---
 title: Running unattended
-description: Leave agents working while you are away, with limits, and read what happened after.
+description: For leaving agents to work through a queue overnight on one machine. Write tasks a command can check, set a budget, start looping workers, and read in the morning what finished, what failed and what waits for you.
 ---
 
 ## Who this is for

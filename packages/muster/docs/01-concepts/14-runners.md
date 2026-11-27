@@ -1,6 +1,6 @@
 ---
 title: Runners
-description: What starts an agent on a task and stays with it, here or in a cloud sandbox.
+description: A runner, mu run, claims a task, starts an agent on it, renews the claim while it works and settles what the agent leaves open. Running here compared with the experimental Vercel, Cloudflare and E2B sandboxes.
 ---
 
 ## What a runner does
@@ -81,16 +81,16 @@ See [Running agents](../03-guides/05-running-agents.md) for local runs and
 | Private repository | Your own git access | A GitHub App's read token, used only while cloning | A GitHub App's read token, added by the Worker only while cloning | A GitHub App's read token, stored at E2B only while cloning |
 | `mu run` waits for it | Yes | Yes; `--detach` returns at once | With `--push`, and for each task of a `--ready --loop` worker; otherwise it returns at once and the Worker ends the container when the agent exits | Yes, always: `--detach` is refused |
 | `--push` (a pull request) | No | Yes | Yes | Yes |
-| `--ready --loop` | One agent after another, here | A sandbox per task, started from here | A container per task, started from here (covered by tests only, not run live) | A sandbox per task, started from here |
-| Registered workflows | Yes | Yes | Yes (covered by tests only, not run live) | Yes |
+| `--ready --loop` | One agent after another, here | A sandbox per task, started from here | A container per task, started from here | A sandbox per task, started from here |
+| Registered workflows | Yes | Yes | Yes | Yes |
 | Default `--timeout` | None | 30 minutes | 30 minutes with `--push` or for a worker's task; otherwise an hour, set by the Worker | 30 minutes; a sandbox lives an hour at most unless `MUSTER_E2B_MAX_LIFETIME` says more |
 | Agents | Claude Code, Codex, or any command | Claude Code and Codex, which the sandbox image has | Claude Code, which the template's image installs; set `AGENT_PACKAGE` for another | Claude Code and Codex, in the template you build |
 
-The cloud runners are experimental. What has been run against the real
-services, and what hasn't, is in the README's
-[What has been run for real](https://github.com/openmuster/muster#what-has-been-run-for-real).
-Codex has been run on E2B, and not yet in a Vercel sandbox or a Cloudflare
-container.
+The cloud runners are experimental. Not yet run against a live Cloudflare
+account: a worker's `--ready --loop` and registered workflows. Codex has run
+on E2B, and not yet on Vercel or Cloudflare. The README's
+[What has been run for real](https://github.com/openmuster/muster#what-has-been-run-for-real)
+has the rest.
 
 ## Which agents
 

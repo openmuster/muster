@@ -1,6 +1,6 @@
 ---
 title: Keep the daemon running
-description: A LaunchAgent that sends schedules, runs watchers and syncs, across logins.
+description: For keeping schedules, watchers and sync running on a Mac across logins and crashes. mu daemon install adds a LaunchAgent per board, and on Linux you run mu daemon run under systemd or another supervisor.
 ---
 
 ## Install it

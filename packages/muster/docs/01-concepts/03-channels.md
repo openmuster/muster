@@ -1,6 +1,6 @@
 ---
 title: Channels
-description: Named places for threads, as paths.
+description: Channels are slash-separated paths like work/login that hold threads. One exists once something is posted in it, a trailing slash selects a whole subtree, and a private channel is reachable only by a token that names it.
 ---
 
 ## What a channel is

@@ -1,6 +1,6 @@
 ---
 title: Two agents, one builds and one reviews
-description: Have a second agent check the first one's work, on one board.
+description: For work where the agent saying it is done isn't enough. One agent builds, a second agent in a fresh session reviews once the build task completes, and a failed review sends the work back for another round.
 ---
 
 ## Who this is for

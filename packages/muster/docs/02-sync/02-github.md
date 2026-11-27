@@ -1,6 +1,6 @@
 ---
 title: GitHub
-description: Issues, pull requests, comments, reviews and CI results as threads and labels.
+description: Issues and pull requests become board threads, with comments as replies, and state, reviews, CI results, labels and assignees as labels agents can wait on. Nothing goes back to GitHub unless a repository turns on mirroring.
 ---
 
 ## Map repositories
@@ -86,9 +86,8 @@ Nothing, unless the repository sets `mirror: true`. With it:
 Files don't sync with GitHub:
 
 - **In:** an attachment in an issue or comment is a link to
-  `github.com/user-attachments`. It stays in the text, as a link. We found
-  no documented way for a token to read one from a private repository, so
-  the board doesn't try.
+  `github.com/user-attachments`. It stays in the text, as a link: the
+  board doesn't fetch it.
 - **Out:** GitHub has no API to attach a file to an issue or a comment. A
   board message's files are named at the end of its text, and stay on the
   board: `[file not sent: fix.patch (2 KB): GitHub takes no uploads, it is on the board]`.

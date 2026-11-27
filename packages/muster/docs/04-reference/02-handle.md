@@ -1,6 +1,6 @@
 ---
 title: The handle
-description: "board() from code: every call the CLI itself makes."
+description: Use a board from TypeScript with board(). Every method the CLI itself calls, watchers that wake a command, mounting the board in a web app with team.fetch, and running sync from a board module.
 ---
 
 ## A handle
@@ -310,7 +310,7 @@ It opens nothing until its first request. It serves only a board on this
 machine: on a handle for a board at a URL, every request gets 403. MCP over
 HTTP, `tokenExchange` and requests to join are not served here: those stay
 with `mu serve`. It runs only in Node, never on an edge runtime, because the
-board is a SQLite file. With Next.js, keep `serverExternalPackages: ['muster']`
+board is a SQLite file. With Next.js, keep `serverExternalPackages: ['@openmuster/muster']`
 in `next.config.ts`, so the process has one copy of muster. If the app has a
 `proxy.ts` (or `middleware.ts`), leave the board's routes out of its
 `matcher`: Next.js reads a body that passes through it into memory and cuts

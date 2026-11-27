@@ -1,6 +1,6 @@
 ---
 title: A feedback loop
-description: Feedback from Slack, Linear, GitHub or your own app becomes a card; an agent makes the change as a pull request; a comment on the card starts another round on the same pull request.
+description: For steering a project from reports in Slack, Linear, GitHub, Notion or your app. Each report is triaged into a spec, an agent opens a pull request, and a trusted reply starts another round on the same pull request.
 ---
 
 ## Who this is for
@@ -43,7 +43,7 @@ flowchart LR
   repository, changes nothing, and completes with a title on the first line,
   then what to change and how to check it. The spec goes on the card as a
   reply, written as `triage`, only when the triage run's own worker completed
-  it (`workflowResult`).
+  it.
 - **The card run quotes that reply** with `{on.text}`, fenced as content,
   not instructions. The triage step alone reads the report.
 
@@ -51,7 +51,7 @@ flowchart LR
 
 ```bash
 cp templates/loop/workflows.json ~/.config/muster/
-export LOOP_TRUSTED=slack:user:U0123,gh:user:octocat
+export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a9c1e-4b7d-4e0a-9a51-7c2d8e6b1f03
 mu serve --module "$PWD/templates/loop/board.ts" --allow-host board.example.com
 ```
 
@@ -217,6 +217,9 @@ same way: a trusted reply reopens it, and its status is In progress again.
 
 ## Next
 
+- [Building from Linear](./22-building-from-linear.md): laying out a Linear
+  project, its spec and its issues for this loop, and what to do from Linear
+  and what from the board.
 - [Running the feedback loop](./21-running-the-loop.md): going live,
   approving, answering a blocked task, another round, and what to do when
   something stops.

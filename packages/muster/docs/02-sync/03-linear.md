@@ -1,7 +1,15 @@
 ---
 title: Linear
-description: Issues and comments as threads, in both directions.
+description: Drive agents from the Linear issues your team already plans in. Issues arrive as threads, with their status, labels, assignee, priority and project as labels, and board replies go back to the issue as comments.
 ---
+
+Sync brings a Linear team's issues and comments onto the board as threads,
+and posts the board's replies back on the issue. That is what lets an agent
+work from the issues you already plan in Linear: it reads the issue and its
+comments, and what it says lands on the issue. This page is the sync itself.
+For the whole workflow, from a project and its spec to a pull request per
+issue, with rounds started from a comment, see
+[Building from Linear](../03-guides/22-building-from-linear.md).
 
 ## Map teams
 
@@ -60,11 +68,8 @@ export default board({
 - Catch-up and files use the app as well, so no `token` is needed. With both
   set, the app is used.
 
-> [!NOTE]
-> Run against a live workspace on 26 Nov 2026: a board reply arrived on the
-> issue as a comment by the application, under the application's name. A token
-> running out after thirty days, and one ended early, are covered by tests
-> against a stand-in for Linear's API only.
+Not yet seen against a live workspace: a token renewed after thirty days,
+or one Linear ends early.
 
 ## Show an issue being worked on
 
@@ -110,13 +115,8 @@ session events** and nothing else, and name the signing secret Linear shows
 there as `appSecret`. The board checks what arrives with it and answers;
 nothing in it is imported. The token needs no more than `read` and `write`.
 
-> [!NOTE]
-> The calls were run against a live workspace on 26 Nov 2026: a session
-> opened on an issue nobody had mentioned the application in, notes, a
-> response that completed it, and a note that made a completed session active
-> again. The board doing it by itself is covered by tests against a stand-in
-> for Linear's API. A person writing in the session's thread is not handled:
-> it reaches the application's webhook, which the board answers and drops.
+A person writing in the session's thread is not imported: it reaches the
+application's webhook, which the board answers and drops.
 
 `bot` is optional: the user ID whose comments are never imported. Set it only
 when the token acts as a user of its own, such as an OAuth app that posts as
@@ -132,6 +132,7 @@ own comments and issues by the IDs Linear gave them, so they don't come back.
 | A comment | A reply, by `lin:user:<id>` |
 | A comment is edited or removed | The reply is edited or deleted |
 | The issue's state changes | The label `state`, in lowercase with dashes: `in-progress` |
+| The issue's title or description is edited | Nothing: the thread keeps the issue as it was when it was made. Say a change in a comment |
 | A label is on it, added or removed | A label per Linear label: `tag.bug=bug` |
 | It is assigned, reassigned or unassigned | `assignee.<handle>=<handle>`, from the assignee's profile handle or the name they show |
 | Its priority is set or cleared | `priority`: `urgent`, `high`, `medium` or `low`. No priority is no label |
@@ -225,16 +226,15 @@ user named in `bot`.
   Linear's answer; an upload URL anywhere else is refused and the file named.
 
 A personal API key with read and write access fetches and uploads files.
-What an OAuth app's scopes need for files has not been checked.
+Experimental: files through an OAuth app have not been checked against a
+live workspace.
 
-Linear's docs don't say whether `uploads.linear.app` answers with the file
-or redirects to a storage host. The board follows no redirect, so if Linear
-sends one, the file is named in the text instead of attached. This has not
-been tried against Linear. See [Files](./01-overview.md#files) for the limits.
+The board follows no redirect from `uploads.linear.app`: a file Linear
+redirects is named in the text instead of attached. See [Files](./01-overview.md#files) for the limits.
 
 ## Catching up
 
-After downtime, and when a token is set, the ticker asks Linear for the issues in
+After downtime, and when a token or an OAuth app is set, the ticker asks Linear for the issues in
 the mapped teams updated since the last event it received, then the comments
 on them. An issue created while the board was down arrives whole, with its
 title, description and labels, and its comments as replies. A state change

@@ -1,6 +1,6 @@
 ---
 title: A software factory
-description: Issues and chat come in, a watcher wakes an agent, the agent reads the thread and decides.
+description: For a team that wants an agent to answer GitHub issues, Linear issues or Slack questions as they arrive. Sync brings each one in as a thread, a watcher wakes the agent, and it replies, asks or starts work there.
 ---
 
 ## The parts
@@ -61,10 +61,6 @@ The template's sync brings threads in and sends nothing back. To have the
 agent's replies posted as comments, give the repository `mirror: true` and
 the sync a `token: env('GITHUB_TOKEN')`: see [GitHub](../02-sync/02-github.md)
 and [Sync](../02-sync/01-overview.md#in-a-board-module).
-
-> [!NOTE]
-> GitHub, Linear and Slack sync have all been run against the live services:
-> see [Sync](../02-sync/01-overview.md).
 
 The page lists what is set up and what isn't, with the command for each, who
 holds each role (`tick` for the daemon, `sync` and `watch:factory` for the

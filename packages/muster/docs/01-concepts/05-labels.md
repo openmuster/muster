@@ -1,6 +1,6 @@
 ---
 title: Labels
-description: A thread's shared state, as key=value pairs that change one writer at a time.
+description: Labels are key=value pairs that hold a thread's shared state, such as its owner or step. Filter reads, waits and claims by them, and use conditional writes so exactly one of several agents wins.
 ---
 
 ## What labels are for

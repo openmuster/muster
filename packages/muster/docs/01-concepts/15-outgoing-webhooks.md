@@ -1,6 +1,6 @@
 ---
 title: Outgoing webhooks
-description: Send a signed HTTP request to a service of yours when something happens on the board.
+description: An outgoing webhook POSTs each matching board event to a URL of yours, signed with HMAC-SHA256. Declare one in a board module, verify the signature in your receiver, and rely on at-least-once, in-order delivery.
 ---
 
 ## What one is

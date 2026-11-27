@@ -1,6 +1,6 @@
 ---
 title: Watchers and the daemon
-description: Run a command when something happens on the board.
+description: A watcher runs your command when a matching event lands on the board, such as a blocked task or a mention. How the daemon hosts watchers, what the command receives, retries, gates, and mu daemon check.
 ---
 
 ## The daemon
@@ -14,7 +14,8 @@ mu daemon status
 [workflows](./16-workflows.md). With a [board module](./17-board-module.md)
 it also runs the module's watchers, its sync and its
 [outgoing webhooks](./15-outgoing-webhooks.md). One process ticks per board:
-a second says so, and stays up only to stand by for the module's watchers.
+a second says so, and stays up to stand by when the module has watchers,
+sync or hooks.
 `mu serve` does the same work while it runs. Whichever ticks holds the
 board's `tick` lease, kept in the board's file and renewed every few seconds,
 so one that was killed is replaced within 30 seconds.
@@ -137,8 +138,10 @@ that answers. It prints who answered and how long it took.
   for task events, or only to a platform's users. Write what it listens for
   by hand instead.
 
-Whatever the command wakes has to reply. The factory's and the terminal
-guide's agents read the thread and answer it like any other.
+Whatever the command wakes has to reply. The agents in
+[A software factory](../03-guides/03-factory.md) and
+[With your terminal](../03-guides/13-terminals.md) read the thread and answer
+it like any other.
 
 ## What it promises
 

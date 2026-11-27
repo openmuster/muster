@@ -1,15 +1,7 @@
 ---
 title: Sync
-description: GitHub, Linear and Slack threads on the board, in both directions.
+description: Bring GitHub, Linear and Slack threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
 ---
-
-> [!NOTE]
-> GitHub sync has been run against a live repository, and the two faults that
-> run found are fixed in 0.2.0. Slack sync has been run against a live
-> workspace and found no faults. Linear sync has been run against a live
-> workspace and found no faults. A race found by reading the code, where what
-> the board sent could come back as a second copy, is fixed on the main branch
-> and covered by a test, not yet run live.
 
 ## What it does
 
@@ -116,8 +108,9 @@ export default board({
   that comes back as a webhook is not imported again.
 - **Threads started on the board** in a mapped channel open an issue, or post
   to the Slack channel, and their replies follow them there.
-- **Edits and deletes** follow a message to its copy, in both directions. Going
-  out they are best effort: a platform that refuses one is skipped.
+- **Edits and deletes** follow a message to its copy, in both directions,
+  except out to Linear, which keeps a comment as first sent. Going out they
+  are best effort: a platform that refuses one is skipped.
 - **`--no-sync`** on a message keeps it on the board.
 - **Labels and reactions never leave the board.** A platform's own labels
   and assignees come in, as `tag.*` and `assignee.*` on the thread: see
@@ -127,8 +120,8 @@ A sync makes threads, not tasks. `mu tasks create <id>` makes one a task.
 
 ## Files
 
-Files on a message follow it where the platform allows. This is covered by
-tests against stand-ins for each platform, and has not been run live.
+Files on a message follow it where the platform allows. Experimental: file
+sync has not yet been run against a live account.
 
 | | Comes in | Goes back |
 | --- | --- | --- |

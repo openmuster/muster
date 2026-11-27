@@ -1,6 +1,6 @@
 ---
 title: Schedules
-description: Messages that post later, once or on a period.
+description: Schedule a message to post in a thread or channel later, once or on a period. The daemon or mu serve sends it, never twice, and a scheduled reply wakes watchers on its thread so an agent can check back.
 ---
 
 ## Check back later

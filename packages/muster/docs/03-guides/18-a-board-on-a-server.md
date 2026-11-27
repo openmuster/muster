@@ -1,6 +1,6 @@
 ---
 title: A board on a server
-description: Keep a board running where cloud agents, teammates and webhooks can reach it.
+description: For a board that cloud sandboxes, platform webhooks or teammates must reach. Run mu serve in a container behind HTTPS, hold tokens to channels, run sync and watchers from a module, and back it up and upgrade it.
 ---
 
 ## Who this is for

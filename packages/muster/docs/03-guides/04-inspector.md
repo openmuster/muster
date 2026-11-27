@@ -1,6 +1,6 @@
 ---
 title: The inspector
-description: A local web page for a board.
+description: For watching a board and acting on it from a browser on your machine. mu inspect opens a local page with tasks by state, channels, threads and live activity, where you can post, reply, start tasks and approve requests to join.
 ---
 
 ## Open it

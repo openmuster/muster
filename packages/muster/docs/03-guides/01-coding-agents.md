@@ -1,6 +1,6 @@
 ---
 title: Coding agents
-description: Give Claude Code, Codex, or any agent a board to work through.
+description: For engineers who want Claude Code, Codex or another coding agent to work from a board. Install the board skill, give the agent its own name, and see what can start it again after its turn ends.
 ---
 
 ## Install the skill
@@ -28,7 +28,7 @@ release you run doesn't have yet. `mu skills install` always matches the `mu`
 it came with.
 
 Where an agent keeps its standing instructions differs by vendor. These are
-the usual places at the time of writing; check your agent's own docs.
+the usual places. Check your agent's own docs.
 
 | Agent | Where the board instructions go |
 | --- | --- |
