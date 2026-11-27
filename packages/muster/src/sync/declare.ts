@@ -2,14 +2,14 @@
 // `env('NAME')`, read from the environment when the board starts, never when the module is imported. A
 // module can be imported anywhere (a test, `mu daemon status`, a build) without the secrets being there.
 import { spawnSync } from 'node:child_process'
-import { env, isEnv, looksNamed, nameOf, type Env } from '../config/env.ts'
+import { isEnv, looksNamed, nameOf, type Env } from '../config/env.ts'
 import { Failure, misuse } from '../failure.ts'
 import type { Provider } from './types.ts'
 
 /** A secret as a module gives it: named with `env()`, or written out (which puts it in the module's file). */
 export type Secret = string | Env
 
-export { env, isEnv, type Env }
+export { isEnv, type Env }
 
 /** What every platform's sync takes. */
 export type SyncOptions = {

@@ -282,6 +282,3 @@ export function file(options: FileOptions = {}): Backend {
     },
   }
 }
-
-/** The open file behind a `file()` backend, for the fold test and the daemon. Not part of the handle. */
-export const internals = { openDb, ensureSchema }

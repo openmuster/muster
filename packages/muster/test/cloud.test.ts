@@ -260,7 +260,7 @@ describe('cloud runners', () => {
   const keeping = () => {
     const calls: any[] = []
     const kept = new Map<string, { status: string; files: Set<string>; env: Record<string, string> }>()
-    const made = (name: string | undefined, files: Set<string>, env: Record<string, string>) => ({
+    const made = (name: string | undefined, files: Set<string>, _env: Record<string, string>) => ({
       name: name ?? `sbx-${calls.length}`,
       runCommand: async (command: any) => {
         calls.push(['run', name ?? 'fork', [command.cmd, ...command.args].join(' ')])
@@ -473,7 +473,7 @@ describe('cloud runners', () => {
     expect(odd.checkout).toBeUndefined()
     // A Worker error or a dropped connection on the way is asked again, not taken as the end of the run.
     let answers = 0
-    const flaky = (async (url: string | URL | Request, init?: RequestInit) => {
+    const flaky = (async (url: string | URL | Request, _init?: RequestInit) => {
       if (new URL(String(url)).pathname === '/runs') return Response.json({ id: 'r2' })
       answers++
       if (answers === 1) throw new TypeError('fetch failed')

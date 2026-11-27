@@ -4,7 +4,7 @@ import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
 import { ask as askForUpdate, checkPath, readChecked, updateNotice } from './update.ts'
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
-import { TASK_STATES, type PlanTask, type Task, type TaskState } from '../core/tasks.ts'
+import type { PlanTask, Task, TaskState } from '../core/tasks.ts'
 import { Failure, misuse } from '../failure.ts'
 import { ROOT, board, type Board } from '../handle.ts'
 import type { Host } from '../watch/host.ts'
@@ -43,7 +43,7 @@ import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
 import { boardKey } from '../serve/token.ts'
 import { loadOidc } from '../serve/oidc.ts'
-import { actorId, profileName, type Permission } from '../model.ts'
+import { actorId, profileName } from '../model.ts'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -2590,7 +2590,6 @@ async function dispatch(name: string, command: (typeof commands)[string], parsed
 }
 
 export { VERSION }
-export const TASK_STATE_NAMES = TASK_STATES
 
 /** What each command takes, for the test that checks the docs against the CLI. */
 export const SPECS: Record<string, Spec> = { ...Object.fromEntries(Object.entries(commands).map(([name, command]) => [name, command.spec])), mcp: {} }

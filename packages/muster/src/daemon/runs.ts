@@ -120,7 +120,7 @@ const BATCH = 20
 /** How much of a task's result or reason a summary quotes: its first line, cut to this. */
 const QUOTE = 200
 /** A label on a run's first message once its summary is said, for people to see. The daemon never reads it. */
-export const REPORTED = 'workflow.reported'
+const REPORTED = 'workflow.reported'
 /**
  * A label on a run's start reply: `open` while the run works, `done` once it is summed up, and `open` again
  * while a reopened task works. The reply's text says how far the run is, so a thread shows one message that
