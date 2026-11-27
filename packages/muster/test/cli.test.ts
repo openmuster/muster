@@ -102,6 +102,29 @@ describe('cli', () => {
     expect(JSON.parse((await cli(dir, ['tasks', 'work', '--json'])).stdout).tasks[1]).toMatchObject({ id: 4, hold: { kind: 'backlog', reason: 'next week' } })
   })
 
+  it('a tasks verb refuses a flag only another verb takes, so complete --file leaves the task claimed', async () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'report.md'), 'the whole report')
+    await cli(dir, ['tasks', 'create', 'work', 'fix it'])
+    expect((await cli(dir, ['tasks', 'claim', '1'])).code).toBe(0)
+    const refused = await cli(dir, ['tasks', 'complete', '1', '--file', join(dir, 'report.md'), '--json'])
+    expect(refused.code).toBe(2)
+    const error = JSON.parse(refused.stderr).error
+    expect(error).toMatchObject({ reason: 'unknown_flag' })
+    expect(error.message).toContain('tasks complete')
+    expect(error.hint).toContain('--result')
+    expect(error.hint).toContain('mu reply')
+    expect(JSON.parse((await cli(dir, ['tasks', 'work', '--json'])).stdout).tasks[0]).toMatchObject({ id: 1, state: 'claimed' })
+    // Each verb still takes its own.
+    expect((await cli(dir, ['tasks', 'renew', '1', '--lease', '10m'])).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'fail', '1', '--wait', '5s', 'x'])).code).toBe(2)
+    expect((await cli(dir, ['tasks', 'complete', '1', '--result', 'done'])).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'reopen', '1', '--round'])).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'assign', '1', '--pool'])).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'work', '--state', 'all', '--limit', '5', '--latest'])).code).toBe(0)
+    expect((await cli(dir, ['tasks', 'work', '--result', 'x'])).code).toBe(2)
+  })
+
   it('prints no colour and no line over 80 columns for ordinary output', async () => {
     const dir = tempDir()
     await cli(dir, ['tasks', 'create', 'db/storage', 'Write-ahead log', '--label', 'group=storage'])

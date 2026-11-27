@@ -1,4 +1,4 @@
-import { Activity, Hash, ListTodo, Menu, Paperclip, Tag, UserPlus, X } from 'lucide-react'
+import { Activity, Bell, Hash, ListTodo, Menu, Paperclip, Tag, UserPlus, X } from 'lucide-react'
 import { useEffect, useReducer, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { FeedEvent, ThreadSummary } from '../../core/reads.ts'
@@ -7,6 +7,7 @@ import type { By, Message } from '../../model.ts'
 import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
 import { MARK_PATH } from '../mark.ts'
+import { notices, permission, show, type Permission } from './notify.ts'
 import { ICON, ICON_SMALL, STYLE } from './style.ts'
 
 /**
@@ -112,6 +113,12 @@ function App() {
     }
   })
   const cursor = useRef(0)
+  // Notifications: who the page belongs to, whether the browser may show them, and what this tab wrote.
+  const owner = useRef<string | null>(null)
+  const [alerts, setAlerts] = useState<Permission>(permission)
+  const alertsNow = useRef(alerts)
+  alertsNow.current = alerts
+  const wrote = useRef(new Set<number>())
   const { view, thread } = route
   // On a phone the sidebar is a drawer: open while this is true, and shut by going anywhere.
   const [menu, setMenu] = useState(false)
@@ -148,16 +155,24 @@ function App() {
     let stopped = false
     const loop = async () => {
       try {
+        // Asked until known: until then the page shows no notifications.
+        owner.current ??= await call<string>('whoami').catch(() => null)
         if (cursor.current === 0) {
           const recent = await call<{ events: FeedEvent[]; cursor: number }>('events', [{ after: 0, limit: 1000 }])
           cursor.current = recent.cursor
           dispatch({ type: 'events', events: recent.events.slice(-100), cursor: recent.cursor })
           await refresh()
         } else {
-          const page = await call<{ events: FeedEvent[]; cursor: number }>('events', [{ after: cursor.current }])
+          const before = cursor.current
+          const page = await call<{ events: FeedEvent[]; cursor: number }>('events', [{ after: before }])
           cursor.current = page.cursor
           if (page.events.length) {
             dispatch({ type: 'events', events: page.events, cursor: page.cursor })
+            // Only what is new since the page opened, read again for its owner: the board marks each mention of them.
+            if (alertsNow.current === 'granted' && owner.current !== null) {
+              const mine = await call<{ events: FeedEvent[] }>('events', [{ after: before, through: page.cursor, filter: { for: owner.current, types: ['message.posted'] } }])
+              show(notices(mine.events, wrote.current), go)
+            }
             await refresh()
           }
         }
@@ -181,7 +196,11 @@ function App() {
   const write = async (key: string, pending: { thread: number | null; channel: string; text: string }, run: () => Promise<unknown>) => {
     dispatch({ type: 'sending', key, ...pending })
     try {
-      await run()
+      // A post or reply answers with the message; a new task, with the task its thread is.
+      const done = (await run()) as { id?: number; task?: { id: number } } | null
+      // What this tab wrote never notifies it, whichever profile it wrote as.
+      const id = done?.task?.id ?? done?.id
+      if (id !== undefined) wrote.current.add(id)
       dispatch({ type: 'sent', key })
       await refresh()
     } catch (error) {
@@ -220,6 +239,11 @@ function App() {
         </nav>
         <nav>
           <Link href="/joins" go={go} on={view.kind === 'joins'}><UserPlus size={ICON} /> requests to join</Link>
+          {alerts === 'default' && (
+            <button className="ask" onClick={() => void Notification.requestPermission().then(setAlerts, () => setAlerts(permission()))}>
+              <Bell size={ICON} /> notify me of mentions
+            </button>
+          )}
         </nav>
         <label className="as">
           as
@@ -267,7 +291,7 @@ function App() {
                   <span className="id">#{task.id}</span>
                   <span className="text">{task.text.split('\n')[0]}</span>
                   {Object.entries(task.labels).map(([key, value]) => (
-                    <code key={key}>{key}={value}</code>
+                    <code key={key} title={`${key}=${value}`}>{key}={value}</code>
                   ))}
                   <span className="grow" />
                   {task.claim && <span className="meta" title={who(task.claim.by)}>{task.claim.by.profile ?? who(task.claim.by)} · {left(task.claim.until)}</span>}
@@ -336,7 +360,7 @@ function App() {
                 <div className="by" title={when(message.at)}>{who(message.by)} · {ago(message.at)}</div>
                 <div className="text">{message.deleted ? '(deleted)' : message.text}</div>
                 {Object.keys(message.labels).length > 0 && (
-                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>
+                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key} title={`${key}=${value}`}>{key}={value}</code>)}</div>
                 )}
                 {message.attachments.length > 0 && <div className="labels"><Paperclip size={ICON_SMALL} /> {message.attachments.map((file) => file.name).join(' ')}</div>}
               </article>

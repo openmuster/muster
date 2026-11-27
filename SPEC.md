@@ -248,6 +248,12 @@ on `claim_lost` stops the command: SIGTERM to the group, SIGKILL after a grace.
   carries, so nothing is stored for it. An event matches if its thread matched
   before or after it.
 - In file mode `wait` and `tail` poll `MAX(seq)`, from 100 ms rising to 1 s.
+- Against a board at a URL, `wait`, `tail`, `inbox --wait` and
+  `tasks claim --ready --wait` ride out an outage once they have reached the
+  board: a `network_error` or `bad_answer` (a gateway's 502 or 504) is tried
+  again after a pause from 500 ms doubling to 30 s. One whose next try would
+  come after the deadline ends with that error, not a timeout. A board out of
+  reach from the first request, and any refusal, ends the command at once.
 - Search (`read --text`, `mu search`) uses SQLite FTS5.
 - A reader may store its place: `--cursor <name>` keeps the last `seq` it was
   shown under that name, per profile.

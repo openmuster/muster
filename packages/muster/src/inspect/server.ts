@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Backend } from '../backend/types.ts'
 import { Failure } from '../failure.ts'
-import { profileName, type Caller } from '../model.ts'
+import { actorId, profileName, type Caller } from '../model.ts'
 import { ICON_SVG } from './mark.ts'
 import { ROUTES } from '../serve/server.ts'
 
@@ -80,6 +80,8 @@ export function inspect(options: InspectOptions): Promise<{ url: string; link: s
         // Another site can't read the token, but check the origin too: writes come from this page or not at all.
         if (req.headers.origin !== origin) throw new Failure('forbidden', 'Writes come from the inspector page.')
         const route = url.pathname.slice('/board/'.length)
+        // Who the page belongs to, as the board names them: what a mention of them reads as, for its notifications.
+        if (route === 'whoami') return send(res, 200, { ok: actorId(await options.backend.self(null)) })
         const answering = route === 'joinList' || route === 'joinApprove' || route === 'joinDeny'
         if (!ALLOWED.has(route) && !answering) throw new Failure('not_found', 'No such route.')
         const chunks: Buffer[] = []
