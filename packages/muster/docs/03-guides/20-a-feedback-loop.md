@@ -229,5 +229,5 @@ same way: a trusted reply reopens it, and its status is In progress again.
   approving, answering a blocked task, another round, and what to do when
   something stops.
 - The `loop-card` skill teaches an agent each step (triage, spec, work,
-  review): `mu skills install --to ~/.claude/skills` installs it with the
+  review): `npx skills add openmuster/muster` installs it with the
   others.
