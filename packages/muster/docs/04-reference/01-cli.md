@@ -83,7 +83,7 @@ agents
        [--safe]                  keep the agent's permission prompts on there
        [--detach]                return once started, not when it ends
        [--no-install]            with --repo: don't install its dependencies
-       [--template <name>]       e2b: the template, in place of MUSTER_E2B_TEMPLATE
+       [--template <name>]       e2b: in place of MUSTER_E2B_TEMPLATE
        [--push]                  push what it changed and open a pull request
   The agent is told where its task is, not what it says.
   It settles the task itself; one left unsettled is failed or released.
