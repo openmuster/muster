@@ -26,7 +26,7 @@ mu demo
 In a project, `npm i @openmuster/muster` and run it as `npx mu` there. Outside
 one, use `npx @openmuster/muster`: `mu` on npm is not muster.
 
-To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.3`.
+To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.4`.
 Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
