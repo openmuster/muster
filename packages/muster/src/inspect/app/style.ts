@@ -76,10 +76,11 @@ nav h6 { margin: ${s(3.5)} ${s(2)} ${s(1)}; font-size: var(--text-xs); font-weig
 .as { padding: ${s(2.5)} ${s(4)}; border-top: var(--hairline) solid var(--line); color: var(--dim); display: flex; gap: ${s(2)}; align-items: center; }
 .as input { flex: 1; min-width: 0; }
 
-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
-header { display: flex; align-items: center; gap: ${s(3)}; flex: none; height: var(--header-h); padding: 0 ${s(4)}; border-bottom: var(--hairline) solid var(--line); user-select: none; }
-header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-strong); }
-header span { flex: none; color: var(--dim); }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+header { position: relative; display: flex; align-items: center; gap: ${s(3)}; flex: none; min-height: var(--header-h); padding: 0 ${s(4)}; border-bottom: var(--hairline) solid var(--line); user-select: none; }
+/* A view's name is shown whole, on a second line if it must: the sidebar cuts a long channel short. */
+header b { min-width: 0; padding-block: ${s(1)}; overflow-wrap: anywhere; font-weight: var(--weight-strong); }
+header span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 /* Wider than "● reconnecting" (14 characters) from the first paint, with room for a font a little
    wider than the ch, and the word after the dot always starts in one place: the word changing moves
    nothing. */
@@ -106,7 +107,12 @@ header a.icon { margin-left: auto; }
 .row .id { color: var(--dim); width: var(--col-id); flex: none; }
 .row .text { overflow: hidden; text-overflow: ellipsis; flex: 0 1000 auto; min-width: var(--text-min); }
 @container (max-width: ${ROWS.labels}px) { .row code { display: none; } }
-@container (max-width: ${ROWS.where}px) { .row .meta.where, .row .id { display: none; } .row .text { min-width: 0; } }
+@container (max-width: ${ROWS.where}px) {
+  .row .meta.where, .row .id { display: none; } .row .text { min-width: 0; }
+  /* An event says who and when on a line of its own, whole: Activity has no tooltip to fall back on. */
+  .row.event { flex-wrap: wrap; } .row.event .text { flex: 1 1 0; } .row.event .grow { display: none; }
+  .row.event .meta { flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+}
 .grow { flex: 1; }
 .meta { color: var(--dim); font-size: var(--text-xs); }
 code { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm); padding: 0 ${s(1)}; font: inherit; font-size: var(--text-xs); color: var(--dim); }
@@ -117,9 +123,9 @@ code { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm
 .pending { opacity: var(--faded); }
 .empty { color: var(--dim); padding: ${s(4)}; margin: 0; }
 .error { margin: 0; padding: ${s(2)} ${s(4)}; border-bottom: var(--hairline) solid var(--line); transition: opacity var(--duration) var(--ease-out), transform var(--duration) var(--ease-out); }
-/* What went wrong with a read or a write lies over the top of the list, under the header, rather than
-   pushing the list down: nothing moves after it is drawn. A click takes it away. */
-.error.banner { position: absolute; top: var(--header-h); inset-inline: 0; z-index: var(--z-banner); background: var(--bg); }
+/* What went wrong with a read or a write lies over the top of the list, hung under the header, rather
+   than pushing the list down: nothing moves after it is drawn. A click takes it away. */
+.error.banner { position: absolute; top: 100%; inset-inline: 0; z-index: var(--z-banner); margin-top: var(--hairline); background: var(--bg); user-select: text; }
 @starting-style { .error { opacity: 0; transform: translateY(calc(var(--spacing) * -1)); } }
 .composer { border-top: var(--hairline) dashed var(--line); padding: ${s(2.5)} ${s(4)}; display: flex; flex-direction: column; gap: ${s(1.5)}; }
 .composer:focus-within { border-top-style: solid; }
@@ -142,7 +148,7 @@ button:disabled { opacity: var(--disabled); }
 .veil { position: fixed; inset: 0; z-index: var(--z-keys); background: var(--scrim); }
 .keys { position: fixed; z-index: var(--z-keys); top: ${s(16)}; left: 50%; translate: -50% 0; width: min(var(--keys-w), calc(100% - ${s(8)})); background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--radius); outline: none; transition: opacity var(--duration) var(--ease-out); }
 @starting-style { .keys { opacity: 0; } }
-.keys header { height: auto; padding: ${s(2.5)} ${s(4)}; }
+.keys header { padding: ${s(1)} ${s(4)}; }
 .keys header .icon { margin-left: auto; }
 .keys dl { display: grid; grid-template-columns: max-content 1fr; gap: ${s(2)} ${s(4)}; margin: 0; padding: ${s(3)} ${s(4)} ${s(4)}; }
 .keys dl div { display: contents; }
@@ -150,8 +156,8 @@ button:disabled { opacity: var(--disabled); }
 kbd { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm); padding: 0 ${s(1)}; font: inherit; }
 article { padding: ${s(2.5)} ${s(4)}; }
 .labels { display: flex; gap: ${s(1.5)}; align-items: center; margin-top: ${s(1)}; color: var(--dim); flex-wrap: wrap; }
-/* A label is one line: a long value is cut short, whole in its tooltip. */
-.labels code { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* In the pane a label is shown whole: a long value wraps. A row cuts it short, whole in its tooltip. */
+.labels code { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 
 ${hover} { nav a:hover, nav button.ask:hover, .row:hover, .thread:hover, .icon:hover { background: var(--hover); transition-duration: 0s; } .tabs a:hover { color: var(--fg); } }
 @media (pointer: coarse) { nav a, nav button.ask, .tabs a, .row { min-height: var(--tap); } .icon { width: var(--tap); height: var(--tap); } input, textarea, select { font-size: var(--text-base); } }

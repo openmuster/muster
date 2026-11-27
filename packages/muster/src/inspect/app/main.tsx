@@ -56,8 +56,10 @@ const ago = (at: string) => {
   const s = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 1000))
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86_400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86_400)}d`
 }
-/** The whole date, for the tooltip on a time said as "3m". */
+/** The whole date: in the thread pane, and in the tooltip on a time said as "3m". */
 const when = (at: string) => new Date(at).toLocaleString()
+/** A time in a log: the clock today, the whole date before. */
+const clock = (at: string) => (new Date(at).toDateString() === new Date().toDateString() ? new Date(at).toLocaleTimeString() : when(at))
 const left = (until: string) => {
   const s = Math.max(0, Math.round((Date.parse(until) - Date.now()) / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`
@@ -226,6 +228,11 @@ function App() {
   // The list of every key, over the page while it is open. What had the focus gets it back.
   const [keys, setKeys] = useState(false)
   const before = useRef<HTMLElement | null>(null)
+  // The list takes the focus once, as it opens, so Enter presses nothing under it and Tab stays in it.
+  const keysBox = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (keys) keysBox.current?.focus()
+  }, [keys])
   const showKeys = (show: boolean) => {
     if (show) before.current = document.activeElement as HTMLElement | null
     else before.current?.focus()
@@ -263,6 +270,8 @@ function App() {
   ]
   useKeys(bindings)
 
+  // The task the open thread is, if it is one: the pane says who holds it.
+  const task = state.open ? state.tasks.find((each) => each.id === state.open!.message.id) : undefined
   const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : view.kind === 'joins' ? 'requests to join' : `#${view.path}`
 
   return (
@@ -322,12 +331,12 @@ function App() {
           <b>{title}</b>
           {view.kind === 'tasks' && <span>oldest first</span>}
           <em className={state.connected ? 'live' : 'down'}>{state.connected ? 'live' : 'reconnecting'}</em>
+          {state.error && (
+            <p className="error banner" role="alert" onClick={() => dispatch({ type: 'error', error: null })}>
+              {state.error}
+            </p>
+          )}
         </header>
-        {state.error && (
-          <p className="error banner" role="alert" onClick={() => dispatch({ type: 'error', error: null })}>
-            {state.error}
-          </p>
-        )}
         {view.kind === 'tasks' && (
           <>
             <div className="tabs">
@@ -381,7 +390,7 @@ function App() {
                 <span className="state">{event.type}</span>
                 <span className="text">{String((event.data as { text?: string; result?: string; reason?: string }).text ?? (event.data as { result?: string }).result ?? (event.data as { reason?: string }).reason ?? '').split('\n')[0]}</span>
                 <span className="grow" />
-                <span className="meta" title={when(event.at)}>{who(event.by)} · {ago(event.at)}</span>
+                <span className="meta">{who(event.by)} · {clock(event.at)}</span>
               </div>
             ))}
             {state.connected && state.activity.length === 0 && <p className="empty">nothing has happened on this board yet</p>}
@@ -402,6 +411,7 @@ function App() {
       </main>
       {state.open && (
         <section className="pane">
+          {/* What a row's tooltips say is here, whole: who holds the task, until when. */}
           <header>
             <b>#{state.open.message.id}</b>
             <span>#{state.open.message.channel}</span>
@@ -410,10 +420,12 @@ function App() {
           <div className="messages">
             {[state.open.message, ...state.open.replies].map((message) => (
               <article key={message.id}>
-                <div className="by" title={when(message.at)}>{who(message.by)} · {ago(message.at)}</div>
+                <div className="by">{who(message.by)} · {when(message.at)}</div>
+                {/* A task's line is there from the first paint, so a claim arriving fills it rather than pushing the text. */}
+                {message.id === task?.id && <div className="by">{task.claim ? `held by ${who(task.claim.by)} until ${when(task.claim.until)}` : 'not held'}</div>}
                 <div className="text">{message.deleted ? '(deleted)' : message.text}</div>
                 {Object.keys(message.labels).length > 0 && (
-                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key} title={`${key}=${value}`}>{key}={value}</code>)}</div>
+                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>
                 )}
                 {message.attachments.length > 0 && <div className="labels"><Paperclip size={ICON_SMALL} /> {message.attachments.map((file) => file.name).join(' ')}</div>}
               </article>
@@ -428,7 +440,7 @@ function App() {
       {keys && (
         <>
           <div className="veil" onClick={() => showKeys(false)} />
-          <section className="keys" role="dialog" aria-label="keys" tabIndex={-1} ref={(el) => el?.focus()}>
+          <section className="keys" role="dialog" aria-label="keys" tabIndex={-1} ref={keysBox}>
             <header>
               <b>keys</b>
               <button className="icon" aria-label="close" onClick={() => showKeys(false)}><X size={ICON} /></button>

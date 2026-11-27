@@ -73,6 +73,27 @@ const SHIFTS = () => {
     }
   }).observe({ type: 'layout-shift', buffered: true })
 }
+/**
+ * Whether `text` is on the screen whole, under `within`: in an element that is drawn and that nothing
+ * cuts short. A `title` alone is never that, since a phone has no pointer to rest on it.
+ */
+const whole = (page: Page, within: string, text: string) =>
+  page.evaluate(
+    ([within, text]) => {
+      const root = document.querySelector(within)
+      if (!root) return false
+      const cut = (el: Element) => {
+        for (let at: Element | null = el; at && at !== document.documentElement; at = at.parentElement) {
+          const overflow = getComputedStyle(at).overflowX
+          if ((overflow === 'hidden' || overflow === 'clip') && at.scrollWidth > at.clientWidth + 1) return true
+        }
+        return false
+      }
+      const holds = (el: Element) => (el.textContent ?? '').includes(text)
+      return [root, ...Array.from(root.querySelectorAll('*'))].some((el) => el.checkVisibility() && holds(el) && !Array.from(el.children).some(holds) && !cut(el))
+    },
+    [within, text] as const,
+  )
 const shifts = (page: Page) => page.evaluate(() => (window as unknown as { shifts: { value: number; moved: string[] }[] }).shifts)
 const TABLET = { viewport: { width: 768, height: 1024 } }
 
@@ -369,6 +390,53 @@ describe('the inspector, in a browser', () => {
     }
   })
 
+  it('keeps nothing a phone needs in a tooltip: what a title says is shown whole where a tap reaches it', async () => {
+    const { page, team, errors } = await open('/?state=all', { context: { ...PHONE, hasTouch: true, isMobile: true }, channels: [LONG] })
+    const value = `https://example.com/${'a'.repeat(200)}`
+    await team.as('lead').taskCreate({ channel: 'work/api', text: 'Labelled', labels: { source: value, kind: 'bug' } })
+    const found: string[] = []
+    const hidden: string[] = []
+    const check = async (within: string, titles: string[]) => {
+      for (const title of titles) (await whole(page, within, title) ? found : hidden).push(title)
+    }
+    const titles = (selector: string) => page.locator(selector).evaluateAll((els) => els.map((el) => el.getAttribute('title')!))
+    // A row's titles are shown in the pane the row opens, and the pane's own in the pane.
+    for (const view of ['/?state=all', '/c/general', '/activity']) {
+      await page.goto(`${new URL(page.url()).origin}${view}`)
+      await expect.poll(() => page.locator('.rows [data-row]').count()).toBeGreaterThan(0)
+      for (const key of await page.locator('.rows [data-row]').evaluateAll((els) => els.map((el) => el.getAttribute('data-row')!))) {
+        const row = page.locator(`[data-row="${key}"]`)
+        const said = await titles(`[data-row="${key}"] [title], [data-row="${key}"][title]`)
+        await row.tap()
+        await page.locator('.pane article').first().waitFor()
+        await check('.pane', [...said, ...(await titles('.pane [title]'))])
+        await page.locator('.pane header a[aria-label="close"]').tap()
+        await expect.poll(() => page.locator('.pane').count()).toBe(0)
+      }
+    }
+    // A channel's name in the sidebar is shown whole in the view it opens.
+    for (const path of await titles('nav a[title]')) {
+      await page.locator('button[aria-label="menu"]').tap()
+      await page.locator(`nav a[title="${path}"]`).tap()
+      await expect.poll(() => page.locator('main header b').textContent()).toBe(`#${path}`)
+      await check('main header', [path])
+    }
+    expect(hidden).toEqual([])
+    // It looked at each kind: a time, who holds a task, a label, a channel's name.
+    const at = (await team.readThread({ id: 1 })).message.at
+    expect(found).toEqual(expect.arrayContaining([await page.evaluate((at) => new Date(at).toLocaleString(), at), 'claude via ada', `source=${value}`, LONG]))
+    // Activity says who and when on the row itself, with no tooltip: whole, even with a whole date, two
+    // days on, and a long profile name.
+    await team.as('a-profile-with-a-long-name').post({ channel: 'general', text: 'late' })
+    await page.clock.setFixedTime(Date.now() + 2 * 86_400_000)
+    await page.goto(`${new URL(page.url()).origin}/activity`)
+    await expect.poll(() => page.locator('.rows .row .meta').allTextContents()).toContainEqual(expect.stringContaining('a-profile-with-a-long-name'))
+    const metas = await page.locator('.rows .row .meta').allTextContents()
+    expect(metas.every((meta) => /\d{4}/.test(meta)), 'a whole date').toBe(true)
+    for (const meta of metas) expect(await whole(page, '.rows', meta), meta).toBe(true)
+    expect(errors).toEqual([])
+  })
+
   it('marks the row whose thread is open, and says so when a channel has nothing in it', async () => {
     const { page, team, errors } = await open()
     await page.locator('.rows .row', { hasText: 'Add a test for the redirect' }).click()
@@ -393,7 +461,7 @@ describe('the inspector, in a browser', () => {
     expect([...moving.errors, ...still.errors]).toEqual([])
   })
 
-  it("cuts a long label short on one line, whole in its tooltip, and the thread never scrolls sideways", async () => {
+  it('shows a long label whole in the thread, wrapped, and the thread never scrolls sideways', async () => {
     const { page, team, errors } = await open('/', { context: PHONE })
     const value = `https://example.com/${'a'.repeat(200)}`
     const message = await team.as('lead').post({ channel: 'general', text: 'labelled', labels: { source: value, kind: 'bug' } })
@@ -401,10 +469,9 @@ describe('the inspector, in a browser', () => {
     await page.locator('.pane').waitFor()
     const long = page.locator('.pane .labels code', { hasText: 'source=' })
     const short = page.locator('.pane .labels code', { hasText: 'kind=bug' })
-    expect(await long.getAttribute('title')).toBe(`source=${value}`)
-    expect(await short.getAttribute('title')).toBe('kind=bug')
-    expect((await long.boundingBox())!.height).toBe((await short.boundingBox())!.height)
-    expect(await long.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+    expect(await whole(page, '.pane', `source=${value}`)).toBe(true)
+    expect((await long.boundingBox())!.height).toBeGreaterThan((await short.boundingBox())!.height)
+    expect(await long.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
     expect(await page.locator('.pane .messages').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
     expect(errors).toEqual([])
   })

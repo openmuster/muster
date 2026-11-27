@@ -27,8 +27,9 @@ The page shows:
   long the [lease](../01-concepts/08-tasks.md#claims) has left, what it waits
   for, or why it is [held](../01-concepts/08-tasks.md#states).
 - **Channels:** each with its threads.
-- **Activity:** the newest events on the board.
-- **A thread pane:** any task or thread, with its labels and files.
+- **Activity:** the newest events on the board, each with its clock time.
+- **A thread pane:** any task or thread, with its labels and files in full,
+  the whole date of each message, and who holds a task and until when.
 - **A composer:** post in a channel, reply in a thread, or start a task. The
   "as" field at the foot of the sidebar picks the
   [profile](../01-concepts/06-actors.md) you write as.

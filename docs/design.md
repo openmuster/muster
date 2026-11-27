@@ -116,13 +116,42 @@ not push the rest.
 - **Something whose width depends on data reserves it.** The header's
   `live` takes the room of `reconnecting` from the first paint, and the word
   after its dot starts in one place.
-- **Something that appears over a list lies over it.** The error banner is
-  laid over the top of the list, under the header, rather than inserted
-  above the tabs. A click takes it away.
+- **Something that appears over a list lies over it.** The error banner
+  hangs under the header, over the top of the list, rather than being
+  inserted above the tabs. A click takes it away.
 - **A list's rows may grow downward.** Nothing in the list's region is
   under them; the composer is pinned below it.
 - **A layer slides or fades.** The thread pane, the drawer and the list of
   keys move by `transform` and `opacity`, which aren't layout shifts.
+
+## Nothing a phone needs only on hover
+
+A phone has no pointer to rest on anything, so a tooltip only adds to what
+the page says. The rule, which the browser suite checks on a phone:
+
+**What a `title` says is also shown whole where a tap reaches it.** That
+is on the page, or in the thread pane that the element's row opens, in an
+element that is drawn and that nothing cuts short. The test reads every
+`title` in the tasks, a channel, Activity, the pane and the sidebar, taps
+through to where its text should be, and fails on any it can't find whole.
+
+So:
+
+- **A row's exact time, who holds a task and its full labels** are in the
+  pane the row opens: each message says who wrote it and the whole date, a
+  task says who holds it and until when, and a label wraps rather than
+  being cut short. The row keeps them as tooltips, as an extra.
+- **Activity is a log, so it says the clock time** (the whole date before
+  today) instead of "3m", and has no tooltip. On a narrow screen an event
+  says who and when on a second line, so neither is cut short.
+- **A task's pane always has its holder's line,** `not held` until it is
+  claimed, so a claim arriving fills the line rather than pushing the
+  text down.
+- **A channel's name the sidebar cuts short** is whole in the header of the
+  view it opens, on a second line if it must be.
+
+Hover itself is only drawn for a fine pointer. Nothing is reached only by
+hovering: no menu, button or detail appears on hover alone.
 
 ## Rules for adding to it
 
