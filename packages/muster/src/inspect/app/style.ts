@@ -1,8 +1,10 @@
 /**
  * The page's look. Every size, colour and time is named once, in `:root` or in the constants below, and
  * the rules use the names: spacing is a multiple of one step, the way Tailwind's scale is. The rules are
- * written for a phone first; wider screens add columns.
+ * written for a phone first; wider screens add columns. The colours, corners and motion the docs site
+ * shares are in `../tokens.ts`, the one place either page writes them.
  */
+import { COLOURS, declarations, SHAPE } from '../tokens.ts'
 
 /** Where the layout changes, in px. A media query can't read a CSS variable, so these live here. */
 export const BP = { sm: 640, lg: 1024 } as const
@@ -20,20 +22,20 @@ const lg = `@media (min-width: ${BP.lg}px)`
 
 export const STYLE = `
 :root {
-  --bg: #000; --fg: #ededed; --dim: #8a8a8a; --line: #2a2a2a; --panel: #0a0a0a; --hover: #151515;
-  --thumb: #2a2a2a; --thumb-hover: #3a3a3a; --ring: #8a8a8a; --scrim: rgb(0 0 0 / 0.6); --shade: rgb(0 0 0 / 0.5);
+  ${declarations(COLOURS.dark)} ${declarations(SHAPE)}
+  --scrim: rgb(0 0 0 / 0.6); --shade: rgb(0 0 0 / 0.5);
   --spacing: 4px; --hairline: 1px;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --text-xs: 12px; --text-sm: 13px; --text-base: 16px; --leading: 1.5; --weight-strong: 600;
-  --radius-sm: 3px; --radius: 4px; --radius-full: 999px;
+  --radius-full: 999px;
   --header-h: 48px; --sidebar-w: 240px; --drawer-w: min(280px, 85vw); --pane-w: 420px;
   --scrollbar: 6px; --tap: 40px; --col-state: 84px; --col-event: 124px; --col-id: 44px; --text-min: 180px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --duration-fast: 120ms; --duration: 180ms; --duration-pulse: 1.6s;
+  --duration-pulse: 1.6s;
   --press: 0.97; --faded: 0.5; --disabled: 0.4;
   --z-pane: 10; --z-scrim: 20; --z-drawer: 30;
   color-scheme: dark;
 }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #fff; --fg: #111; --dim: #666; --line: #e3e3e3; --panel: #fafafa; --hover: #f0f0f0; --thumb: #d4d4d4; --thumb-hover: #b8b8b8; --ring: #666; --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { ${declarations(COLOURS.light)} --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: var(--text-sm)/var(--leading) var(--font-mono); cursor: default; -webkit-font-smoothing: antialiased; }
