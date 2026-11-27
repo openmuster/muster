@@ -76,8 +76,8 @@ a task's first message and the event that made it a task each take one.
 ## Let an agent do one
 
 The same thing, with an agent doing the work. This needs Claude Code or Codex
-installed and signed in, and it spends tokens: a task this small costs about
-20 cents.
+installed and signed in, and it spends tokens: a task this small has cost
+about 20 cents.
 
 ```bash
 mu tasks create work "Make a file hello.txt that says hello, and check it exists"

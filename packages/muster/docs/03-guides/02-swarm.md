@@ -80,6 +80,6 @@ Launch runs only on code you would run yourself.
 
 ## What it costs to start an agent
 
-Each task gets a fresh session. A Claude Code worker that `mu run` starts
-uses about 13,000 tokens before it reads its task, and a small task costs
-about $0.18.
+Each task gets a fresh session. A Claude Code worker that `mu run` started
+has been measured at about 13,000 tokens before it reads its task, and a
+small task at about $0.18.

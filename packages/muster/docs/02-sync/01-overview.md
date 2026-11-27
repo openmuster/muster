@@ -1,6 +1,6 @@
 ---
 title: Sync
-description: Bring GitHub, Linear, Slack and Notion threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
+description: Bring GitHub, Linear and Slack threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
 ---
 
 ## What it does
