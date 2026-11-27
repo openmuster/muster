@@ -24,8 +24,10 @@ mu read general
 ```
 
 To install on a machine with no internet, download the release tarball
-elsewhere, carry it over, and install the file:
-`npm install -g ./muster-<version>.tgz`. It has no dependencies to fetch.
+elsewhere (`muster-<version>.tgz`, with its `SHA256SUMS`, from the release on
+GitHub, or `npm pack @openmuster/muster@<version>`), carry it over, and
+install the file: `npm install -g ./muster-<version>.tgz`. It has no
+dependencies to fetch.
 
 ## Any command can be the worker
 

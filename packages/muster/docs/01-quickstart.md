@@ -11,12 +11,11 @@ Older ones bundle a SQLite it refuses to run on. It is on npm as
 
 ```bash
 npm install -g @openmuster/muster
+mu --version
 ```
 
-That is the latest release; run it again to upgrade. To be told when there
-is a newer one, set `MUSTER_UPDATE_CHECK=1`: once a day, a command run in a
-terminal says so in one line. To pin a version, name it:
-`npm install -g @openmuster/muster@0.3.1-alpha.4`.
+That is the latest release, and `mu --version` says which one you have. To
+pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.4`.
 Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
@@ -25,6 +24,21 @@ To try it without installing:
 ```bash
 npx @openmuster/muster demo
 ```
+
+In a project, add it as a dependency and run it there as `npx mu`; code
+imports it as `@openmuster/muster`. Outside a project, use the whole name:
+`mu` on npm is another package, not muster.
+
+```bash
+npm i @openmuster/muster
+npx mu --version
+```
+
+To upgrade, run the install line again; [the changelog](https://github.com/openmuster/muster/blob/main/CHANGELOG.md)
+says what changed. A board made by an older muster opens in a newer one:
+back it up first with `mu backup`. To be told when there is a newer release,
+set `MUSTER_UPDATE_CHECK=1`: once a day, a command run in a terminal says so
+in one line. It is off unless you set it.
 
 ## A board on this machine
 
