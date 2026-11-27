@@ -83,9 +83,10 @@ export function missingSettings(workers: Workflow['workers'], env: Record<string
 
 /**
  * What a pass did. `reported` is there only when a run was summed up on its thread, and `updated` only when
- * a run summed up before was summed up again, after a task of it was reopened.
+ * a run summed up before was summed up again, after a task of it was reopened, and `suggested` only when a
+ * workflow in suggest mode said what it would start.
  */
-export type Ran = { started: number[]; refused: number[]; reported?: number[]; updated?: number[]; why?: string }
+export type Ran = { started: number[]; refused: number[]; suggested?: number[]; reported?: number[]; updated?: number[]; why?: string }
 
 /** A refusal that says nothing about the request, only that the board couldn't answer just now: it is read again next tick. */
 const TRANSIENT = new Set(['busy', 'network_error', 'bad_answer'])
@@ -275,6 +276,11 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
       if (refusal !== null || !workflow) {
         await say(event.seq, thread, refusal!)
         out.refused.push(event.seq)
+      } else if (workflow.mode === 'suggest') {
+        // Said from the config alone, and answered like any request: the cursor moves past it, so nothing
+        // starts it later, whatever the mode is by then. Asking again is a new request.
+        await say(event.seq, thread, `would start ${name}: ${workflow.steps.length} ${workflow.steps.length === 1 ? 'task' : 'tasks'}, ${workflow.workers.count} ${workflow.workers.count === 1 ? 'worker' : 'workers'}; suggest only, nothing started`)
+        ;(out.suggested ??= []).push(event.seq)
       } else {
         const result = await start(team, writer, workflow, { seq: event.seq, at: event.at, channel, thread, on: typeof asked === 'number' ? asked : thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
         await say(event.seq, thread, result.text, result.failed === undefined)

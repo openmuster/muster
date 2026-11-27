@@ -75,6 +75,7 @@ second workflow, is
 | `steps` | 1 to 20 tasks. `key` and `text` are required. `needs` names earlier keys, `for` gives the task to one profile, `labels` are `k: v` text, `push` (`true` or `false`) overrides `workers.push` for that step |
 | `workers` | The crew. See below |
 | `timeout` | How long a run may take before it is summed up as it stands, such as `2h`. Left out, `24h` |
+| `mode` | `run` (the default) starts the run. `suggest` only says what it would start. See [Suggest only](#suggest-only) |
 
 `workers` takes:
 
@@ -254,6 +255,7 @@ For a request on thread 812 in `work/api`, the daemon:
 | `couldn't start implement: …` | The board refused the tasks, such as a text that is too long |
 | `couldn't start implement: … (gave up after 5 tries)` | Five ticks in a row the board couldn't answer (busy, out of reach). The daemon reads on, so one request never holds up the rest |
 | `started 3 workers for implement; couldn't confirm the run: …` | The workers started, then the board refused or couldn't take the run's first message. They keep going; `mu tasks work/api/implement-41` shows how far they got |
+| `would start implement: 3 tasks, 3 workers; suggest only, nothing started` | The workflow's `mode` is `suggest` |
 | `implement isn't registered here` | No such name in this daemon's file |
 | `<actor> may not start implement` | The requester isn't in `who` |
 | `implement doesn't run in work/other` | The thread's channel isn't in `channels` |
@@ -314,6 +316,22 @@ characters. Because a worker, or anyone, wrote that text, the daemon defuses
 it before speaking as itself: `@` becomes a lookalike so it mentions nobody,
 `<` and `>` so Slack makes no ping or link, and a Markdown link is broken.
 A `pr` is shown only for a pull request URL on github.com.
+
+## Suggest only
+
+Set `"mode": "suggest"` on a workflow to try it out, or to see what people
+ask for before you let it spend money. The daemon checks the request as it
+would any other: `who` and `channels` still refuse. Then it replies on the
+thread with what it would start, and makes no tasks and starts no workers:
+
+```text
+would start implement: 3 tasks, 3 workers; suggest only, nothing started
+```
+
+The reply is the answer to that request. Nothing carries a suggestion out
+later: switch the workflow to `"mode": "run"`, restart the daemon, and the
+request is still answered. Ask again with `mu workflow run` to start it.
+`mu workflow list` marks such a workflow `suggest only`.
 
 ## When not to use one
 

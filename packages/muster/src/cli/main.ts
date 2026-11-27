@@ -562,7 +562,7 @@ const commands: Record<string, Command> = {
         return print(run, { workflows }, () =>
           workflows.length === 0
             ? `no workflows in ${workflowsPath()}`
-            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}`).join('\n'),
+            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}${workflow.mode === 'suggest' ? '  suggest only' : ''}`).join('\n'),
         )
       }
       if (verb === 'run') {

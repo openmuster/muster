@@ -7,7 +7,8 @@ import { githubRepo } from '../runner/github.ts'
 
 export type WorkflowStep = { key: string; text: string; needs?: string[]; for?: string; labels?: Record<string, string>; push?: boolean; title?: string }
 export type Workers = { count: number; agent: 'claude' | 'codex'; as: string; runner?: 'local' | 'vercel' | 'cloudflare' | 'e2b'; repo?: string; push?: boolean; cwd?: string; timeout?: string }
-export type Workflow = { name: string; description: string; who: string[]; channels: string[]; steps: WorkflowStep[]; workers: Workers; timeout?: string }
+/** `suggest`: the daemon says on the thread what it would start, and starts nothing. Left out, or `run`, it starts the run. */
+export type Workflow = { name: string; description: string; who: string[]; channels: string[]; steps: WorkflowStep[]; workers: Workers; timeout?: string; mode?: 'run' | 'suggest' }
 
 export const workflowsPath = () => join(configDir(), 'workflows.json')
 
@@ -117,7 +118,8 @@ export function loadWorkflows(path = workflowsPath()): Workflow[] {
     if ((w.push === true || steps.some((step) => step.push === true)) && !(cloud && typeof w.repo === 'string' && githubRepo(w.repo))) fail('can only "push" with "runner": "vercel", "cloudflare" or "e2b" and a github.com https "repo".')
     if (w.timeout !== undefined) checkDuration(w.timeout, 'workers.timeout')
     if (entryObject.timeout !== undefined) checkDuration(entryObject.timeout, 'timeout')
+    if (entryObject.mode !== undefined && entryObject.mode !== 'run' && entryObject.mode !== 'suggest') fail('has a "mode" that isn\'t "run" or "suggest".')
     const workers: Workers = { count: w.count as number, agent: w.agent as Workers['agent'], as: w.as as string, ...(w.runner !== undefined ? { runner: w.runner as Workers['runner'] } : {}), ...(w.repo !== undefined ? { repo: w.repo as string } : {}), ...(w.push !== undefined ? { push: w.push as boolean } : {}), ...(w.cwd !== undefined ? { cwd: w.cwd as string } : {}), ...(w.timeout !== undefined ? { timeout: w.timeout as string } : {}) }
-    return { name, description: entryObject.description as string, who: entryObject.who as string[], channels: entryObject.channels as string[], steps, workers, ...(entryObject.timeout !== undefined ? { timeout: entryObject.timeout as string } : {}) }
+    return { name, description: entryObject.description as string, who: entryObject.who as string[], channels: entryObject.channels as string[], steps, workers, ...(entryObject.timeout !== undefined ? { timeout: entryObject.timeout as string } : {}), ...(entryObject.mode !== undefined ? { mode: entryObject.mode as Workflow['mode'] } : {}) }
   })
 }

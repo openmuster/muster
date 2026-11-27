@@ -54,6 +54,12 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...good.workers, timeout: 'soon' } })).toMatch(/"release".*timeout/)
   })
 
+  it('takes a mode of "run" or "suggest", and refuses any other', () => {
+    expect(loadWorkflows(write({ workflows: [{ ...good, mode: 'suggest' }] }))).toEqual([{ ...good, mode: 'suggest' }])
+    expect(loadWorkflows(write({ workflows: [{ ...good, mode: 'run' }] }))).toEqual([{ ...good, mode: 'run' }])
+    expect(bad({ mode: 'maybe' })).toMatch(/"release".*"mode"/)
+  })
+
   it('refuses bad JSON, a missing array and a bad or repeated name', () => {
     expect(refuses(write('{nope'))).toMatch(/isn't JSON/)
     expect(refuses(write({}))).toMatch(/needs a "workflows" array/)
@@ -227,7 +233,10 @@ describe('mu workflow', () => {
     config(dir)
     const listed = await cli(dir, ['workflow', 'list'])
     expect(listed.code).toBe(0)
-    expect(listed.stdout).toMatch(/release\s+Ship a release\s+who: ada\s+channels: general/)
+    expect(listed.stdout).toMatch(/release\s+Ship a release\s+who: ada\s+channels: general\n/)
+    writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [{ ...good, mode: 'suggest' }] }))
+    expect((await cli(dir, ['workflow', 'list'])).stdout).toMatch(/channels: general  suggest only\n/)
+    config(dir)
     expect(JSON.parse((await cli(dir, ['workflow', 'list', '--json'])).stdout).workflows[0].name).toBe('release')
     const root = JSON.parse((await cli(dir, ['post', 'work', 'ship 1.2', '--json'])).stdout).message
     const ran = await cli(dir, ['workflow', 'run', 'release', '--on', String(root.id), '--arg', 'version=1.2.0'])
@@ -495,6 +504,26 @@ describe('the daemon starts a requested workflow', () => {
       'local:user:eve+releaser may not start release',
     ])
     expect((await repliesOn(team, elsewhere.id)).map((reply) => reply.text)).toEqual(["release doesn't run in random"])
+  })
+
+  it('in suggest mode says on the thread what it would start and starts nothing, then or later', async () => {
+    const suggest: Workflow = { ...release, mode: 'suggest' }
+    const { team, as, root, rec } = await ready([suggest])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '1.2.0' } })
+    expect(await runWorkflows(team, [suggest], rec.deps)).toEqual({ started: [], refused: [], suggested: [seq] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect(await channelNames(team)).not.toContain(`work/app/release-${seq}`)
+    const said = 'would start release: 2 tasks, 2 workers; suggest only, nothing started'
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([said])
+    // The operator switches it to run, and the daemon starts again: what was suggested is still only that.
+    expect(await runWorkflows(team, [release], { ...rec.deps, runs: openRuns() })).toEqual({ started: [], refused: [] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([said])
+    // A suggestion is said only to someone who may start it: anyone else is refused, as in run mode.
+    const stranger = await as('local:user:eve').workflowRequest({ name: 'release', on: root.id })
+    expect(await runWorkflows(team, [suggest], rec.deps)).toEqual({ started: [], refused: [stranger.seq] })
   })
 
   it("lets a bare profile name in who stand for that profile under the daemon owner's principal only", async () => {
