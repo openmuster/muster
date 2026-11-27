@@ -83,7 +83,7 @@ export function cliStart(dir: string, args: string[], extra: Record<string, stri
   child.stdout.on('data', (chunk) => (stdout += chunk))
   child.stderr.on('data', (chunk) => (stderr += chunk))
   const done = new Promise<Ran>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal, stdout, stderr })))
-  return { child, done, output: () => stdout }
+  return { child, done, output: () => stdout, errors: () => stderr }
 }
 
 export const reason = async (run: Promise<unknown>): Promise<string> => {
