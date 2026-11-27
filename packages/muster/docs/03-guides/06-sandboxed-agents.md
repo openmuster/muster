@@ -27,7 +27,7 @@ mu token create --as fixer --can 'work/=read,post,react,label' --ttl 2h
 export MUSTER_URL=https://board.example.com/api/board
 export MUSTER_TOKEN=mu1...          # yours: mu run reads the task and has a token made for the agent
 mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git
-mu run --ready work/ --runner cloudflare --agent codex --as worker-3
+mu run --ready work/ --runner cloudflare --agent claude --as worker-3
 ```
 
 What runs in the sandbox is `mu run`
@@ -45,8 +45,9 @@ policy until then. On Cloudflare the command returns once the run starts,
 unless it is a `--push` run or a task of a `--ready --loop` worker, which
 are waited on in the same way.
 
-One length of time sets the rest. `--timeout`, 30 minutes when you don't
-pass one, is how long the agent works on the task. The sandbox lives ten
+One length of time sets the rest. `--timeout` is how long the agent works on
+the task: 30 minutes when you don't pass one, except on Cloudflare without
+`--push` and outside a worker, where the Worker gives it an hour. The sandbox lives ten
 minutes longer, to install muster and settle the task, so it is `mu run` in
 it that fails a task that ran out of time, never the platform cutting it off.
 A `--ready` worker's sandbox lives two hours when you pass no `--timeout`,
@@ -60,7 +61,8 @@ mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo 
 mu run --ready work/ --loop --runner cloudflare --agent claude --as worker-2 --repo https://github.com/acme/web.git --push
 ```
 
-On either cloud, `--ready` with `--loop` is a worker that stays on this machine.
+On each of the three clouds, `--ready` with `--loop` is a worker that stays
+on this machine.
 It claims the next ready task as `worker-1`, under a claim token made for
 that task, and runs it as above in a sandbox of its own, which takes the same
 claim: no other worker can have it, and each task gets its own clone, its own
@@ -139,7 +141,8 @@ The agent needs `mu` and its own CLI where it runs.
   a `bun.lock` repository says `failed (exit 127)`. A private registry, a
   git dependency or a package fetched from anywhere else fails the install.
   `--no-install`, the `deps` label and the reply work as on Vercel. The Worker checks the run every minute and removes the container
-  when the agent exits or `--timeout` (an hour without one) has passed. Each
+  when the agent exits or `--timeout` has passed: without one, an hour, or 30
+  minutes for a `--push` run or a worker's task. Each
   run gets a `standard-1` container (half a vCPU, 4 GiB); set `INSTANCE` in
   the Worker's `wrangler.jsonc` for another size. Cloudflare's default, `lite`,
   is too small for an agent's CLI.

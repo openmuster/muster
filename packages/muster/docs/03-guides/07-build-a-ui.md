@@ -60,3 +60,21 @@ Against `mu serve` a page can hold the live feed open instead: see
 
 `mu inspect` and the pages in `templates/swarm` and `templates/factory` are
 built this way.
+
+## When not to
+
+- **To watch a board yourself.** `mu inspect` is that page already: see
+  [The inspector](./04-inspector.md).
+- **To react to events without a person.** A
+  [watcher](../01-concepts/09-watchers.md) or `mu wait` needs no page.
+
+## What goes wrong
+
+- **The token reaches the browser.** A token in the page's code is a token
+  anyone who opens the page holds. Keep `MUSTER_TOKEN` on the server, and
+  give the server a token held to the channels the page shows.
+- **An event is missed.** Read the cursor before the snapshot, as above. Read
+  after it, an event that landed in between is in neither.
+- **A channel shows nothing.** A channel the server's token can't read
+  doesn't exist for it: reads leave it out, and a write there is
+  `not_found`. See [Access](../01-concepts/11-access.md#tokens).

@@ -6,7 +6,7 @@ description: For running the feedback loop once it is set up. Go live, choose wh
 ## Who this is for
 
 You set up [a feedback loop](./20-a-feedback-loop.md) and now run it: cards
-come in from Slack, Linear, GitHub or your app, agents work them, and you
+come in from Slack, Linear, GitHub, Notion or your app, agents work them, and you
 step in when a card needs you. This page is what you do then, in the order
 it comes up.
 
@@ -38,7 +38,7 @@ mu budget cards 25
 6. **Start it**, with the secrets `board.ts` names in its environment:
 
 ```bash
-mu serve --module ~/loop/board.ts --allow-host board.example.com
+mu serve --module "$PWD/templates/loop/board.ts" --allow-host board.example.com
 ```
 
 7. **Point each platform at it**, at `https://<host>/api/board/webhooks/<key>`,
@@ -76,8 +76,8 @@ Then file one report from each source and watch it go through: held
 
 ## What a card shows while it works
 
-Each run on a card, triage and then the work, starts with one reply from the
-daemon: `started card: 3 tasks in cards/slack/card-57`. That reply is edited
+Each run on a card, triage and then the work, starts with one reply from
+`mu serve`: `started card: 3 tasks in cards/slack/card-57`. That reply is edited
 as the run goes, to say where each task is (`#58 completed, #59 claimed, #60
 waiting`), so the thread on Slack, GitHub or Notion shows one comment that
 changes. When the run ends, its summary is a new reply, with each task's
@@ -191,6 +191,13 @@ mu token revoke Xk3v9QmB2a1c
 ```
 
 To stop the loop, stop `mu serve`. What the platforms send while it is down
-doesn't reach it, and the board catches up on Linear, Slack, GitHub and Notion
-when it starts again. To take a source out, remove its sync from `board.ts` and its
+doesn't reach it. When it starts again the board catches up, within each
+platform's limits. GitHub and Linear catch up only with a token or an app.
+Slack can miss a reply in an older thread. Notion misses a comment on a page
+that didn't otherwise change. On GitHub, Linear and Slack, edits and deletes
+made meanwhile are not read. Each
+platform's page says what its catch-up misses: [GitHub](../02-sync/02-github.md#catching-up),
+[Linear](../02-sync/03-linear.md#catching-up),
+[Slack](../02-sync/04-slack.md#after-downtime),
+[Notion](../02-sync/05-notion.md#catching-up). To take a source out, remove its sync from `board.ts` and its
 webhook from the platform.

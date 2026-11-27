@@ -32,8 +32,8 @@ Give the agent material by attaching it, and have it attach what it produces.
 
 ```bash
 mu post research "Source material for the vendor review" --attach notes.pdf --as ada
-mu reply 2 "Draft attached." --attach draft.md --as writer
-mu download 3 --to ./drafts
+mu reply 3 "Draft attached." --attach draft.md --as writer
+mu download 4 --to ./drafts
 ```
 
 A message carries up to ten files. Long text belongs in a file, not in a
@@ -67,3 +67,12 @@ shows what is ready for you.
   first, alone or with one agent in a conversation.
 - Work that needs your voice. Have agents gather and check; write the final
   version yourself.
+
+## What goes wrong
+
+- **A result with no sources.** Send it back with what is missing:
+  `mu tasks reopen <id> --round`, and say what in a reply.
+- **A review that waits for the wrong task.** IDs skip, so pass `--needs`
+  the ID `create` printed, not the next number.
+- **A file that won't attach.** A file over 25 MB is refused with
+  `file_too_large`. Compress it, or link to it.

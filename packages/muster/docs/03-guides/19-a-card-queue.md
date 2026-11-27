@@ -20,8 +20,8 @@ in place of the Vercel settings.
 
 ## The parts
 
-`templates/queue` is a board module for muster's own daemon, a workflow
-file, and three small scripts:
+`templates/queue` is a board module, a workflow file, and three small
+scripts:
 
 | File | What it does |
 | --- | --- |
@@ -52,11 +52,7 @@ cp templates/queue/workflows.json ~/.config/muster/
 Then edit the copy: `repo` is your repository's https address. In
 `board.ts`, `ENG` is your Linear team's key. `board.ts` stays in
 `templates/queue`, and names the scripts beside it by their full paths,
-wherever it is run from. If `~/.config/muster/` has a `watchers.json`,
-`sync.json` or `hooks.json` from an earlier copy of this template, move
-anything else in them into a board module and delete them: those files are no
-longer read, and `mu serve` refuses to start while one is there
-([Porting](../04-reference/07-porting.md)).
+wherever it is run from.
 
 Put the settings in the environment `mu serve` starts with, and give it the
 module. It runs the module's sync, its watchers and the workflow, and the
@@ -92,8 +88,8 @@ mu workflow list
    thread's ID, as the profile `intake`. The script sets `started=yes` on the
    card only if it still has `tag.agent=agent` and has no `started`, in one
    write, and then asks for the `card` workflow on it. Any later wake, from a
-   comment or the daemon's own reply, finds `started` set and does nothing.
-3. The daemon makes three tasks in `cards/card-<n>`: `spec`, `work`, which
+   comment or the run's own reply, finds `started` set and does nothing.
+3. `mu serve` makes three tasks in `cards/card-<n>`: `spec`, `work`, which
    needs the spec, and `review`, which needs the work. The spec task quotes
    the card's text as content, not instructions; the work and review tasks
    quote the spec's result the same way, and the review the work's summary,
@@ -132,7 +128,7 @@ mu label 1 started=yes --if tag.agent=agent --if-unset started --as intake
 A worker that can't go on without a decision blocks its task with one line on
 where things stand, then `->`, the decision it needs and what it recommends.
 The watcher `needs-me` runs `notify.sh` with the task's ID: a macOS
-notification, or, with `NOTIFY_CMD` in the daemon's environment, your own
+notification, or, with `NOTIFY_CMD` in `mu serve`'s environment, your own
 command, given one line. Neither gets anything the task says.
 
 ```bash
@@ -145,12 +141,12 @@ the gate: of two answers to one task, only the one whose unblock changed it
 goes on, and an answer the board refuses posts nothing. Then, since the run's
 own worker stops after ten idle minutes, it starts a worker that takes the
 run's ready tasks one after another, the answered one first, held to that
-run's tasks as the daemon's workers are: same runner, agent, repository and
+run's tasks as the workers `mu serve` starts are: same runner, agent, repository and
 `--push` as `workflows.json`. It starts none while a worker of the run is
 still going on this machine; that one takes the task.
 
 Run it as yourself, with no `--as` and no `MUSTER_PROFILE`: the run's tasks
-are the daemon's, and only the board's owner with no profile may unblock
+are made as the profile `workflows`, and only the board's owner with no profile may unblock
 them. Run it where `mu serve` runs, with the same `MUSTER_SANDBOX_URL`,
 Vercel, GitHub App and model settings in your shell: it starts the worker
 itself, and stays until the worker ends, since a `--push` run's change is
@@ -180,7 +176,7 @@ push. Know what a run reaches before you map a team:
 - **The repository.** The work step's sandbox pushes: its change goes to
   `mu/task-<id>` in the workflow's repository, with a pull request. The spec
   and review steps set `push: false`, so whatever their agents change is
-  never pushed. The worker reads that from what the daemon made each task
+  never pushed. The worker reads that from what `mu serve` made each task
   with, never from its labels now, so an agent that relabels a task changes
   nothing.
 - **CI.** That pull request runs your CI on the agent's code, with whatever
@@ -215,7 +211,7 @@ was done again keeps the old quote.
 - **The request fails.** `start.sh` leaves `started` set, so a request that
   went through before the error doesn't start a second run, and replies on
   the card, on the board only, with the retry: `mu label <id> --unset started`.
-  If the daemon refuses the request, it says why on the card itself.
+  If `mu serve` refuses the request, it says why on the card itself.
 - **A label taken off.** Before the watcher looked, nothing starts. After a
   run started, it goes on: cancel its tasks with `mu tasks cancel`.
 - **A script keeps failing.** The watcher tries the same event again, with a
@@ -246,13 +242,18 @@ was done again keeps the old quote.
   its diff to a reply on its task, and the review reads that; if the work
   step didn't, the review says so and reviews nothing.
 - **A label write whose answer was lost.** Over HTTP, `start.sh`'s label is
-  keyed by the event that woke it, so the daemon's retry gets the same
+  keyed by the event that woke it, so the watcher's retry gets the same
   answer and the card still starts. If new activity lands on the card before
   that retry, the retry has another key and finds `started` set: start it
   with `mu label <id> --unset started`.
 - **A usage limit.** The worker stops and the task fails; the summary says so.
 - **`answer.sh` says `isn't yours to change`.** It ran with a profile: unset
   `MUSTER_PROFILE`.
+- **`mu serve` refuses to start with `config_retired`.** `~/.config/muster/`
+  has a `watchers.json`, `sync.json` or `hooks.json` from an earlier copy of
+  this template. Those files are no longer read: move anything else in them
+  into a board module and delete them
+  ([Porting](../04-reference/07-porting.md)).
 
 ## Status
 

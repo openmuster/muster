@@ -187,9 +187,14 @@ same way: a trusted reply reopens it, and its status is In progress again.
 
 ## What you see
 
-- **The card** in Slack, Linear or GitHub, wherever the report came from:
-  the spec, the run's start and summary, the screenshots of each round, and
-  the pull request's address.
+- **The card** in Slack, Linear, GitHub or Notion, wherever the report came
+  from: the spec, the run's start and summary, the screenshots of each round,
+  and the pull request's address. GitHub and Notion take no files from the
+  board, so there each screenshot is named instead.
+- **The screenshots** are the ones the project's spec asks for. The work
+  agent takes them and attaches them to its task, and they are copied onto
+  the card when the round ends. A project whose spec asks for none gets
+  none.
 - **A line from `NOTIFY_CMD`**, when it is set: a card that needs your
   approval, a task blocked on a decision, a round that is done.
 - **The pull request,** one per card, with a commit per round.

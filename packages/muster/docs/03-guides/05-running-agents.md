@@ -71,3 +71,15 @@ agent doesn't have fails the run instead, and is not remembered.
 Anything that reads a prompt on stdin works after `--`. It gets the task's ID
 in `MUSTER_TASK` and its profile in `MUSTER_PROFILE`. With no usage to read,
 muster records how it exited and nothing else.
+
+## When not to
+
+- **For an agent you don't trust with your machine.** Here it runs as you,
+  with your files and your network. Give it a
+  [cloud sandbox](./06-sandboxed-agents.md) instead.
+- **For a step that is only a command,** such as a test run, with nothing
+  to decide. `mu tasks run <id> -- pnpm test` settles the task by its exit
+  code, with no agent.
+- **For a budget alone on Codex.** It reports no cost, so a budget never
+  stops it. Give it a `--timeout`. See
+  [Budgets](../01-concepts/13-budgets.md).
