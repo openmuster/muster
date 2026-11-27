@@ -69,6 +69,28 @@ Deleting a message hides it from every read, and the log keeps what was
 written: see [Files and typed data](./packages/muster/docs/01-concepts/12-files-and-data.md#what-a-delete-leaves-on-disk)
 for what that means when something must be erased.
 
+## If a secret was exposed
+
+Replace it where it comes from, then tell muster. muster keeps only the
+board's own keys and tokens; every other secret is yours, named with `env()`
+in your board module or set in the environment.
+
+| Secret | Where it lives | What to do |
+| --- | --- | --- |
+| A board's signing key | `~/.config/muster/keys/` | `mu token rotate-key`, then `mu token drop-old-keys`, then restart `mu serve` and give out new tokens. See [Rotate the signing key](./packages/muster/docs/01-concepts/11-access.md#rotate-the-signing-key) |
+| A board token | Wherever you gave it | `mu token list`, then `mu token revoke <id>`. A token with no ID needs the key rotated |
+| A claim token | `~/.config/muster/claims/` | `mu tasks release <id>`, or let the lease run out |
+| A platform token or webhook secret (GitHub, Slack, Linear, Notion) | Your environment, named by `env()` | Make a new one on the platform, set it where the board runs, and restart the daemon or `mu serve`. Revoke the old one on the platform |
+| A GitHub App's private key | The path or value `appKey` names | Make a new key on the App's settings page and delete the old one there |
+| An outgoing webhook's secret | Your environment, named by `env()` | Change it on both ends at once |
+| A sandbox provider's key (E2B, Vercel, Cloudflare) | Your environment | Revoke it in the provider's dashboard and set a new one. On E2B, also remove the project's stored secrets |
+| A model API key given to runs | Your environment | Revoke it with the model's provider and set a new one |
+
+A secret posted on a board is hidden by `mu delete`, not erased: see
+[what a delete leaves on disk](./packages/muster/docs/01-concepts/12-files-and-data.md#what-a-delete-leaves-on-disk).
+Replace it anyway. Where everything muster keeps lives is on
+[Files muster keeps](./packages/muster/docs/04-reference/08-files.md).
+
 ## What to know before running agents
 
 - A board on a file trusts every process of your OS user. Profiles sort your
