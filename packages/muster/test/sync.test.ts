@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { board, env, file, github, linear, slack } from '../src/index.ts'
 import { envNames, resolveSync } from '../src/sync/declare.ts'
-import { clock, tempDir } from './helpers.ts'
+import { clock, tempDir, unmarked } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const SECRET = 'whsec'
@@ -19,7 +19,7 @@ function setup(options: { mirror?: boolean; fail?: () => boolean; status?: numbe
     const thrown = options.throws?.()
     if (thrown) throw thrown
     if (options.fail?.()) return new Response('{"message":"nope"}', { status: options.status ?? 422 })
-    sent.push({ url: String(url), body, auth: new Headers(init?.headers).get('authorization') })
+    sent.push({ url: String(url), body: unmarked(body), auth: new Headers(init?.headers).get('authorization') })
     made += 1
     if (String(url).includes('slack')) return Response.json({ ok: true, ts: `1700000000.${made}` })
     if (String(url).includes('linear')) {
@@ -253,6 +253,126 @@ describe('sync: GitHub', () => {
   })
 })
 
+describe('sync: a send nobody heard back from', () => {
+  /**
+   * A platform that takes every post and keeps it, and can lose its answer: the post is made, then the caller is
+   * told nothing, as when the answer doesn't come in time.
+   */
+  function lossy(kind: 'github' | 'slack' | 'linear') {
+    const time = clock()
+    const posts: { url: string; body: any }[] = []
+    const kept: { id: number; body?: string; ts?: string; metadata?: unknown }[] = []
+    let lose = 0
+    let made = 500
+    const timeout = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      const at = String(url)
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      if (kind === 'github') {
+        if (method === 'GET') return Response.json(kept.map((each) => ({ id: each.id, body: each.body, user: { login: (each as { by?: string }).by ?? 'muster[bot]' } })))
+        posts.push({ url: at, body })
+        kept.push({ id: ++made, body: body.body })
+        if (lose > 0 && lose--) throw timeout()
+        return Response.json({ id: made }, { status: 201 })
+      }
+      if (kind === 'slack') {
+        if (at.includes('conversations.replies')) return Response.json({ ok: true, messages: new URL(at).searchParams.get('include_all_metadata') === 'true' ? kept : kept.map(({ metadata: _, ...each }) => each) })
+        posts.push({ url: at, body })
+        kept.push({ id: ++made, ts: `1700000000.${made}`, metadata: body.metadata, bot_id: 'B0BOT' } as never)
+        if (lose > 0 && lose--) throw timeout()
+        return Response.json({ ok: true, ts: `1700000000.${made}` })
+      }
+      if (String(body.query).includes('comment(id')) {
+        const found = kept.find((each) => String(each.id) === body.variables.id || (each as { uuid?: string }).uuid === body.variables.id)
+        return Response.json(found ? { data: { comment: { id: (found as { uuid?: string }).uuid, user: { id: (found as { by?: string }).by ?? 'bot-user' } } } } : { data: null, errors: [{ message: 'Entity not found: Comment', extensions: { code: 'ENTITY_NOT_FOUND' } }] })
+      }
+      posts.push({ url: at, body })
+      kept.push({ id: ++made, uuid: body.variables.input.id } as never)
+      if (lose > 0 && lose--) throw timeout()
+      return Response.json({ data: { commentCreate: { success: true, comment: { id: body.variables.input.id } } } })
+    }) as typeof fetch
+    const sync =
+      kind === 'github'
+        ? { s: github({ secret: SECRET, token: 'ghs_token', bot: 'muster[bot]', repos: { 'acme/web': { issues: 'web/issues', mirror: true } } }) }
+        : kind === 'slack'
+          ? { s: slack({ secret: SECRET, token: 'xoxb', bot: 'B0BOT', channels: { C123: 'general' }, now: () => time.now().getTime() }) }
+          : { s: linear({ secret: SECRET, token: 'lin_api_token', bot: 'bot-user', teams: { ENG: 'eng' } }) }
+    const backend = file({ memory: true, principal: 'local:user:ada', now: time.now, sync, fetch: fetcher })
+    const team = board({ backend })
+    const root = async () => {
+      if (kind === 'github') {
+        const body = JSON.stringify({ action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+        await backend.syncReceive('s', { headers: { 'x-github-event': 'issues', 'x-github-delivery': 'd-1', 'x-hub-signature-256': `sha256=${sign(SECRET, body)}` }, body })
+      } else if (kind === 'slack') {
+        const body = JSON.stringify({ type: 'event_callback', event_id: 'Ev1', event: { type: 'message', channel: 'C123', user: 'U1', text: 'deploy is red', ts: '1700000000.000100' } })
+        const stamp = String(Math.floor(time.now().getTime() / 1000))
+        await backend.syncReceive('s', { headers: { 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${sign(SECRET, `v0:${stamp}:${body}`)}` }, body })
+      } else {
+        const body = JSON.stringify({ type: 'Issue', action: 'create', data: { id: 'iss-1', title: 'Fix it', description: '', team: { key: 'ENG' }, creatorId: 'u1' } })
+        await backend.syncReceive('s', { headers: { 'linear-delivery': 'l-1', 'linear-signature': sign(SECRET, body) }, body })
+      }
+      await backend.syncTick()
+      return (await team.events({ after: 0, filter: { types: ['message.posted'] } })).events[0]!.thread!
+    }
+    return { team, backend, time, posts, kept, root, lose: (count: number) => (lose = count) }
+  }
+
+  it('a copy of the marker in a post by someone else is not taken for the board\'s: the reply is sent', async () => {
+    const { team, backend, time, posts, kept, root, lose } = lossy('github')
+    const thread = await root()
+    await backend.syncTick()
+    // The board's try never reached GitHub; someone else's comment carries the marker it would have had.
+    lose(1)
+    await team.reply({ to: thread, text: 'on it' })
+    await backend.syncTick()
+    const marker = /<!-- muster:([0-9a-f-]+) -->/.exec(posts[0]!.body.body)![1]
+    kept.splice(0, kept.length, { id: 1, body: `spoof <!-- muster:${marker} -->`, by: 'mallory' } as never)
+    time.advance(60_000)
+    await backend.syncTick()
+    expect(posts).toHaveLength(2)
+  })
+
+  it('linear: an ID the board chose, taken by someone else\'s comment, is never recorded as the board\'s', async () => {
+    const { team, backend, time, posts, kept, root, lose } = lossy('linear')
+    const thread = await root()
+    await backend.syncTick()
+    lose(1)
+    await team.reply({ to: thread, text: 'on it' })
+    await backend.syncTick()
+    ;(kept[0] as { by?: string }).by = 'mallory'
+    time.advance(60_000)
+    await backend.syncTick()
+    expect((await team.events({ after: 0, filter: { types: ['sync.delivered'] } })).events.filter((event) => event.data.key === 's' && event.data.external !== undefined && String(event.data.external).startsWith('comment:'))).toEqual([])
+    expect(posts).toHaveLength(1)
+  })
+
+  for (const kind of ['github', 'slack', 'linear'] as const) {
+    it(`${kind}: a reply the platform took, though its answer never came, is found there by its marker and not posted again`, async () => {
+      const { team, backend, time, posts, root, lose } = lossy(kind)
+      const thread = await root()
+      await backend.syncTick()
+      lose(1)
+      await team.reply({ to: thread, text: 'on it' })
+      await backend.syncTick()
+      expect(posts).toHaveLength(1)
+      for (let i = 0; i < 3; i++) {
+        time.advance(60_000)
+        await backend.syncTick()
+      }
+      expect(posts).toHaveLength(1)
+      const delivered = (await team.events({ after: 0, filter: { types: ['sync.delivered'] } })).events
+      expect(delivered.map((event) => event.data.key)).toEqual(['s'])
+      expect((await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events).toEqual([])
+      // What goes next goes once, as ever.
+      await team.reply({ to: thread, text: 'done' })
+      await backend.syncTick()
+      expect(posts).toHaveLength(2)
+    })
+  }
+
+})
+
 describe('sync: GitHub as a GitHub App', () => {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
   const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
@@ -264,7 +384,7 @@ describe('sync: GitHub as a GitHub App', () => {
     let made = 9000
     let minted = 0
     const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
-      const call = { method: init?.method ?? 'GET', url: String(url), body: JSON.parse(String(init?.body ?? '{}')), auth: new Headers(init?.headers).get('authorization') ?? '' }
+      const call = { method: init?.method ?? 'GET', url: String(url), body: unmarked(JSON.parse(String(init?.body ?? '{}'))), auth: new Headers(init?.headers).get('authorization') ?? '' }
       sent.push(call)
       if (call.url.endsWith('/installation')) return Response.json({ id: 77 })
       if (call.url.endsWith('/app/installations/77/access_tokens')) return Response.json({ token: `ghs_app_${++minted}`, expires_at: new Date(time.now().getTime() + HOUR).toISOString() }, { status: 201 })
@@ -566,7 +686,7 @@ describe('sync: Linear as its own app', () => {
       const auth = new Headers(init?.headers).get('authorization') ?? ''
       // A token Linear ended early: its secret was rotated, or its scopes changed.
       if (options.ended?.() === auth) return new Response('{"errors":[{"message":"Authentication required"}]}', { status: 401 })
-      calls.push({ auth, input: JSON.parse(String(init?.body)).variables?.input })
+      calls.push({ auth, input: unmarked(JSON.parse(String(init?.body)).variables?.input) })
       return Response.json({ data: { commentCreate: { success: true, comment: { id: `lc-${++comment}` } } } })
     }) as typeof fetch
     const lin = linear({ secret: SECRET, clientId: 'client-1', clientSecret: 'shh', teams: { ENG: 'eng' }, now: () => time.now().getTime(), ...(options.scopes ? { scopes: options.scopes } : {}) })

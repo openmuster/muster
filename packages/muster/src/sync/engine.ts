@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { Failure } from '../failure.ts'
 import type { Context } from '../core/context.ts'
 import { findMessage } from '../core/context.ts'
@@ -7,7 +8,7 @@ import { holdIfEdited } from '../core/tasks.ts'
 import { LIMITS, PROGRESS, labelKey, labelValue, type By } from '../model.ts'
 import { append, toEvent } from '../store/log.ts'
 import { FILTERED, withLines } from './files.ts'
-import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, OUTAGE_MS, OUTAGE_PAUSE_MS, SEND_MS, isOutage, type Inbound, type Provider, type Received } from './types.ts'
+import { DELIVERY_ATTEMPTS, IMPORT_ATTEMPTS, OUTAGE_MS, OUTAGE_PAUSE_MS, SEND_MS, isOutage, type Delivery, type Inbound, type Provider, type Received } from './types.ts'
 
 export type Sync = Record<string, Provider>
 
@@ -60,13 +61,39 @@ const tooLong = (ctx: Context, since: string) => ctx.now().getTime() - Date.pars
 /** A short, fixed word for why something failed: never the platform's own text, which the log would keep for good. */
 export const failureOf = (error: unknown): string => (error instanceof Failure ? error.reason : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError') ? 'timeout' : error instanceof TypeError && error.message === 'fetch failed' ? 'unreachable' : 'error')
 
+/**
+ * Whether a failed send may have reached the platform all the same: no answer in time, a 5xx other than 503, or a
+ * connection that broke once made. A refused connection, an unknown host and any 4xx never sent anything.
+ */
+function mayHaveLanded(error: unknown): boolean {
+  if (error instanceof Failure) {
+    const status = /^platform_(\d+)$/.exec(error.reason)
+    return status !== null && Number(status[1]) >= 500 && Number(status[1]) !== 503
+  }
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  const code = ((error as { cause?: { code?: string } })?.cause?.code ?? '') as string
+  return error instanceof TypeError && error.message === 'fetch failed' && !['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)
+}
+
+/**
+ * What a board message carries to a platform, unseen, so a later try can find it there: the same on every try,
+ * and unlike any other board's, since it hashes when the message was written as well as where it sits in the log.
+ * Shaped as a UUID, which is what Linear takes for an ID chosen by the caller.
+ */
+export function markerOf(key: string, event: { seq: number; at: string }): string {
+  const hex = createHash('sha256').update(`${key}:${event.seq}:${event.at}`).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${'89ab'[parseInt(hex[16]!, 16) % 4]}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
 /** A delivery older than this is from a process that died mid-send, and no longer holds imports. */
 const SENDING_STALE_MS = 2 * SEND_MS
 
 /** Whether a delivery to this platform is out, from this process or another on the same board. */
 function isSending(ctx: Context, key: string) {
   const after = new Date(ctx.now().getTime() - SENDING_STALE_MS).toISOString()
-  return ctx.db.raw.prepare('select 1 from sending where key = ? and since > ?').get(key, after) !== undefined
+  // A send whose outcome is unknown (`since` set to the epoch) holds them too, until it is looked for: its echo
+  // would otherwise come in as new before the board knows that the post there is its own.
+  return ctx.db.raw.prepare('select 1 from sending where key = ? and (since > ? or since = ?)').get(key, after, new Date(0).toISOString()) !== undefined
 }
 
 /**
@@ -435,7 +462,8 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         const held = ctx.db.raw.prepare('select since from sending where key = ? and seq = ?').get(key, event.seq) as { since: string } | undefined
         if (held && Date.parse(held.since) > ctx.now().getTime() - SENDING_STALE_MS) return { held: true }
         ctx.db.raw.prepare('insert or replace into sending (key, seq, since) values (?, ?, ?)').get(key, event.seq, ctx.now().toISOString())
-        return {}
+        // A claim left behind is a send whose outcome nobody knows: its sender died, or the platform never said.
+        return held ? { unsure: true } : {}
       })
       if ('done' in claim) {
         cursor = claim.done!
@@ -443,9 +471,20 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       }
       // Later messages in this platform's queue wait behind it, as they wait behind a failure.
       if ('held' in claim) break
+      const marker = markerOf(key, event)
+      // Whether the platform may have this message already, from a try nobody heard back from.
+      let unsure = 'unsure' in claim
       try {
         const threadExternal = isRoot ? null : (rootLink!.thread_external ?? rootLink!.external)
-        const sent = await provider.deliver(message, { place, threadExternal }, fetcher, (id) => fileBytes(ctx, id))
+        let sent: Delivery | null = null
+        if (unsure) {
+          // Looked for before it is sent again, by the marker every try carries. A platform with no way to look
+          // isn't sent it twice: the person sees it may not have gone, and sends it again if it didn't.
+          if (!provider.find) throw new Failure('unconfirmed', 'The platform never said whether it took the message.')
+          sent = await provider.find(marker, message, { place, threadExternal }, fetcher)
+          unsure = false
+        }
+        sent ??= await provider.deliver(message, { place, threadExternal }, fetcher, (id) => fileBytes(ctx, id), marker)
         answered(ctx, sync, key)
         ctx.db.write(() => {
           // Recorded and released at once: a webhook for it, imported after this, finds the link.
@@ -464,18 +503,22 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         cursor = event.seq
         delivered++
       } catch (error) {
-        ctx.db.write(() => ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq))
+        const unconfirmed = error instanceof Failure && error.reason === 'unconfirmed'
+        // A try the platform may have taken stays claimed, as from long ago: the next one looks for it first.
+        if (!unconfirmed && (unsure || mayHaveLanded(error))) ctx.db.write(() => ctx.db.raw.prepare('update sending set since = ? where key = ? and seq = ?').get(new Date(0).toISOString(), key, event.seq))
+        else ctx.db.write(() => ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq))
         failed++
         answered(ctx, sync, key, error)
         // A platform that is down says nothing about this message: it waits its turn, without using a try, for a day.
         if (isOutage(error) && !tooLong(ctx, event.at)) break
-        const attempts = isOutage(error) ? DELIVERY_ATTEMPTS : ((ctx.db.raw.prepare('select attempts from outbox_attempts where key = ? and seq = ?').get(key, event.seq) as { attempts: number } | undefined)?.attempts ?? 0) + 1
+        const attempts = isOutage(error) || unconfirmed ? DELIVERY_ATTEMPTS : ((ctx.db.raw.prepare('select attempts from outbox_attempts where key = ? and seq = ?').get(key, event.seq) as { attempts: number } | undefined)?.attempts ?? 0) + 1
         if (attempts < DELIVERY_ATTEMPTS) {
           ctx.db.write(() => ctx.db.raw.prepare('insert into outbox_attempts (key, seq, attempts) values (?, ?, ?) on conflict (key, seq) do update set attempts = excluded.attempts').get(key, event.seq, attempts))
           // Later messages in this platform's queue wait their turn behind it.
           break
         }
         ctx.db.write(() => {
+          ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
           append(ctx.db, { type: 'sync.failed', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, error: failureOf(error) } }, ctx.now().toISOString())
           ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(event.seq, name)
         })

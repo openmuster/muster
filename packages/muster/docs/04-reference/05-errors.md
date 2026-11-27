@@ -190,6 +190,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `invalid_session` | Not a session ID |
 | `platform_refused` | A platform didn't do what was asked |
 | `file_refused` | A synced file wasn't fetched: too big, not on the platform's own file host, or refused. Never shown to you: the message names the file instead |
+| `unconfirmed` | A message's send got no answer, and the platform has no way for the board to look whether it took it. Never shown to you: it is the `error` of a `sync.failed` event |
 | `joins_closed` | The board wasn't served with `--allow-joins`: ask its owner for a token |
 | `insecure_url` | A token goes to a board, and a run's credentials to a runner Worker, over https, or plain http to this machine. `MUSTER_INSECURE_HTTP=1` lets your own token cross plain http on a network that is private some other way; a job's token for `mu token exchange` never does |
 | `exchange_closed` | The board's owner named no workload in `oidc.json`, or the board is on this machine and needs no token |

@@ -58,7 +58,7 @@ A claim's token never appears in an event a reader gets.
 | `schedule.canceled` | `id` |
 | `schedule.skipped` | `id`, `slot`: a slot too late to send |
 | `sync.delivered` | `id`, `key`, `external`: a message reached a platform. `files`: the platform's IDs for the files sent with it, if any |
-| `sync.failed` | `id`, `key`, `error`: it didn't, after five tries or a day of the platform being down. `error` is a short code, such as `platform_422` |
+| `sync.failed` | `id`, `key`, `error`: it didn't, after five tries or a day of the platform being down. `error` is a short code, such as `platform_422`, or `unconfirmed` when the platform may have it and there is no way to look |
 | `sync.dropped` | `key`, `id`, `error`: an event from a platform given up before it was imported, on the thread it was about |
 | `schema.registered` | `name`, `version`, `schema` |
 | `budget.set` | `channel`, `usd` |

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { board, file, github, linear, slack } from '../src/index.ts'
-import { clock, tempDir } from './helpers.ts'
+import { clock, tempDir, unmarked } from './helpers.ts'
 
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const SECRET = 'whsec'
@@ -24,7 +24,7 @@ function setup(answers: Record<string, (call: Call) => Response | undefined> = {
     const url = String(input)
     const headers = new Headers(init?.headers)
     const raw = init?.body
-    const body = typeof raw === 'string' ? (raw.startsWith('{') ? JSON.parse(raw) : raw) : raw instanceof Uint8Array ? Buffer.from(raw) : raw
+    const body = typeof raw === 'string' ? (raw.startsWith('{') ? unmarked(JSON.parse(raw)) : raw) : raw instanceof Uint8Array ? Buffer.from(raw) : raw
     const call = { url, method: init?.method ?? 'GET', auth: headers.get('authorization'), headers, body }
     calls.push(call)
     made += 1

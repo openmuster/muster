@@ -96,3 +96,24 @@ export const reason = async (run: Promise<unknown>): Promise<string> => {
 }
 
 export type { Board }
+
+/**
+ * A request body as a platform got it, less the marker the board puts on what it sends (an HTML comment on
+ * GitHub, Slack metadata, an ID it chose on Linear), for tests about what else the body says. The marker
+ * has tests of its own.
+ */
+export function unmarked<T>(body: T): T {
+  const strip = (value: unknown): unknown => {
+    if (typeof value === 'string') return value.replace(/\n\n<!-- muster:[0-9a-f-]{36} -->$/, '')
+    if (Array.isArray(value)) return value.map(strip)
+    if (!value || typeof value !== 'object' || Buffer.isBuffer(value)) return value
+    const out: Record<string, unknown> = {}
+    for (const [key, each] of Object.entries(value)) {
+      if (key === 'metadata' && (each as { event_type?: string })?.event_type === 'muster_message') continue
+      if (key === 'id' && typeof each === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(each) && ('body' in value || 'title' in value)) continue
+      out[key] = strip(each)
+    }
+    return out
+  }
+  return strip(body) as T
+}
