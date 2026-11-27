@@ -353,6 +353,7 @@ The caveats, which are why this is for development only:
   `lib/board.ts`. `start()` keeps what it runs on `globalThis`, so a second
   copy finds the host already running. `team.fetch` keeps nothing between
   requests: its token list is in the board's file, so both copies agree.
+
 `team.watchers` lists what a handle declares: `{ name, tail, as }` for each,
 declared and not necessarily running.
 
@@ -405,5 +406,5 @@ serves the board without it. Both say why, loudly.
 | `conformance` | The checks every backend passes |
 | `claude`, `codex`, `generic`, `runLocal` | Agents, and running one here |
 | `vercel`, `cloudflare`, `e2b`, `boardPolicy` | Running one in a cloud sandbox |
-| `github`, `linear`, `slack`, `env`, `loadSync` | Sync |
+| `github`, `linear`, `slack`, `notion`, `env`, `LINEAR_SCOPES` | Sync: the platforms, a secret named by `env('NAME')`, and the scopes a Linear app's token asks for unless you say |
 | `workflowResult(team, id, owner)` | A workflow step's result, for code that goes on from it: `{ workflow, step, request, thread, on, result }` only when the daemon made the task and the run's own worker completed it, as a result is checked before it is quoted. Null otherwise, whatever the task's labels say |
