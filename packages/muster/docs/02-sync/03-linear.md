@@ -132,7 +132,7 @@ own comments and issues by the IDs Linear gave them, so they don't come back.
 | A comment | A reply, by `lin:user:<id>` |
 | A comment is edited or removed | The reply is edited or deleted |
 | The issue's state changes | The label `state`, in lowercase with dashes: `in-progress` |
-| The issue's title or description is edited | Nothing: the thread keeps the issue as it was when it was made. Say a change in a comment |
+| The issue's title or description is edited | The thread's first message is edited: the title, a blank line, the description |
 | A label is on it, added or removed | A label per Linear label: `tag.bug=bug` |
 | It is assigned, reassigned or unassigned | `assignee.<handle>=<handle>`, from the assignee's profile handle or the name they show |
 | Its priority is set or cleared | `priority`: `urgent`, `high`, `medium` or `low`. No priority is no label |

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 
+// Ctrl-C is taken from the first moment: loading the CLI takes a while on a busy machine, and a signal before
+// the handler is in place would end the process with no chance to stop cleanly or exit 130.
+const stop = new AbortController()
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => stop.abort(signal))
+
 // Node 22 says on stderr, on every run, that its SQLite is experimental. That is noise for a person and
 // breaks `--json` for a program reading stderr, so that one warning is dropped before SQLite loads.
 const emitWarning = process.emitWarning
@@ -21,9 +26,6 @@ if (process.argv[2] === 'mcp' && process.argv.length === 3) {
   await mcp(process.stdin, process.stdout, process.env, main)
   process.exit(0)
 }
-
-const stop = new AbortController()
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => stop.abort(signal))
 
 const code = await main(process.argv.slice(2), {
   out: (text) => void process.stdout.write(text + '\n'),

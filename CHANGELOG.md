@@ -3,6 +3,17 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Fixed
+
+- An edited Linear issue edits its thread. A new title or description now
+  edits the thread's first message, as an edited GitHub issue or Notion page
+  does, and the feedback loop triages the card again from the new text.
+  Before, the thread kept the issue as it was first sent. A label or state
+  change in the same update still applies: sync orders a thread's text and
+  its labels apart.
+
 ## 0.3.1-alpha.2
 
 ### Changed

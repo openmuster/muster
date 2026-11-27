@@ -537,7 +537,7 @@ describe('templates/loop', () => {
       }
       /** The issue moved to a state in Linear, by `who`. */
       const move = (id: string, state: string, who = 'u-ada') => send({ type: 'Issue', action: 'update', actor: { id: who }, data: { id, team: { key: 'ENG' }, state: { name: state }, updatedAt: new Date(Date.now() + ++at * 1000).toISOString() } })
-      return { ...made, file, move, written, related, sent, signed, minted, api, channel }
+      return { ...made, file, move, send, written, related, sent, signed, minted, api, channel }
     }
     /** Whether a triage was asked for on the card, by the board's record of the request. */
     const triaged = async (made: Awaited<ReturnType<typeof fromLinear>>, card: number) => (await made.team.events({ after: 0, filter: { types: ['workflow.requested'], re: card } })).events.some((event) => (event.data as { name: string }).name === 'triage')
@@ -550,6 +550,17 @@ describe('templates/loop', () => {
       await made.move(id, 'Todo')
       expect(await made.card(card)).toMatchObject({ state: 'blocked', hold: { kind: 'triage' } })
       expect(await triaged(made, card)).toBe(true)
+    })
+
+    it("an issue whose description is edited in Linear is triaged again, from its new text", async () => {
+      const made = await fromLinear()
+      const { id, card } = await made.file('Todo')
+      expect(await triaged(made, card)).toBe(true)
+      await made.send({ type: 'Issue', action: 'update', actor: { id: 'u-ada' }, updatedFrom: { description: 'show them' }, data: { id, identifier: 'ENG-1', title: 'Stack counts', description: 'show them, and the unread count in each', team: { key: 'ENG' }, state: { name: 'Todo' }, updatedAt: new Date(Date.now() + 60_000).toISOString() } })
+      expect((await made.team.readThread({ id: card })).message.text).toBe('Stack counts\n\nshow them, and the unread count in each')
+      const triages = (await made.team.events({ after: 0, filter: { types: ['workflow.requested'], re: card } })).events.filter((event) => (event.data as { name: string }).name === 'triage')
+      expect(triages).toHaveLength(2)
+      expect((await made.run(card, 'triage'))!.triage!.text).toContain('the unread count in each')
     })
 
     it("an issue in Triage waits in planning, one in a state the loop doesn't know waits in the backlog, and one in Todo is triaged at once", async () => {

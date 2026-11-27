@@ -196,7 +196,8 @@ function importOne(ctx: Context, provider: Provider, key: string, event: Inbound
   // A platform resends what wasn't answered, later, and a webhook can be held up: one that says less than what the
   // board already applied for the same issue or comment would put an older state back. Removals stay final, so a
   // delete is never late.
-  const thing = event.kind === 'labels' ? event.thread : event.external
+  // A thread's first message and its labels are ordered apart: one delivery can change both at once, at one time.
+  const thing = event.kind === 'labels' ? event.thread : event.kind === 'edit' && event.external === event.thread ? `${event.thread}:text` : event.external
   if (event.kind === 'labels' || event.kind === 'edit') {
     const skip = late(ctx, key, thing, event.updated)
     if (skip) return skip
