@@ -32,7 +32,7 @@ export const STYLE = `
   --scrollbar: 6px; --tap: 40px; --col-state: 84px; --col-event: 124px; --col-id: 44px; --text-min: 180px;
   --duration-pulse: 1.6s;
   --press: 0.97; --faded: 0.5; --disabled: 0.4;
-  --z-pane: 10; --z-scrim: 20; --z-drawer: 30;
+  --z-pane: 10; --z-scrim: 20; --z-drawer: 30; --z-keys: 40; --keys-w: 360px;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { ${declarations(COLOURS.light)} --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
@@ -93,7 +93,7 @@ header a.icon { margin-left: auto; }
 .rows { flex: 1; overflow: auto; container-type: inline-size; }
 .row { display: flex; align-items: center; gap: ${s(2.5)}; padding: ${s(2)} ${s(4)}; white-space: nowrap; overflow: hidden; }
 .row, .thread { transition: background-color var(--duration-fast); }
-.row.on, .thread.on { background: var(--hover); }
+.row.on, .thread.on, .row:focus-visible, .thread:focus-visible { background: var(--hover); }
 .row code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row .meta { flex: none; }
 .row .state { width: var(--col-state); flex: none; color: var(--dim); }
@@ -131,6 +131,16 @@ button:disabled { opacity: var(--disabled); }
 .pane { position: fixed; inset: 0; z-index: var(--z-pane); background: var(--bg); display: flex; flex-direction: column; transition: opacity var(--duration) var(--ease-out), transform var(--duration) var(--ease-out); }
 @starting-style { .pane { opacity: 0; transform: translateX(${s(3)}); } }
 .messages { flex: 1; overflow: auto; }
+/* The list of every key, from ?: over everything, the page dimmed under it. */
+.veil { position: fixed; inset: 0; z-index: var(--z-keys); background: var(--scrim); }
+.keys { position: fixed; z-index: var(--z-keys); top: ${s(16)}; left: 50%; translate: -50% 0; width: min(var(--keys-w), calc(100% - ${s(8)})); background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--radius); outline: none; transition: opacity var(--duration) var(--ease-out); }
+@starting-style { .keys { opacity: 0; } }
+.keys header { height: auto; padding: ${s(2.5)} ${s(4)}; }
+.keys header .icon { margin-left: auto; }
+.keys dl { display: grid; grid-template-columns: max-content 1fr; gap: ${s(2)} ${s(4)}; margin: 0; padding: ${s(3)} ${s(4)} ${s(4)}; }
+.keys dl div { display: contents; }
+.keys dd { margin: 0; color: var(--dim); }
+kbd { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm); padding: 0 ${s(1)}; font: inherit; }
 article { padding: ${s(2.5)} ${s(4)}; }
 .labels { display: flex; gap: ${s(1.5)}; align-items: center; margin-top: ${s(1)}; color: var(--dim); flex-wrap: wrap; }
 /* A label is one line: a long value is cut short, whole in its tooltip. */

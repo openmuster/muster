@@ -47,6 +47,8 @@ async function open(path = '/', options: { context?: BrowserContextOptions; chan
 }
 
 const rows = (page: Page) => page.locator('.rows .row .text')
+/** The text of the row the keyboard is on. */
+const focused = (page: Page) => page.evaluate(() => document.activeElement?.querySelector('.text')?.textContent ?? null)
 /** Enough channels that the sidebar's list is longer than any screen here. */
 const MANY = Array.from({ length: 40 }, (_, n) => `team/room-${String(n).padStart(2, '0')}`)
 const LONG = 'cards/app/planning-1179-with-a-name-far-longer-than-the-sidebar'
@@ -233,6 +235,91 @@ describe('the inspector, in a browser', () => {
     await page.locator('.pane header a[aria-label="close"]').focus()
     await page.keyboard.press('Enter')
     await expect.poll(() => page.locator('.pane').count()).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('works through a list from the keyboard: J and K, or the arrows, move down and up the rows, in tasks and in activity', async () => {
+    const { page, errors } = await open()
+    await expect.poll(() => rows(page).count()).toBe(2)
+    // Nothing has the focus yet: the first key goes to the first row.
+    for (const [key, text] of [['j', 'Follow only same-origin paths'], ['j', 'Add a test for the redirect'], ['j', 'Add a test for the redirect'], ['k', 'Follow only same-origin paths'], ['ArrowDown', 'Add a test for the redirect'], ['ArrowUp', 'Follow only same-origin paths']] as const) {
+      await page.keyboard.press(key)
+      expect(await focused(page), key).toBe(text)
+    }
+    // On a tab of its own too.
+    await page.locator('.tabs a', { hasText: /^claimed$/ }).click()
+    await expect.poll(() => rows(page).count()).toBe(1)
+    await page.keyboard.press('k')
+    expect(await focused(page)).toBe('Add a test for the redirect')
+    await page.goto(`${new URL(page.url()).origin}/activity`)
+    await expect.poll(() => page.locator('.rows .row[data-row]').count()).toBeGreaterThan(2)
+    await page.keyboard.press('j')
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(await page.locator('.rows .row[data-row]').nth(1).getAttribute('data-row'))
+    expect(errors).toEqual([])
+  })
+
+  it('opens the row the keys are on with Enter, and Escape closes the thread and puts you back on that row', async () => {
+    const { page, taken, errors } = await open('/activity')
+    // Two events in one thread: the task made, then claimed. The second is the one to come back to.
+    const claimed = page.locator('.rows .row[data-row]', { hasText: 'task.claimed' })
+    await claimed.waitFor()
+    const all = await page.locator('.rows .row[data-row]').evaluateAll((els) => els.map((el) => el.getAttribute('data-row')))
+    const row = await claimed.getAttribute('data-row')
+    for (let n = 0; n <= all.indexOf(row); n++) await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(row)
+    await page.keyboard.press('Enter')
+    await page.locator('.pane').waitFor()
+    expect(new URL(page.url()).searchParams.get('thread')).toBe(String(taken.id))
+    expect(await page.locator('.pane article .text').first().textContent()).toBe('Add a test for the redirect')
+    await page.keyboard.press('Escape')
+    await expect.poll(() => page.locator('.pane').count()).toBe(0)
+    expect(new URL(page.url()).searchParams.get('thread')).toBeNull()
+    await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(row)
+    // And the keys carry on from there.
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(all[all.indexOf(row) + 1] ?? row)
+    expect(errors).toEqual([])
+  })
+
+  it('shows every key on ?, over the page, and Escape takes it away before it closes anything else', async () => {
+    const { page, errors } = await open()
+    await rows(page).first().click()
+    await page.locator('.pane').waitFor()
+    await page.locator('main header b').click()
+    await page.keyboard.press('?')
+    const keys = page.getByRole('dialog', { name: 'keys' })
+    await keys.waitFor()
+    expect(await keys.locator('kbd').allTextContents()).toEqual(['j ↓', 'k ↑', 'enter', 'esc', '?'])
+    // While it is open the list under it hears nothing.
+    const before = await page.evaluate(() => document.activeElement?.className)
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.className)).toBe(before)
+    await page.keyboard.press('Escape')
+    await expect.poll(() => keys.count()).toBe(0)
+    expect(await page.locator('.pane').count()).toBe(1)
+    await page.keyboard.press('?')
+    await keys.waitFor()
+    await page.keyboard.press('?')
+    await expect.poll(() => keys.count()).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('never takes a key you are typing: J, K, ? and Escape in a text box are text', async () => {
+    const { page, team, errors } = await open()
+    await rows(page).first().waitFor()
+    await page.locator('.composer input').fill('#work/web')
+    await page.locator('.composer textarea').click()
+    await page.keyboard.type('jk? ok')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Escape')
+    expect(await page.locator('.composer textarea').inputValue()).toBe('jk? ok')
+    expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('TEXTAREA')
+    expect(await page.getByRole('dialog', { name: 'keys' }).count()).toBe(0)
+    await page.keyboard.press('Enter')
+    await expect.poll(async () => (await team.taskList({ state: 'all' })).tasks.map((task) => task.text)).toContain('jk? ok')
+    await page.locator('label.as input').pressSequentially('jk?')
+    expect(await page.locator('label.as input').inputValue()).toBe('jk?')
     expect(errors).toEqual([])
   })
 

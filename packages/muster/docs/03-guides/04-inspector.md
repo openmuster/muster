@@ -43,6 +43,21 @@ opens the same place.
 Every view is a link: Tab reaches it, Enter opens it, and it opens in a new
 tab when you ask for one. Enter opens a row too.
 
+## Work through a list from the keyboard
+
+In tasks and activity, these keys move through the list one row at a time:
+
+| Key | What it does |
+| --- | --- |
+| `j` or `↓` | Moves to the next row |
+| `k` or `↑` | Moves to the previous row |
+| `Enter` | Opens the thread of the row you are on |
+| `Esc` | Closes the list of keys, the menu or the thread, in that order. Closing a thread puts you back on the row you opened it from |
+| `?` | Shows every key |
+
+While you type in the composer or the "as" field, every key is text and none
+of these work. A key held with Cmd, Ctrl or Alt is left to the browser.
+
 On a phone the sidebar is behind the menu button and a thread takes the whole
 screen. On a tablet a thread opens over the list.
 

@@ -81,6 +81,29 @@ only fades, the drawer and presses don't move, and the reconnecting pulse
 stops. The docs site's demo is data that is a function of time, so it shows
 each scene finished to anyone who asked for less motion.
 
+## Keys
+
+Keys are for working through a list, one row after another: the tasks and
+Activity. Every other list and form is clicked or tabbed through. The keys
+are Gmail's:
+
+- **`j` and `k`, or `↓` and `↑`:** move to the next and previous row that
+  opens. The row the keys are on has the focus, drawn as the open row is.
+- **`Enter`:** opens the row's thread. The row does this itself, so a row
+  reached by Tab opens the same way.
+- **`Esc`:** closes what is on top: the list of keys, then the drawer, then
+  the thread. Closing a thread puts the focus back on the row it was opened
+  from, so the next `j` carries on from there.
+- **`?`:** shows every key, over the page. While it is open the page under
+  it hears nothing.
+
+Every key is a binding in one table in `app/main.tsx`, run by the one
+listener in `app/keys.ts` (`useKeys`), and `?` draws that table, so a key
+that is listed always works. Never add a listener of your own. Nothing runs
+while you type in an input, a text area, a select or anything editable, and
+nothing runs with Cmd, Ctrl or Alt held, which the browser keeps. The
+browser suite drives each key.
+
 ## Rules for adding to it
 
 - A value is a token. A colour, a corner, a duration or a curve written in

@@ -7,6 +7,7 @@ import type { By, Message } from '../../model.ts'
 import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
 import { MARK_PATH } from '../mark.ts'
+import { useKeys, type Binding } from './keys.ts'
 import { notices, permission, show, type Permission } from './notify.ts'
 import { ICON, ICON_SMALL, STYLE } from './style.ts'
 
@@ -80,9 +81,13 @@ function Link(props: { href: string; go: (href: string) => void; on?: boolean; c
   )
 }
 
-/** What makes a row something to open: a click, or Enter once the keyboard has reached it. */
-const opens = (open: () => void) => ({
+/**
+ * What makes a row something to open: a click, or Enter once the keyboard has reached it (by Tab, or by
+ * J and K). `key` names the row, so the keyboard can come back to it when its thread is closed.
+ */
+const opens = (key: string, open: () => void) => ({
   tabIndex: 0,
+  'data-row': key,
   onClick: open,
   onKeyDown: (event: KeyboardEvent) => {
     if (event.key === 'Enter' && event.target === event.currentTarget) open()
@@ -128,12 +133,6 @@ function App() {
     setRoute(viewOf(window.location))
     setMenu(false)
   }
-  useEffect(() => {
-    if (!menu) return
-    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && setMenu(false)
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [menu])
   useEffect(() => {
     const onPop = () => setRoute(viewOf(window.location))
     window.addEventListener('popstate', onPop)
@@ -210,6 +209,60 @@ function App() {
 
   const here = (extra: string) => `${window.location.pathname}${extra}`
   const openThread = (id: number) => go(here(`?${new URLSearchParams({ ...(view.kind === 'tasks' ? { state: view.tab } : {}), thread: String(id) })}`))
+  // The row a thread was opened from, by its `data-row`: Escape closes the thread and comes back to it.
+  const from = useRef<string | null>(null)
+  const back = useRef(false)
+  const openRow = (key: string, id: number) => () => {
+    from.current = key
+    openThread(id)
+  }
+  const closeHref = here(view.kind === 'tasks' ? `?state=${view.tab}` : '')
+  useEffect(() => {
+    if (thread !== null || !back.current) return
+    back.current = false
+    if (from.current) document.querySelector<HTMLElement>(`[data-row="${CSS.escape(from.current)}"]`)?.focus()
+  }, [thread])
+
+  // The list of every key, over the page while it is open. What had the focus gets it back.
+  const [keys, setKeys] = useState(false)
+  const before = useRef<HTMLElement | null>(null)
+  const showKeys = (show: boolean) => {
+    if (show) before.current = document.activeElement as HTMLElement | null
+    else before.current?.focus()
+    setKeys(show)
+  }
+  /** J and K move down and up the rows that open, in the views that are lists to work through. */
+  const move = (by: 1 | -1) => () => {
+    if (keys || (view.kind !== 'tasks' && view.kind !== 'activity')) return false
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('main .rows [data-row]'))
+    if (rows.length === 0) return false
+    const at = rows.indexOf(document.activeElement as HTMLElement)
+    const on = at >= 0 ? at : rows.findIndex((row) => row.classList.contains('on'))
+    rows[on < 0 ? (by > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, on + by))]!.focus()
+    return true
+  }
+  const bindings: Binding[] = [
+    { keys: ['j', 'ArrowDown'], shown: 'j ↓', does: 'next task or event', run: move(1) },
+    { keys: ['k', 'ArrowUp'], shown: 'k ↑', does: 'previous task or event', run: move(-1) },
+    { keys: [], shown: 'enter', does: 'open its thread' },
+    {
+      keys: ['Escape'],
+      shown: 'esc',
+      does: 'close this list, the menu, or the thread, back on its row',
+      run: () => {
+        if (keys) showKeys(false)
+        else if (menu) setMenu(false)
+        else if (thread !== null) {
+          back.current = true
+          go(closeHref)
+        } else return false
+        return true
+      },
+    },
+    { keys: ['?'], shown: '?', does: 'show every key', run: () => (showKeys(!keys), true) },
+  ]
+  useKeys(bindings)
+
   const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : view.kind === 'joins' ? 'requests to join' : `#${view.path}`
 
   return (
@@ -286,7 +339,7 @@ function App() {
             </div>
             <div className="rows">
               {tasksFor(state, view.tab).map((task) => (
-                <div key={task.id} className={`row ${task.state}${thread === task.id ? ' on' : ''}`} {...opens(() => openThread(task.id))}>
+                <div key={task.id} className={`row ${task.state}${thread === task.id ? ' on' : ''}`} {...opens(`task-${task.id}`, openRow(`task-${task.id}`, task.id))}>
                   <span className="state">{task.state}</span>
                   <span className="id">#{task.id}</span>
                   <span className="text">{task.text.split('\n')[0]}</span>
@@ -308,7 +361,7 @@ function App() {
         {view.kind === 'channel' && (
           <div className="rows">
             {(state.threads[view.path] ?? []).map((item) => (
-              <div key={item.message.id} className={thread === item.message.id ? 'thread on' : 'thread'} {...opens(() => openThread(item.message.id))}>
+              <div key={item.message.id} className={thread === item.message.id ? 'thread on' : 'thread'} {...opens(`thread-${item.message.id}`, openRow(`thread-${item.message.id}`, item.message.id))}>
                 <div className="by" title={when(item.message.at)}>#{item.message.id} {who(item.message.by)} · {ago(item.message.at)} {item.task && <code>{item.task.state}</code>}</div>
                 <div className="text">{item.message.text}</div>
                 {item.replies > 0 && <div className="meta">{item.replies} {item.replies === 1 ? 'reply' : 'replies'}</div>}
@@ -323,7 +376,7 @@ function App() {
         {view.kind === 'activity' && (
           <div className="rows">
             {state.activity.map((event) => (
-              <div key={event.seq} className={event.thread && thread === event.thread ? 'row event on' : 'row event'} {...(event.thread ? opens(() => openThread(event.thread!)) : {})}>
+              <div key={event.seq} className={event.thread && thread === event.thread ? 'row event on' : 'row event'} {...(event.thread ? opens(`event-${event.seq}`, openRow(`event-${event.seq}`, event.thread)) : {})}>
                 <span className="id">{event.seq}</span>
                 <span className="state">{event.type}</span>
                 <span className="text">{String((event.data as { text?: string; result?: string; reason?: string }).text ?? (event.data as { result?: string }).result ?? (event.data as { reason?: string }).reason ?? '').split('\n')[0]}</span>
@@ -352,7 +405,7 @@ function App() {
           <header>
             <b>#{state.open.message.id}</b>
             <span>#{state.open.message.channel}</span>
-            <Link href={here(view.kind === 'tasks' ? `?state=${view.tab}` : '')} go={go} className="icon" label="close"><X size={ICON} /></Link>
+            <Link href={closeHref} go={go} className="icon" label="close"><X size={ICON} /></Link>
           </header>
           <div className="messages">
             {[state.open.message, ...state.open.replies].map((message) => (
@@ -371,6 +424,25 @@ function App() {
           </div>
           <Composer placeholder="reply…" button="reply" onSend={(text) => write(`${Date.now()}`, { thread: state.open!.message.id, channel: state.open!.message.channel, text }, () => call('reply', [{ to: state.open!.message.id, text }], me))} />
         </section>
+      )}
+      {keys && (
+        <>
+          <div className="veil" onClick={() => showKeys(false)} />
+          <section className="keys" role="dialog" aria-label="keys" tabIndex={-1} ref={(el) => el?.focus()}>
+            <header>
+              <b>keys</b>
+              <button className="icon" aria-label="close" onClick={() => showKeys(false)}><X size={ICON} /></button>
+            </header>
+            <dl>
+              {bindings.map((binding) => (
+                <div key={binding.shown}>
+                  <dt><kbd>{binding.shown}</kbd></dt>
+                  <dd>{binding.does}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </>
       )}
       <style>{STYLE}</style>
     </div>
