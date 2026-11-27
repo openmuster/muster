@@ -3,7 +3,7 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
-## Unreleased
+## 0.3.1-alpha.3
 
 ### Fixed
 
@@ -13,6 +13,18 @@ versions are affected.
   Before, the thread kept the issue as it was first sent. A label or state
   change in the same update still applies: sync orders a thread's text and
   its labels apart.
+
+- Ctrl-C is taken as soon as `mu` starts. It used to be taken only once the
+  CLI had loaded, which on a busy machine took long enough that an early
+  Ctrl-C ended the process by the signal, with no chance to stop cleanly.
+
+### Docs
+
+- A guide to planning in Linear and building with agents: where the spec,
+  each change and each decision live, setting up a team for agents, and what
+  you do from Linear and what from the board. Every page now says what it
+  covers, and each page is also served as Markdown for agents, with
+  `/llms.txt` and `/llms-full.txt` at openmuster.ai.
 
 ## 0.3.1-alpha.2
 
