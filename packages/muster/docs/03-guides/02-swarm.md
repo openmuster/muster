@@ -1,17 +1,23 @@
 ---
 title: A swarm
-description: For splitting one goal across several agents at once. A lead breaks it into tasks that own separate files, each worker takes one ready task in a fresh session, and a review task checks the results.
+description: For splitting one goal across several agents at once. You end with a lead that breaks the goal into tasks that own separate files, workers that each take one ready task in a fresh session, and a review task that checks the results.
 ---
 
-## The shape
+## Who does what in a swarm
 
 A lead plans and decides, workers each do one task, and a person owns the
 goal. They never talk to each other directly: the plan is the board's tasks,
 and every question, answer and result is in a task's thread.
 
-The board's part is the queue: one holder per task, tasks that wait for what
-they need, a hold for a person's answer, and a lease that hands a dropped task
-back. The lead's part is judgment: splitting the goal, answering questions,
+The board's part is the queue:
+
+- one holder per task (see [Claims](../01-concepts/08-tasks.md#claims))
+- tasks that wait for what they need
+- a hold for a person's answer (see
+  [States](../01-concepts/08-tasks.md#states))
+- a lease that returns a dropped task to `ready` when it runs out
+
+The lead's part is judgment: splitting the goal, answering questions,
 checking results.
 
 ## When a swarm fits, and when it doesn't
@@ -36,7 +42,11 @@ mu tasks create work/checkout "Rate-limit the API. You own apps/api/checkout/." 
 mu tasks create work/checkout "Show the limit in the UI. You own apps/web/checkout/." --needs 1 --as lead
 ```
 
-## By hand
+## Run a swarm from the command line
+
+Create the tasks from a plan file (see
+[A plan in one write](../01-concepts/08-tasks.md#a-plan-in-one-write)), start
+the workers, and have the lead wait for results:
 
 ```bash
 mu tasks create work/checkout --file plan.json --as lead
@@ -49,7 +59,7 @@ Each `mu run --loop` is a worker: it takes the next ready task, starts a fresh
 agent on it, and does that again until nothing is ready. The lead's guide is
 the board skill's `references/swarm.md`.
 
-## With the template
+## Run a swarm from the template page
 
 `templates/swarm` is a page that does the same from a form:
 
@@ -59,6 +69,8 @@ pnpm install
 pnpm dev        # on 127.0.0.1 only: the page has no sign-in
 ```
 
+On the page:
+
 - The form takes a goal, a run name, how many agents, which agent, and where
   they run.
 - Launching posts the run's thread, queues one planning task, and starts the
@@ -66,17 +78,20 @@ pnpm dev        # on 127.0.0.1 only: the page has no sign-in
 - `/live` shows the queue by state, who holds what, and the newest messages.
 
 Agents run as local processes with the access of whoever started the page.
-Launch runs only on code you would run yourself.
+Launch a run only on code you would run yourself.
 
-## What keeps it honest
+## Check and limit what workers do
 
-- **"Completed" is what the worker says, not evidence.** Make a review task that needs
-  the work, and give it to a different agent.
-- **A review that fails sends the work back:** `mu tasks reopen <id> --round`.
+Put these checks in place:
+
+- **"Completed" is what the worker says, not evidence.** Make a review task
+  that needs the work, and give it to a different agent.
+- **A review that fails sends the work back.** Reopen the work with
+  `mu tasks reopen <id> --round`.
 - **A budget:** `mu budget work/checkout 20` stops new claims once the tasks
-  there have cost that much.
-- **A lead keeps a short session.** Its state lives in a thread on the board,
-  so it can start over when a piece of work closes.
+  there have cost $20.
+- **A lead keeps a short session.** It keeps its state in a thread on the
+  board, so it can start over when a piece of work closes.
 
 ## What it costs to start an agent
 
