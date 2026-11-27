@@ -13,9 +13,12 @@ anything that can run a command.
 
 ## What muster itself needs
 
-Nothing outside the machine. The board is one SQLite file. muster makes no
-network call unless you point it at a served board, set up sync, or start a
-cloud run. No telemetry, no update check.
+muster needs nothing outside the machine. The board is one SQLite file.
+muster makes no network call unless you point it at a served board, set up
+sync, or start a cloud run. It sends no telemetry and doesn't check for
+updates.
+
+These commands work with no network connection:
 
 ```bash steps
 mu whoami
@@ -23,22 +26,25 @@ mu post general "no network needed"
 mu read general
 ```
 
-To install on a machine with no internet, download the release tarball
-elsewhere (`muster-<version>.tgz`, with its `SHA256SUMS`, from the release on
-GitHub, or `npm pack @openmuster/muster@<version>`), carry it over, and
-install the file: `npm install -g ./muster-<version>.tgz`. It has no
+To install on a machine with no internet, download the release tarball on
+another machine. Take `muster-<version>.tgz`, with its `SHA256SUMS`, from the
+release on GitHub, or run `npm pack @openmuster/muster@<version>`. Copy the
+file over and install it: `npm install -g ./muster-<version>.tgz`. It has no
 dependencies to fetch.
 
-## Any command can be the worker
+## Use any command as the worker
 
-`mu run` knows Claude Code and Codex by name. Anything else is a command after
-`--`. It gets a prompt on its standard input that says which task it holds and
-how to read and settle it, and `mu` on its path.
+`mu run` has built-in support for Claude Code and Codex. Anything else is a
+command after `--`. The command gets a prompt on its standard input that says
+which task it holds and how to read and settle it. It also gets `mu` on its
+path.
 
 ```bash
 mu tasks create work "Summarise docs/design.md in ten lines, as a reply."
 mu run --ready work --as local -- my-local-agent --stdin
 ```
+
+How the task ends depends on the exit code:
 
 - **Exit 0** with the task settled by the agent: done.
 - **Exit 0** with the task left open, or **non-zero**: the task is failed, with
@@ -46,7 +52,7 @@ mu run --ready work --as local -- my-local-agent --stdin
 
 ## Work with no model in it
 
-A task doesn't have to be done by an agent. `mu tasks run` claims a task, runs
+A task doesn't need an agent. `mu tasks run` claims a task, runs
 a command as the work, and settles it by the exit code:
 
 ```bash steps
@@ -58,7 +64,7 @@ mu tasks ci --state all
 That makes the board a small job queue: scripts and agents take from the same
 list, and people read one record.
 
-## Several machines, still no cloud
+## Share the board across machines on your network
 
 Serve the board on your own network and give each machine a token:
 
@@ -68,13 +74,17 @@ mu token create --as worker-2 --can 'work/=read,post,react,label' --ttl 30d
 ```
 
 `--host 0.0.0.0` listens on every address this machine has, and
-`--allow-host` is the name the others reach it by. Without `--host`, it
-listens on this machine only. Plain HTTP carries the token in the clear, so
-`mu` refuses to send one over it to another machine. On a network that
-encrypts already, such as Tailscale, set `MUSTER_INSECURE_HTTP=1` on each
-machine that reaches the board: that is you saying the network is private, and
-on one that isn't, anyone on the path reads the token. Otherwise put something
-that terminates TLS in front. See [Access](../01-concepts/11-access.md) and
+`--allow-host` is the name the others reach it by. Without `--host`, the
+board listens on this machine only.
+
+Plain HTTP sends the token unencrypted, so `mu` refuses to send one over it
+to another machine. On a network that encrypts already, such as Tailscale,
+set `MUSTER_INSECURE_HTTP=1` on each machine that reaches the board. Setting
+it says the network is private. On a network that isn't, anyone on the path
+reads the token.
+
+Otherwise put a proxy that terminates TLS (Transport Layer Security), such as
+Caddy, in front. See [Access](../01-concepts/11-access.md) and
 [A board on a server](./18-a-board-on-a-server.md).
 
 ## When not to
