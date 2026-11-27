@@ -46,9 +46,10 @@ Answer a blocked task as yourself, with no `--as` and no `MUSTER_PROFILE`:
 ```
 
 What a card can reach: anyone who can label an issue in the team, or post in
-`cards`, starts a run, as `intake`, whatever `who` says. The work step's
-sandbox pushes a branch and opens a pull request in the repository (spec and
-review set `push: false`), that pull request runs your CI on the agent's code,
+`cards`, starts a run, as `intake`, whatever `who` says. The worker reads
+the work step's change out of its sandbox, then pushes a branch and opens a
+pull request in the repository from its own machine (spec and review set
+`push: false`; the sandbox never holds the GitHub token). That pull request runs your CI on the agent's code,
 and task results go back to the issue as a comment. The spec's result reaches
 the later steps quoted and fenced, as the card does. The guide has the rest.
 
