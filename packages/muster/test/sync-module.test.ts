@@ -362,6 +362,6 @@ describe('mu with a module that declares sync', () => {
     const { dir, path } = moduleFolder(example)
     const shown = await cli(dir, ['daemon', 'status', '--module', path, '--json'])
     expect(shown.stderr).toBe('')
-    expect((JSON.parse(shown.stdout) as { module: { sync: { key: string }[] } }).module.sync.map((each) => each.key)).toEqual(['gh', 'lin', 'chat'])
+    expect((JSON.parse(shown.stdout) as { module: { sync: { key: string }[] } }).module.sync.map((each) => each.key)).toEqual(['gh', 'lin', 'chat', 'nt'])
   })
 })
