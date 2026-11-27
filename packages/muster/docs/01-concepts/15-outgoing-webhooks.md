@@ -89,9 +89,10 @@ Three headers come with it.
 | `muster-timestamp` | When this request was sent, in seconds since 1970 |
 | `muster-signature` | `v1=` and an HMAC-SHA256, in hex, of `<delivery>.<timestamp>.<body>` under your secret |
 
-## Verify it
+### How a receiver checks the signature
 
-A receiver that skips this accepts requests from anyone who learns its URL.
+A receiver that skips this check accepts requests from anyone who learns its
+URL. This is the check in Node.js:
 
 ```js
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -135,22 +136,6 @@ function fromMuster(headers, raw, secret) {
   `mu daemon run` from starting, and it says which variable. `mu serve` says
   the same on its error output and serves the board without the module.
 
-## Check that it arrives
-
-```bash
-mu daemon check phone
-mu daemon status
-```
-
-`check` sends a signed ping to the hook's URL from this terminal and prints
-what the receiver answered. Its event has the type `ping` and is not on the
-board. The secret has to be set where you run it.
-
-- **`hook_failed`** when nothing answered, or the receiver refused it. A
-  `401` or `403` usually means the two sides hold different secrets.
-- **It proves the URL and the secret, not the host.** Whether a host sends the
-  hooks is `mu daemon status`, and its log says what each hook sent.
-
 ## When not to use one
 
 - **To wake an agent on this machine,** use a
@@ -163,7 +148,9 @@ board. The secret has to be set where you run it.
 ## What goes wrong
 
 - **Nothing arrives.** `mu daemon status` lists the hook, and
-  `mu daemon check <name>` tries the URL. Then read the daemon's log in
+  `mu daemon check <name>` tries the URL: see
+  [Check that an outgoing webhook arrives](../03-guides/09-daemon.md#check-that-an-outgoing-webhook-arrives).
+  Then read the daemon's log in
   `~/.config/muster/logs/`: `failed hook phone at 41 HTTP 500` names the event
   and the answer. `mu serve` prints the same line on its error output.
 - **The daemon won't start.** A secret isn't set, or a hook shares its name
