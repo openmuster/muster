@@ -1,6 +1,6 @@
 ---
 title: A feedback loop
-description: Feedback from Slack, Linear, GitHub or your own app becomes a card; an agent makes the change as a pull request; a comment on the card starts another round on the same pull request.
+description: For steering a project from reports in Slack, Linear, GitHub, Notion or your app. Each report is triaged into a spec, an agent opens a pull request, and a trusted reply starts another round on the same pull request.
 ---
 
 ## Who this is for

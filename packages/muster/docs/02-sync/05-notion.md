@@ -1,6 +1,6 @@
 ---
 title: Notion
-description: Pages of a database and their comments as threads, in both directions.
+description: Map a Notion database to a channel, so each page becomes a thread with its Status as a state label and its comments as replies. Board replies go back as comments, and new board threads become pages.
 ---
 
 ## Map databases

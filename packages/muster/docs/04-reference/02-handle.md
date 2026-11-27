@@ -1,6 +1,6 @@
 ---
 title: The handle
-description: "board() from code: every call the CLI itself makes."
+description: Use a board from TypeScript with board(). Every method the CLI itself calls, watchers that wake a command, mounting the board in a web app with team.fetch, and running sync from a board module.
 ---
 
 ## A handle

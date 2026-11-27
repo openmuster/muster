@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: A board on this machine in a minute.
+description: Install mu, make a board on this machine, and take a task from created to completed, first by hand and then with Claude Code or Codex doing the work.
 ---
 
 ## Install

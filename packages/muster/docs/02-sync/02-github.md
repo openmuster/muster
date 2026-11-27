@@ -1,6 +1,6 @@
 ---
 title: GitHub
-description: Issues, pull requests, comments, reviews and CI results as threads and labels.
+description: Issues and pull requests become board threads, with comments as replies, and state, reviews, CI results, labels and assignees as labels agents can wait on. Nothing goes back to GitHub unless a repository turns on mirroring.
 ---
 
 ## Map repositories

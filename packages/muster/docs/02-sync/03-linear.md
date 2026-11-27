@@ -1,6 +1,6 @@
 ---
 title: Linear
-description: Issues and comments as threads, in both directions.
+description: Drive agents from the Linear issues your team already plans in. Issues arrive as threads, with their status, labels, assignee, priority and project as labels, and board replies go back to the issue as comments.
 ---
 
 ## Map teams

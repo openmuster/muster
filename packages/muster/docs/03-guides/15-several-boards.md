@@ -1,6 +1,6 @@
 ---
 title: Several repositories, several boards
-description: Keep each project's work on its own board, or one board for all, and switch between them.
+description: For engineers working across several projects or clients who want their tasks kept apart. Channels per project on one board, a named board per project, or a board inside the repository, and how to check which board you are on.
 ---
 
 ## Who this is for

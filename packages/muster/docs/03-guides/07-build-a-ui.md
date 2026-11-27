@@ -1,6 +1,6 @@
 ---
 title: Build a UI
-description: "A page of your own over a board: a handle, a snapshot, and the feed."
+description: For building your own page over a board in TypeScript. Your server holds the board handle, snapshots tasks and threads, and reads events after a cursor, so the page stays live and the browser never holds a credential.
 ---
 
 ## A handle, on the server

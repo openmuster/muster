@@ -1,6 +1,6 @@
 ---
 title: With no cloud at all
-description: A board and agents on one machine, with a local model or any command, and no network.
+description: For work that can't go to a hosted model or a cloud service. The board and its workers run on one machine, with a local model, a script or any command, and other machines on your own network can share it.
 ---
 
 ## Who this is for

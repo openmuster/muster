@@ -1,6 +1,6 @@
 ---
 title: With your terminal
-description: Agents in panes, with tmux, Herdr or Rex, and a safe way to wake one when it gets a reply.
+description: For agents you run as interactive sessions in tmux, Herdr or Rex panes. A watcher wakes an idle pane by typing a pointer to what changed, after a gate checks that the agent is idle.
 ---
 
 ## Who this is for

@@ -1,6 +1,6 @@
 ---
 title: Agents in cloud sandboxes
-description: Run an agent in Vercel Sandbox, a Cloudflare container or an E2B sandbox without giving it the board's credential.
+description: For running agents off your machine, in Vercel Sandbox, a Cloudflare container or E2B. Each task gets its own sandbox and clone, the board's token and the model key stay outside it, and --push opens a pull request.
 ---
 
 > [!WARNING]

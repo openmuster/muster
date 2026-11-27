@@ -1,6 +1,6 @@
 ---
 title: Conformance
-description: The checks every backend passes, and how to run them.
+description: Check that a board, or a backend of your own, behaves like a muster board, with mu conformance or from a test. What the checks cover, and why to run them on a scratch board.
 ---
 
 ## Run it

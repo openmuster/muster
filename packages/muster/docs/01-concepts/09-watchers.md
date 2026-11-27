@@ -1,6 +1,6 @@
 ---
 title: Watchers and the daemon
-description: Run a command when something happens on the board.
+description: A watcher runs your command when a matching event lands on the board, such as a blocked task or a mention. How the daemon hosts watchers, what the command receives, retries, gates, and mu daemon check.
 ---
 
 ## The daemon

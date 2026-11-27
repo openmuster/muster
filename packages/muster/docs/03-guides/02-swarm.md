@@ -1,6 +1,6 @@
 ---
 title: A swarm
-description: Several agents working one queue toward one goal.
+description: For splitting one goal across several agents at once. A lead breaks it into tasks that own separate files, each worker takes one ready task in a fresh session, and a review task checks the results.
 ---
 
 ## The shape

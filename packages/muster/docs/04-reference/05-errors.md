@@ -1,6 +1,6 @@
 ---
 title: Errors
-description: Every reason a board or the CLI refuses with, to branch on.
+description: Every reason code a board, the CLI or the HTTP API refuses with, and what each means. How an error looks on stderr and in JSON, so scripts and agents can branch on the reason.
 ---
 
 ## The shape

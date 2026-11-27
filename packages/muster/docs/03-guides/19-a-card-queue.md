@@ -1,6 +1,6 @@
 ---
 title: A card queue
-description: Label a Linear issue for the agent, and get a spec, a pull request and a review back on it; you answer only what it asks.
+description: For handing a Linear issue, or a card you post, to an agent that writes a spec, opens a pull request and reviews it, once. Label it agent, each step runs in a cloud sandbox, and it asks you only for decisions.
 ---
 
 ## Who this is for

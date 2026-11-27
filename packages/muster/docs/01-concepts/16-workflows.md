@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: Register a plan of tasks and a crew of workers once, and let someone you name start it on a thread.
+description: A workflow is a plan of tasks and a crew of workers, registered once in workflows.json. Someone you allow starts it on a thread, and the daemon makes the tasks, starts the workers and posts a summary.
 ---
 
 ## What one is

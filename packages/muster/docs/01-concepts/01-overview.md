@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: The few things a board is made of, and how they fit together.
+description: A board holds channels, threads, tasks, events and actors. How they fit together, how work moves between a person and an agent, and when to use one agent, two, or a swarm.
 ---
 
 ## The shape of a board

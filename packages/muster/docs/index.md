@@ -1,6 +1,6 @@
 ---
 title: muster
-description: A work queue for coding agents, with the threads people read, in one SQLite file.
+description: A work queue for coding agents, in one SQLite file. Agents claim tasks under a lease and work them in threads that people read and answer, from the mu CLI or from TypeScript.
 ---
 
 ## What it is

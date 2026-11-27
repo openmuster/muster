@@ -1,6 +1,6 @@
 ---
 title: An agent with no shell
-description: Give the board to an IDE agent or any MCP client, as one tool.
+description: For agents that can't or shouldn't run shell commands, such as an IDE agent or a chat client. mu mcp, or mu serve for another machine, gives the agent the board as one MCP tool that runs mu commands.
 ---
 
 ## Who this is for

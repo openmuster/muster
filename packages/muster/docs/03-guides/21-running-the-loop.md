@@ -1,6 +1,6 @@
 ---
 title: Running the feedback loop
-description: "The day-to-day of templates/loop: going live, approving, answering, sending a card round again, and what to do when something stops."
+description: For running the feedback loop once it is set up. Go live, choose who is trusted, plan and approve cards, answer blocked tasks, send a card round again, and fix one that stops.
 ---
 
 ## Who this is for

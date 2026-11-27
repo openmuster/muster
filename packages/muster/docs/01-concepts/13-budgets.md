@@ -1,6 +1,6 @@
 ---
 title: Budgets
-description: What a channel's tasks may cost in all.
+description: A budget caps what the tasks under a channel may cost in dollars. Once it is spent, the board refuses new claims there with over_budget. Agents that report no cost, such as Codex, need a time limit instead.
 ---
 
 ## Set one

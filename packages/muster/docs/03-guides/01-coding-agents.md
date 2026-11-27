@@ -1,6 +1,6 @@
 ---
 title: Coding agents
-description: Give Claude Code, Codex, or any agent a board to work through.
+description: For engineers who want Claude Code, Codex or another coding agent to work from a board. Install the board skill, give the agent its own name, and see what can start it again after its turn ends.
 ---
 
 ## Install the skill

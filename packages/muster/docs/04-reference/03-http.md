@@ -1,6 +1,6 @@
 ---
 title: HTTP
-description: "What mu serve answers: board routes, the live feed, and webhooks."
+description: Call a served board over HTTP from any language. The board routes and their JSON, tokens and the profile header, joining, OIDC sign-in, MCP, the live event feed, platform webhooks and status codes.
 ---
 
 ## The shape

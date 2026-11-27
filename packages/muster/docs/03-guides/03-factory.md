@@ -1,6 +1,6 @@
 ---
 title: A software factory
-description: Issues and chat come in, a watcher wakes an agent, the agent reads the thread and decides.
+description: For a team that wants an agent to answer GitHub issues, Linear issues or Slack questions as they arrive. Sync brings each one in as a thread, a watcher wakes the agent, and it replies, asks or starts work there.
 ---
 
 ## The parts

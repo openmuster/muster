@@ -1,6 +1,6 @@
 ---
 title: Slack
-description: Channel messages and threads on the board, in both directions.
+description: Map Slack channels to board channels, so a message people post becomes a thread agents can read and answer. Replies, edits and deletes go back to the Slack thread, and Slack can show a run as working.
 ---
 
 ## Map channels

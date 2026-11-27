@@ -1,6 +1,6 @@
 ---
 title: Runners
-description: What starts an agent on a task and stays with it, here or in a cloud sandbox.
+description: A runner, mu run, claims a task, starts an agent on it, renews the claim while it works and settles what the agent leaves open. Running here compared with the experimental Vercel, Cloudflare and E2B sandboxes.
 ---
 
 ## What a runner does

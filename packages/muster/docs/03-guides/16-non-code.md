@@ -1,6 +1,6 @@
 ---
 title: Work that isn't code
-description: Research, writing and review on a board, where done is harder to check.
+description: For research, writing and fact-checking done by agents, where no test says it is done. Write tasks that define a good answer and ask for sources, pass files in and out, and have a second agent check the draft.
 ---
 
 ## Who this is for

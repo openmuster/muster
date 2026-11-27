@@ -1,6 +1,6 @@
 ---
 title: Events and waiting
-description: Cursors, filters, search, wait and tail.
+description: Every change on a board is an event in one log. Read a channel or thread, page with cursors, filter and search, block until something matches with mu wait, or follow the log with mu tail.
 ---
 
 ## A channel, or a thread

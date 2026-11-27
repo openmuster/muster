@@ -1,6 +1,6 @@
 ---
 title: The board module and hosts
-description: One TypeScript file says what a board does on its own; a host is the process that runs it.
+description: A board module is one TypeScript file that declares a board's watchers, sync and outgoing webhooks. A host runs it (mu daemon run, mu serve or your own process), and a lease keeps each role on one host at a time.
 ---
 
 ## The module

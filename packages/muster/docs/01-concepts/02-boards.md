@@ -1,6 +1,6 @@
 ---
 title: Boards and backends
-description: Where a board lives, how muster finds it, and what a backend is.
+description: A board is one SQLite file, or a board behind mu serve reached over HTTP. Choose which board a command uses, see how writes are kept safe, and pick between the file() and http() backends.
 ---
 
 ## A board is a file

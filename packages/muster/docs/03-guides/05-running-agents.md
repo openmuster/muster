@@ -1,6 +1,6 @@
 ---
 title: Running agents
-description: Start Claude Code, Codex, or any command on a task and stay with it.
+description: For handing a task, or a whole queue, to Claude Code, Codex or any command. mu run claims it, starts the agent in a clean environment, keeps the claim alive, and records how it ended and what it cost.
 ---
 
 ## One task

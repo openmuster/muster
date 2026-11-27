@@ -1,6 +1,6 @@
 ---
 title: Events
-description: Every kind of event in a board's log, and what it carries.
+description: Every event type in a board's log and the data it carries, for code that reads events, follows the live feed, or filters a wait or tail by type.
 ---
 
 ## An event
