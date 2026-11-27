@@ -59,10 +59,20 @@ describe('the home page demo', () => {
 
   it('the Linear card moves only when a person moves it, through the columns a team uses', () => {
     const linear = SYNC_CHAPTERS[0]!
-    const columns = [0, 300, 5300, 8100].map((t) => frameAt(linear, t).app!.column)
+    const columns = [0, 2400, 5300, 8100].map((t) => frameAt(linear, t).app!.column)
     expect(columns).toEqual(['Backlog', 'Todo', 'In Progress', 'Done'])
-    expect(frameAt(linear, 300).app!.tags).toEqual(['agent'])
+    expect(frameAt(linear, 2400).app!.tags).toEqual(['agent'])
     const github = SYNC_CHAPTERS[1]!
-    expect([0, 6000, 7400].map((t) => frameAt(github, t).app!.checks)).toEqual(['failing', 'pending', 'passing'])
+    expect([0, 1900, 6000, 7400].map((t) => frameAt(github, t).app!.checks)).toEqual(['pending', 'failing', 'pending', 'passing'])
+  })
+
+  it('mu wait is typed before the change it reports happens, as the CLI only reports what comes after it starts', () => {
+    for (const chapter of SYNC_CHAPTERS) {
+      const wait = chapter.cues.find((cue) => 'type' in cue && cue.type.startsWith('mu wait'))!
+      const reported = chapter.cues.find((cue) => 'out' in cue && cue.at > wait.at)!
+      const before = frameAt(chapter, reported.at - 1).app!
+      const after = frameAt(chapter, reported.at).app!
+      expect(JSON.stringify(after)).not.toBe(JSON.stringify(before))
+    }
   })
 })
