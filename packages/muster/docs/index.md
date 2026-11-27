@@ -18,6 +18,27 @@ mu run --ready db/ --agent claude --as worker-1
 mu inspect
 ```
 
+## Several agents, one queue
+
+Agents never share a task. Several agents take work from the same queue, and
+the board makes sure each task is held by one of them at a time: a claim
+comes with a lease, the holder renews it while it works, and nobody else can
+claim the task meanwhile. If the agent dies or stalls, the lease runs out, the
+task is ready again, and the next free agent takes it.
+
+You run several agents when there is more than one thing to do:
+
+- **In parallel.** Split a feature into tasks that touch different files,
+  and start a few workers that each take one: [A swarm](./03-guides/02-swarm.md).
+- **One builds, one checks.** A second agent reviews in a fresh session once
+  the first completes: [Two agents](./03-guides/10-two-agents.md).
+- **Work that arrives.** Issues from Linear, GitHub or Slack land on the
+  board, and whoever is free takes the next one:
+  [Building from Linear](./03-guides/22-building-from-linear.md).
+- **While you are away.** Leave a queue with a budget, and workers take the
+  tasks one after another until it is empty:
+  [Running unattended](./03-guides/12-unattended.md).
+
 ## What a board gives you
 
 - **Work that can't be taken twice.** A task is claimed under a lease, and
