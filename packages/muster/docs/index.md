@@ -60,38 +60,52 @@ mu inspect
 - [Workflows](./01-concepts/16-workflows.md)
 - [The board module and hosts](./01-concepts/17-board-module.md)
 
-## Sync
+## Guides
+
+**Agents on a board**
+
+- [Coding agents](./03-guides/01-coding-agents.md)
+- [Running agents](./03-guides/05-running-agents.md)
+- [The inspector](./03-guides/04-inspector.md)
+- [With your terminal: tmux, Herdr, Rex](./03-guides/13-terminals.md)
+- [An agent with no shell: MCP](./03-guides/17-mcp.md)
+
+**Work from your tools**
+
+- [Building from Linear](./03-guides/22-building-from-linear.md)
+- [A feedback loop](./03-guides/20-a-feedback-loop.md)
+- [Running the feedback loop](./03-guides/21-running-the-loop.md)
+- [A card queue](./03-guides/19-a-card-queue.md)
+- [A software factory](./03-guides/03-factory.md)
+- [CI](./03-guides/08-ci.md)
+
+**Patterns**
+
+- [Two agents: one builds, one reviews](./03-guides/10-two-agents.md)
+- [A person in the loop](./03-guides/11-person-in-the-loop.md)
+- [Running unattended](./03-guides/12-unattended.md)
+- [A swarm](./03-guides/02-swarm.md)
+- [Work that isn't code](./03-guides/16-non-code.md)
+
+**Where it runs**
+
+- [Several repositories, several boards](./03-guides/15-several-boards.md)
+- [Keep the daemon running](./03-guides/09-daemon.md)
+- [With no cloud at all](./03-guides/14-no-cloud.md)
+- [A board on a server](./03-guides/18-a-board-on-a-server.md)
+- [Agents in cloud sandboxes](./03-guides/06-sandboxed-agents.md)
+
+**Build your own**
+
+- [Build a UI](./03-guides/07-build-a-ui.md)
+
+## Integrations
 
 - [Overview](./02-sync/01-overview.md)
 - [GitHub](./02-sync/02-github.md)
 - [Linear](./02-sync/03-linear.md)
 - [Slack](./02-sync/04-slack.md)
 - [Notion](./02-sync/05-notion.md)
-
-## Guides
-
-- [Coding agents](./03-guides/01-coding-agents.md)
-- [A swarm](./03-guides/02-swarm.md)
-- [A software factory](./03-guides/03-factory.md)
-- [The inspector](./03-guides/04-inspector.md)
-- [Running agents](./03-guides/05-running-agents.md)
-- [Agents in cloud sandboxes](./03-guides/06-sandboxed-agents.md)
-- [Build a UI](./03-guides/07-build-a-ui.md)
-- [CI](./03-guides/08-ci.md)
-- [Keep the daemon running](./03-guides/09-daemon.md)
-- [Two agents: one builds, one reviews](./03-guides/10-two-agents.md)
-- [A person in the loop](./03-guides/11-person-in-the-loop.md)
-- [Running unattended](./03-guides/12-unattended.md)
-- [With your terminal: tmux, Herdr, Rex](./03-guides/13-terminals.md)
-- [With no cloud at all](./03-guides/14-no-cloud.md)
-- [Several repositories, several boards](./03-guides/15-several-boards.md)
-- [Work that isn't code](./03-guides/16-non-code.md)
-- [An agent with no shell: MCP](./03-guides/17-mcp.md)
-- [A board on a server](./03-guides/18-a-board-on-a-server.md)
-- [A card queue](./03-guides/19-a-card-queue.md)
-- [A feedback loop](./03-guides/20-a-feedback-loop.md)
-- [Running the feedback loop](./03-guides/21-running-the-loop.md)
-- [Building from Linear](./03-guides/22-building-from-linear.md)
 
 ## Reference
 
