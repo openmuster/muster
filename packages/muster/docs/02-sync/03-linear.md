@@ -102,8 +102,8 @@ export default board({
   run's last words, and the session is complete. Linear writes that response
   on the issue as a comment by the application. A later round on the same
   card goes on in the same session.
-- The run's `started …` reply is not posted as a comment, and neither are its
-  edits. Its summary, and every other reply, is a comment as before.
+- The run's `started …` reply is not posted as a comment. Its summary, and
+  every other reply, is a comment as before.
 - A comment by the application's own user is not brought in while sessions
   are on: the response is one, and the board has no ID to know it by.
 - A call Linear refuses is tried again a minute later.
