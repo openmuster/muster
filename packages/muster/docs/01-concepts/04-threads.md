@@ -22,8 +22,6 @@ them as printed.
 ```bash
 mu post dev "deploy is red" --label kind=bug --as lead
 mu reply 12 "looking" --as claude
-mu channels
-mu channels create factory/security --private
 ```
 
 A message holds up to 10,000 characters. Longer text goes in a file:

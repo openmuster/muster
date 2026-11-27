@@ -3,6 +3,10 @@ title: Events and waiting
 description: Every change on a board is an event in one log. Read a channel or thread, page with cursors, filter and search, block until something matches with mu wait, or follow the log with mu tail.
 ---
 
+Every change on a board is an event in one log. You read it a channel or a
+thread at a time, wait for the next event that matches, or follow it as it
+grows.
+
 ## A channel, or a thread
 
 ```bash
@@ -59,13 +63,17 @@ and exits 0.
 - A timeout exits 1 with the reason `timeout`, and the cursor it reached. That
   isn't an answer.
 - Filters: a channel or subtree, `--re <root>`, `--label`, `--by <who>`,
-  `--mentions <who>`, `--for <profile>`, `--text`, `--type`, `--kind`. A type ending in `.` takes every
-  event under it: `task.`.
+  `--mentions <who>`, `--for <profile>`, `--text`, `--type`, `--kind`,
+  `--root`. A type ending in `.` takes every event under it: `task.`.
+- `--root` leaves out events about replies: a reply posted, edited, deleted,
+  labelled or reacted to. Events about first messages and tasks still match.
 - `--kind` is about blocks. `--kind needs_input` keeps only `task.blocked`
   events of that kind; `--kind '!backlog'` drops blocks of that kind and keeps
   everything else.
 - An event matches a label filter if its thread matched before it or after it,
-  so a task leaving a state is news for a filter on that state.
+  so a task leaving a state is news for a filter on that state. A label that
+  leaves the filter wakes a wait on it too: `mu wait --label kind=bug` returns
+  when a thread's `kind=bug` is changed or removed.
 
 ## tail
 

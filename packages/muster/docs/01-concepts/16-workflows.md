@@ -20,8 +20,8 @@ sequenceDiagram
     D->>B: reply on #812: the summary
 ```
 
-A workflow, a plan you run more than once: a list of steps that become tasks,
-and a crew of workers that take them. You write it once in a file of yours.
+A workflow is a plan you run more than once: a list of steps that become
+tasks, and a crew of workers that take them. You write it once in a file of yours.
 Someone you allow asks for it on a thread, and the daemon does the rest.
 
 Workflows are yours, like [watchers](./09-watchers.md) and
