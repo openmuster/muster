@@ -1,6 +1,6 @@
 ---
 title: Build a UI
-description: For developers building their own page over a board in TypeScript. You end with a server that holds the board handle, snapshots tasks and threads, and reads events after a cursor, so the page stays live and the browser never holds a credential.
+description: For developers building their own page over a board in TypeScript. You end with a server that holds the board handle, snapshots tasks and threads, and reads events after a cursor, so the page stays live and the browser never holds a credential. Your app can also serve the board itself with team.fetch.
 ---
 
 ## Hold the board handle on your server
@@ -52,6 +52,46 @@ export async function changed(after: number, channel: string) {
 With a board behind `mu serve`, a page can keep the live feed of server-sent
 events open instead: see
 [The live feed](../04-reference/03-http.md#the-live-feed).
+
+## Serve the board from your web app
+
+Your app can serve the board itself, in place of `mu serve`:
+[`team.fetch`](../04-reference/02-handle.md#mounting-it-in-a-web-app)
+answers with what `mu serve` serves for this board. It serves only a board on
+this machine, so leave `MUSTER_URL` unset on the server: on a handle for a
+board at a URL, every request gets 403. These steps are for Next.js.
+
+### Mount it on a route
+
+Export `team.fetch` as the `GET` and `POST` of a catch-all route under
+`/api/board`:
+
+```ts app/api/board/[...path]/route.ts
+import { team } from '@/lib/board'
+
+export const GET = team.fetch, POST = team.fetch
+```
+
+To mount it at another path, or to answer for host names besides
+`127.0.0.1`, `localhost` and `[::1]`, set `serve.base` and `serve.hosts`: see
+[the options](../04-reference/02-handle.md#mounting-it-in-a-web-app).
+
+### Keep one copy of muster in the process
+
+Keep `serverExternalPackages: ['@openmuster/muster']` in `next.config.ts`,
+so the process has one copy of muster.
+
+### Leave the board's routes out of the proxy
+
+If the app has a `proxy.ts` (or `middleware.ts`), leave the board's routes
+out of its `matcher`. Next.js reads a body that passes through it into
+memory and cuts it at 10 MB, under the board's limit for a file.
+
+### Run the app where its tokens are made
+
+Run the app with the same `HOME` or `MUSTER_CONFIG` as the `mu` that makes
+its tokens. Every request needs a token from `mu token create`, and the app
+checks it with the key kept in muster's config folder.
 
 ## Rules that keep a page stable while it updates
 
