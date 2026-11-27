@@ -106,9 +106,9 @@ Each card goes through these steps:
    the card's text as content, not instructions. The work and review tasks
    quote the spec's result the same way, and the review task also quotes the
    work's summary. The worker fills each quote in when it takes the task. One
-   worker takes the tasks in turn, each in its own Vercel sandbox. Only the
-   work task's change is pushed to `mu/task-<id>` and opened as a pull
-   request.
+   worker takes the tasks in turn, each in its own Vercel sandbox. The worker
+   pushes only the work task's change, to `mu/task-<id>`, and opens a pull
+   request for it.
 4. The card gets two replies, which go to Linear as comments: `started card:
    3 tasks in cards/card-<n>`, and once the tasks have ended, a summary with
    each task's result and the pull request. On the board the first reply also
@@ -191,8 +191,10 @@ Know what a run reaches before you map a team:
   post or label a thread in `cards`, starts a run. `intake`, the watcher's
   profile, asks for the run, so the workflow's `who` doesn't check the card's
   author.
-- **The repository:** the work step's sandbox pushes its change to
-  `mu/task-<id>` in the workflow's repository, with a pull request. The spec
+- **The repository:** the worker reads the work step's change out of its
+  sandbox, then pushes it to `mu/task-<id>` in the workflow's repository and
+  opens a pull request, from its own machine. The sandbox never holds the
+  GitHub token. The spec
   and review steps set `push: false`, so whatever their agents change is
   never pushed. The worker reads that from what `mu serve` made each task
   with, never from its labels now, so an agent that relabels a task changes
