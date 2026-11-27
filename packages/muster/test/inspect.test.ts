@@ -2,7 +2,8 @@ import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { inspect } from '../src/inspect/server.ts'
 import { initial, openCount, reduce, tasksFor } from '../src/inspect/app/store.ts'
-import { file } from '../src/index.ts'
+import { notices, show } from '../src/inspect/app/notify.ts'
+import { board as handle, file } from '../src/index.ts'
 import type { TaskListing } from '../src/core/tasks.ts'
 import type { Message } from '../src/model.ts'
 
@@ -33,6 +34,14 @@ describe('the inspector', () => {
     }
     expect(serving.link).toBe(`${serving.url}/#k=${serving.token}`)
     expect(serving.token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    await serving.close()
+  })
+
+  it('says who the page belongs to, as a mention of them reads, only to the page', async () => {
+    const { serving, board } = await page()
+    expect(await (await board('whoami')).json()).toEqual({ ok: 'local:user:ada' })
+    expect((await board('whoami', { token: 'wrong' })).status).toBe(401)
+    expect((await board('whoami', { origin: 'http://evil.example' })).status).toBe(403)
     await serving.close()
   })
 
@@ -126,5 +135,60 @@ describe('the page store', () => {
     const again = reduce(first, { type: 'events', events: [event(2), event(3)], cursor: 3 })
     expect(again.activity.map((item) => item.seq)).toEqual([3, 2, 1])
     expect(again.cursor).toBe(3)
+  })
+})
+
+describe("the inspector's notifications", () => {
+  /** A board with you on it, and what is new on it read for you, as the page reads it. */
+  async function mentions(write: (team: ReturnType<typeof handle>) => Promise<unknown>) {
+    const team = handle({ backend: file({ memory: true, principal: 'local:user:ada' }) })
+    await team.post({ channel: 'general', text: 'here' })
+    const after = await team.head()
+    await write(team)
+    return (await team.events({ after, filter: { for: 'local:user:ada', types: ['message.posted'] } })).events
+  }
+
+  it('one for each new message that mentions you, as you read it, and none for your own or another\'s', async () => {
+    let asked = 0
+    const events = await mentions(async (team) => {
+      await team.post({ channel: 'general', text: '@claude yours' })
+      await team.as('lead').post({ channel: 'general', text: 'no one in particular' })
+      await team.as('lead').post({ channel: 'work/api', text: '@lead a note to self' })
+      asked = (await team.as('claude').post({ channel: 'work/api', text: `@ada look at this ${'x'.repeat(300)}` })).id
+    })
+    const shown = notices(events, new Set())
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toMatchObject({ title: 'claude mentioned you in #work/api', tag: `muster-${asked}`, href: `/c/work%2Fapi?thread=${asked}` })
+    expect(shown[0]!.body.startsWith('@ada look at this x')).toBe(true)
+    expect(shown[0]!.body.length).toBe(160)
+    expect(shown[0]!.body.endsWith('…')).toBe(true)
+  })
+
+  it('none for what this tab wrote, whichever profile it wrote as', async () => {
+    let mine = 0
+    const events = await mentions(async (team) => {
+      mine = (await team.as('reviewer').post({ channel: 'general', text: '@ada from the page' })).id
+    })
+    expect(notices(events, new Set()).length).toBe(1)
+    expect(notices(events, new Set([mine]))).toEqual([])
+  })
+
+  it('a browser that refuses one still shows the rest, and a click opens the thread', async () => {
+    const opened: string[] = []
+    const made: { title: string; onclick: (() => void) | null; close(): void }[] = []
+    const list = [
+      { title: 'one', body: '', tag: 'muster-1', href: '/c/a?thread=1' },
+      { title: 'two', body: '', tag: 'muster-2', href: '/c/a?thread=2' },
+    ]
+    const shown = show(list, (href) => opened.push(href), (title) => {
+      if (title === 'one') throw new TypeError("Failed to construct 'Notification': Illegal constructor.")
+      const note = { title, onclick: null as (() => void) | null, close() {} }
+      made.push(note)
+      return note as unknown as Notification
+    })
+    expect(shown).toBe(1)
+    expect(made.map((note) => note.title)).toEqual(['two'])
+    made[0]!.onclick!()
+    expect(opened).toEqual(['/c/a?thread=2'])
   })
 })

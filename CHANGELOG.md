@@ -12,12 +12,36 @@ versions are affected.
   own, for the version tagged latest, and the next command says so in one
   line on stderr. Never with `--json`, in CI, or with no terminal. It is off
   unless you set it: muster still makes no request of its own otherwise.
+- The inspector can notify you when a new message mentions you. Press
+  "notify me of mentions" in its sidebar and allow it; while the page is
+  open, in a background tab too, each mention of you, as `mu inbox` counts
+  one, shows a notification, and a click opens its thread. What you write
+  from the page never notifies you.
 
 ### Changed
 
 - The Cloudflare runner's image installs muster from npm, by exact version,
   instead of from the GitHub release's tarball by checksum. Its pinned
   version now moves with each release.
+
+### Fixed
+
+- `mu tasks complete <id> --file report.md` no longer completes the task with
+  no result. Each `mu tasks` verb took every flag any verb takes, and
+  dropped the ones it doesn't read; now a verb refuses a flag that isn't its
+  own, and says which it takes. A long report goes in a reply:
+  `mu reply <thread> --file <path>`.
+- Against a board at a URL, `mu wait`, `mu tail`, `mu inbox --wait` and
+  `mu tasks claim --ready --wait` ride out a short outage once they have
+  reached the board: a gateway's 502 or 504, or a dropped connection, is
+  tried again after a pause that doubles, up to 30 seconds. Before, the
+  first one ended the wait. An outage that outlasts `--timeout` or `--wait`
+  ends it with what went wrong (`network_error` or `bad_answer`), not a
+  timeout; a board out of reach from the start, or a refusal such as a bad
+  token, still ends it at once.
+- In the inspector, a long label on a message is cut short on one line, with
+  the whole label in its tooltip, so a thread no longer scrolls sideways on
+  a phone. A task's labels show whole in their tooltip too.
 
 ## 0.3.1-alpha.3
 

@@ -9,7 +9,7 @@ import { Failure, misuse } from '../failure.ts'
 import { ROOT, board, type Board } from '../handle.ts'
 import type { Host } from '../watch/host.ts'
 import { processStart } from '../process.ts'
-import { cursor, duration, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
+import { cursor, duration, GLOBAL, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
 import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { FAILING_PAUSE, clashWithWorkflows, daemonWorkflows, runDaemon } from '../daemon/daemon.ts'
@@ -222,6 +222,35 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: str
 
 const stopCode = (signal: AbortSignal) => (signal.reason === 'SIGTERM' ? 143 : 130)
 
+/**
+ * Rides out a board that is out of reach for now, for a command that waits: a gateway's 502 or a dropped
+ * connection isn't an answer, so the poll goes again after a pause that doubles, as the daemon's does.
+ * Only once the command has reached the board (`ok`): a board out of reach from the start is said at
+ * once, as any command says it. `failed` rethrows what isn't an outage, and an outage whose next try
+ * would come after the deadline, so the command says what went wrong rather than that nothing came.
+ * With no deadline it waits for as long as the command runs. A stop ends the pause at once, and
+ * `failed` returns: the caller checks the stop and exits as stopped.
+ */
+function outages(run: Run, deadline?: number) {
+  let failing = 0
+  let reached = false
+  return {
+    ok() {
+      reached = true
+      failing = 0
+    },
+    async failed(error: unknown): Promise<void> {
+      if (run.io.stop.aborted) return
+      if (!reached || !(error instanceof Failure) || !UNREACHABLE.has(error.reason)) throw error
+      const pause = Math.min(FAILING_PAUSE, 500 * 2 ** failing++)
+      if (deadline !== undefined && Date.now() + pause >= deadline) throw error
+      // Said on the first failure and then less and less often, as the daemon does; a --json run's stderr is kept for its one document.
+      if (!run.json && (failing & (failing - 1)) === 0) run.io.err(`error     ${error.message} Trying again.${failing > 1 ? `  (${failing} tries in a row)` : ''}`)
+      await sleep(pause, run.io.stop)
+    },
+  }
+}
+
 /** An argument as a shell takes it, quoted only when it has to be. */
 const shell = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`)
 
@@ -401,9 +430,22 @@ const commands: Record<string, Command> = {
       const deadline = wait === undefined ? 0 : Date.now() + duration(wait, 'wait') * 1000
       const stored = await run.team.cursorGet('inbox')
       let after = stored ?? 0
+      // Only a wait rides out an outage: a plain inbox answers now or says why it can't.
+      const outage = wait === undefined ? null : outages(run, deadline)
+      // `self` above reached the board.
+      outage?.ok()
       let pause = 100
       for (;;) {
-        const page = await run.team.events({ after, filter: { for: mine }, limit: limit === undefined ? 50 : Number(limit) })
+        let page: Awaited<ReturnType<Board['events']>>
+        try {
+          page = await run.team.events({ after, filter: { for: mine }, limit: limit === undefined ? 50 : Number(limit) })
+          outage?.ok()
+        } catch (error) {
+          if (outage === null) throw error
+          await outage.failed(error)
+          if (run.io.stop.aborted) return stopCode(run.io.stop)
+          continue
+        }
         after = page.cursor
         if (page.events.length > 0 || Date.now() >= deadline || run.io.stop.aborted) {
           if (!peek) await run.team.cursorSet('inbox', page.cursor)
@@ -663,12 +705,22 @@ const commands: Record<string, Command> = {
     async run(run, parsed) {
       const filter = filterOf(parsed, 0)
       const given = str(parsed.flags, 'after')
-      let after = given !== undefined ? cursor(given, 'after') : await run.team.head()
       const timeout = duration(str(parsed.flags, 'timeout') ?? '30m', 'timeout') * 1000
       const deadline = Date.now() + timeout
+      const outage = outages(run, deadline)
+      let after = given !== undefined ? cursor(given, 'after') : await run.team.head()
+      if (given === undefined) outage.ok()
       let pause = 100
       for (;;) {
-        const page = await run.team.events({ after, filter, limit: 1 })
+        let page: Awaited<ReturnType<Board['events']>>
+        try {
+          page = await run.team.events({ after, filter, limit: 1 })
+          outage.ok()
+        } catch (error) {
+          await outage.failed(error)
+          if (run.io.stop.aborted) return stopCode(run.io.stop)
+          continue
+        }
         after = page.cursor
         const event = page.events[0]
         if (event) {
@@ -698,9 +750,19 @@ const commands: Record<string, Command> = {
         const all = await run.team.events({ after: 0, filter, limit: 1000 })
         for (const event of all.events.slice(-count)) run.io.out(run.json ? JSON.stringify(event) : eventLine(event, run.now()))
       }
+      // Once following, an outage is waited out for as long as the tail runs.
+      const outage = outages(run)
+      if (given === undefined) outage.ok()
       let pause = 100
       while (!run.io.stop.aborted) {
-        const page = await run.team.events({ after, filter })
+        let page: Awaited<ReturnType<Board['events']>>
+        try {
+          page = await run.team.events({ after, filter })
+          outage.ok()
+        } catch (error) {
+          await outage.failed(error)
+          continue
+        }
         after = page.cursor
         for (const event of page.events) run.io.out(run.json ? JSON.stringify(event) : eventLine(event, run.now()))
         pause = page.events.length ? 100 : Math.min(pause * 2, 1000)
@@ -1232,6 +1294,39 @@ const commands: Record<string, Command> = {
 
 const TASK_VERBS = ['create', 'claim', 'renew', 'release', 'complete', 'fail', 'block', 'unblock', 'reopen', 'cancel', 'assign', 'needs', 'run'] as const
 
+/**
+ * The flags each verb takes. `tasks` parses the flags of all of them, so without this a flag only another
+ * verb reads was taken and dropped: `tasks complete 5 --file report.md` completed with no result.
+ */
+const CLAIM_FLAGS = ['ready', 'label', 'from', 'by', 'lease', 'wait']
+const TASK_FLAGS: Record<(typeof TASK_VERBS)[number] | 'list', readonly string[]> = {
+  list: ['state', 'limit', 'label', 'latest'],
+  create: ['label', 'needs', 'for', 'claim', 'lease', 'hold', 'reason', 'file', 'idempotency-key', 'no-sync'],
+  claim: CLAIM_FLAGS,
+  renew: ['lease'],
+  release: [],
+  complete: ['result'],
+  fail: ['reason', 'no-count'],
+  block: ['reason', 'kind'],
+  unblock: [],
+  reopen: ['round'],
+  cancel: [],
+  assign: ['for', 'pool'],
+  needs: ['none'],
+  run: [...CLAIM_FLAGS, 'result'],
+}
+
+function refuseOtherVerbsFlags(verb: keyof typeof TASK_FLAGS, flags: Flags) {
+  const takes = TASK_FLAGS[verb]
+  const global = new Set<string>([...GLOBAL.value, ...GLOBAL.bool])
+  const other = Object.keys(flags).find((name) => !global.has(name) && !takes.includes(name))
+  if (other === undefined) return
+  const command = verb === 'list' ? 'mu tasks' : `mu tasks ${verb}`
+  const what = takes.length ? `${command} takes ${takes.map((name) => `--${name}`).join(', ')}.` : `${command} takes no flags of its own.`
+  const report = (verb === 'complete' || verb === 'fail' || verb === 'block') && other === 'file' ? ' A long report goes in a reply: mu reply <thread> --file <path>.' : ''
+  throw misuse('unknown_flag', `--${other} isn't a flag of ${command}.`, what + report)
+}
+
 const lease = (flags: Flags) => {
   const value = str(flags, 'lease')
   return value === undefined ? {} : { lease: duration(value, 'lease') }
@@ -1279,6 +1374,11 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
   }
   const wait = str(parsed.flags, 'wait')
   const deadline = wait === undefined ? 0 : Date.now() + duration(wait, 'wait') * 1000
+  // Only a --ready --wait rides out an outage; `tasks` asked who the caller is, so the board was reached.
+  // A claim whose answer was lost may have landed: the next try takes another ready task, or waits on,
+  // and the lost one is held until its lease runs out, as when the claim was run again by hand.
+  const outage = ready !== undefined && wait !== undefined ? outages(run, deadline) : null
+  outage?.ok()
   let pause = 100
   for (;;) {
     try {
@@ -1286,6 +1386,11 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
       keep(run, me, claimed.task.id, { token: claimed.token, until: claimed.task.claim!.until })
       return claimed
     } catch (error) {
+      if (outage !== null && error instanceof Failure && UNREACHABLE.has(error.reason)) {
+        await outage.failed(error)
+        if (run.io.stop.aborted) throw error
+        continue
+      }
       if (!(error instanceof Failure) || error.reason !== 'nothing_ready' || ready === undefined || wait === undefined) throw error
       if (run.io.stop.aborted) throw error
       if (Date.now() >= deadline) throw new Failure('timeout', `Nothing was ready in ${ready} within ${wait}.`, { hint: "That isn't a failure of the work: there is nothing to take." })
@@ -1298,6 +1403,7 @@ async function claimWith(run: Run, parsed: Parsed, target: string | undefined, m
 async function tasks(run: Run, parsed: Parsed): Promise<number | void> {
   const verb = parsed.positionals[0]
   const now = () => run.now()
+  refuseOtherVerbsFlags(verb !== undefined && (TASK_VERBS as readonly string[]).includes(verb) ? (verb as (typeof TASK_VERBS)[number]) : 'list', parsed.flags)
   if (verb === undefined || !(TASK_VERBS as readonly string[]).includes(verb)) {
     const state = str(parsed.flags, 'state') as TaskState | 'open' | 'all' | undefined
     const labels = list(parsed.flags, 'label')

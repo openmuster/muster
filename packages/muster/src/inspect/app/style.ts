@@ -62,6 +62,9 @@ nav + nav { flex: none; overflow: visible; border-top: var(--hairline) solid var
 nav a { display: flex; align-items: center; gap: ${s(2)}; padding: ${s(1.5)} ${s(2)}; border-radius: var(--radius); white-space: nowrap; transition: background-color var(--duration-fast); }
 nav a svg { flex: none; color: var(--dim); }
 nav a.on { background: var(--hover); font-weight: var(--weight-strong); }
+/* Asking to notify sits in the list as one more row, not as the page's one loud button. */
+nav button.ask { display: flex; align-items: center; gap: ${s(2)}; width: 100%; margin: 0; padding: ${s(1.5)} ${s(2)}; border-radius: var(--radius); background: none; color: var(--dim); text-align: left; transition: background-color var(--duration-fast); }
+nav button.ask svg { flex: none; }
 nav a.on svg { color: var(--fg); }
 nav a i { margin-left: auto; padding: 0 ${s(1.5)}; border: var(--hairline) solid var(--line); border-radius: var(--radius-full); font-style: normal; font-weight: normal; font-size: var(--text-xs); color: var(--dim); }
 nav h6 { margin: ${s(3.5)} ${s(2)} ${s(1)}; font-size: var(--text-xs); font-weight: normal; color: var(--dim); }
@@ -128,9 +131,11 @@ button:disabled { opacity: var(--disabled); }
 .messages { flex: 1; overflow: auto; }
 article { padding: ${s(2.5)} ${s(4)}; }
 .labels { display: flex; gap: ${s(1.5)}; align-items: center; margin-top: ${s(1)}; color: var(--dim); flex-wrap: wrap; }
+/* A label is one line: a long value is cut short, whole in its tooltip. */
+.labels code { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-${hover} { nav a:hover, .row:hover, .thread:hover, .icon:hover { background: var(--hover); transition-duration: 0s; } .tabs a:hover { color: var(--fg); } }
-@media (pointer: coarse) { nav a, .tabs a, .row { min-height: var(--tap); } .icon { width: var(--tap); height: var(--tap); } input, textarea, select { font-size: var(--text-base); } }
+${hover} { nav a:hover, nav button.ask:hover, .row:hover, .thread:hover, .icon:hover { background: var(--hover); transition-duration: 0s; } .tabs a:hover { color: var(--fg); } }
+@media (pointer: coarse) { nav a, nav button.ask, .tabs a, .row { min-height: var(--tap); } .icon { width: var(--tap); height: var(--tap); } input, textarea, select { font-size: var(--text-base); } }
 ${sm} {
   aside { position: static; width: var(--sidebar-w); flex: none; transform: none; visibility: visible; transition: none; }
   .scrim, .burger { display: none; }

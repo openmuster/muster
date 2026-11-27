@@ -54,6 +54,29 @@ const box = async (page: Page, selector: string) => (await page.locator(selector
 const PHONE = { viewport: { width: 390, height: 844 } }
 const TABLET = { viewport: { width: 768, height: 1024 } }
 
+/**
+ * Stands in for the browser's notifications, which a test can't see on the screen: each one made is
+ * kept on the page, with its click, and the permission is what the test says it is.
+ */
+const NOTIFICATIONS = ({ answer, asked }: { answer: NotificationPermission; asked: NotificationPermission }) => {
+  const made: { title: string; body: string; tag: string; click: () => void }[] = []
+  ;(window as unknown as { made: typeof made }).made = made
+  class Recorded {
+    static permission: NotificationPermission = answer
+    static async requestPermission() {
+      Recorded.permission = asked
+      return asked
+    }
+    onclick: (() => void) | null = null
+    constructor(title: string, options: NotificationOptions) {
+      made.push({ title, body: options.body ?? '', tag: options.tag ?? '', click: () => this.onclick?.() })
+    }
+    close() {}
+  }
+  ;(window as unknown as { Notification: unknown }).Notification = Recorded
+}
+const made = (page: Page) => page.evaluate(() => (window as unknown as { made: { title: string; body: string; tag: string }[] }).made.map(({ title, body, tag }) => ({ title, body, tag })))
+
 describe('the inspector, in a browser', () => {
   it('acts as you only when opened by the link mu inspect printed; the token then leaves the address bar, and a link to a view opens in a new tab', async () => {
     const { page, serving, ready } = await open()
@@ -235,6 +258,62 @@ describe('the inspector, in a browser', () => {
     await still.page.locator('.pane').waitFor()
     expect(await still.page.locator('.pane').evaluate((el) => getComputedStyle(el).transitionProperty)).toBe('opacity')
     expect([...moving.errors, ...still.errors]).toEqual([])
+  })
+
+  it("cuts a long label short on one line, whole in its tooltip, and the thread never scrolls sideways", async () => {
+    const { page, team, errors } = await open('/', { context: PHONE })
+    const value = `https://example.com/${'a'.repeat(200)}`
+    const message = await team.as('lead').post({ channel: 'general', text: 'labelled', labels: { source: value, kind: 'bug' } })
+    await page.goto(`${new URL(page.url()).origin}/c/general?thread=${message.id}`)
+    await page.locator('.pane').waitFor()
+    const long = page.locator('.pane .labels code', { hasText: 'source=' })
+    const short = page.locator('.pane .labels code', { hasText: 'kind=bug' })
+    expect(await long.getAttribute('title')).toBe(`source=${value}`)
+    expect(await short.getAttribute('title')).toBe('kind=bug')
+    expect((await long.boundingBox())!.height).toBe((await short.boundingBox())!.height)
+    expect(await long.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+    expect(await page.locator('.pane .messages').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+    expect(errors).toEqual([])
+  })
+
+  it('notifies you of a new message that mentions you, not of your own or this tab\'s, and a click opens its thread', async () => {
+    const { page, team, errors } = await open('/c/general')
+    // The board knows you by the handle a mention uses once you have written.
+    await team.post({ channel: 'general', text: 'here' })
+    await page.addInitScript(NOTIFICATIONS, { answer: 'granted' as const, asked: 'granted' as const })
+    await page.reload()
+    await page.locator('header em.live').waitFor()
+    await expect.poll(() => page.locator('.rows .thread .text').allTextContents()).toContain('here')
+    // What was there when the page opened is not new.
+    expect(await made(page)).toEqual([])
+    await team.post({ channel: 'general', text: '@claude this one is yours' })
+    await team.as('lead').post({ channel: 'general', text: 'no one in particular' })
+    await page.locator('label.as input').fill('reviewer')
+    await page.locator('main textarea').fill('@ada written from this page')
+    await page.locator('main button', { hasText: 'send' }).click()
+    await expect.poll(() => page.locator('.rows .thread .text').allTextContents()).toContain('@ada written from this page')
+    const asked = await team.as('claude').post({ channel: 'general', text: '@ada can you look at the redirect?' })
+    await expect.poll(() => made(page), { timeout: 5000 }).toEqual([{ title: 'claude mentioned you in #general', body: '@ada can you look at the redirect?', tag: `muster-${asked.id}` }])
+    // Nothing else came after it.
+    await page.waitForTimeout(1500)
+    expect((await made(page)).length).toBe(1)
+    await page.evaluate(() => (window as unknown as { made: { click: () => void }[] }).made[0]!.click())
+    await page.locator('.pane').waitFor()
+    expect(new URL(page.url()).searchParams.get('thread')).toBe(String(asked.id))
+    expect(await page.locator('.pane article .text').first().textContent()).toContain('can you look at the redirect?')
+    expect(errors).toEqual([])
+  })
+
+  it('asks to notify only when you press for it, and says nothing more once you have answered', async () => {
+    const { page, errors } = await open()
+    await page.addInitScript(NOTIFICATIONS, { answer: 'default' as const, asked: 'granted' as const })
+    await page.reload()
+    await page.locator('header em.live').waitFor()
+    const ask = page.locator('nav button.ask')
+    expect(await ask.textContent()).toBe(' notify me of mentions')
+    await ask.click()
+    await expect.poll(() => ask.count()).toBe(0)
+    expect(errors).toEqual([])
   })
 
   it('on a phone, keeps the sidebar in a drawer and gives a thread the whole screen', async () => {

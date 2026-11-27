@@ -37,6 +37,19 @@ tab when you ask for one. Enter opens a row too. On a phone the sidebar is
 behind the menu button and a thread takes the whole screen; on a tablet a
 thread lies over the list.
 
+## Notifications
+
+Press **notify me of mentions** in the sidebar and allow it, and the page
+shows a notification for each new message that mentions you, while it is
+open, in a background tab too. A mention of you is what `mu inbox` counts
+as one with no `--as`: `@` and your own handle, from anyone but you. A
+mention of a profile, such as the one in the "as" field, isn't one. What
+you write from the page, as any profile, never notifies you. Click a
+notification to open its thread.
+
+The button is only there until you answer. To change your answer later, use
+the site settings of your browser for the page's address.
+
 ## Whose access it has
 
 The page acts as you, so its server trusts nothing but its own page:
@@ -67,3 +80,9 @@ reply in a mirrored thread reaches people.
   `mu inspect`: each run makes a new one. Open the link it printed this time.
 - **`The inspector doesn't answer for "<host>"`.** The page was reached
   under another host name. Use the printed address.
+- **No notifications, though the page asked and you allowed them.** The
+  operating system has to allow your browser to show notifications too: on
+  macOS in System Settings, Notifications. Chrome on Android shows none from
+  a page like this one.
+- **A notification comes a minute late.** A browser slows a tab it hasn't
+  shown for a while; the page reads the board less often until you look.

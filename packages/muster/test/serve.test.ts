@@ -1,4 +1,4 @@
-import { request as httpRequest } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
@@ -589,4 +589,113 @@ describe('serve', () => {
     expect('sandbox' in (await claims({ sandbox: 'yes' }))).toBe(false)
     await server.close()
   })
+})
+
+/**
+ * A board behind a tunnel or proxy that can be cut: while it is down it answers 502 with a page of its
+ * own, as a gateway does. It counts the requests for each route, so a test knows when a command is in its loop.
+ */
+async function behindGateway() {
+  const { server, token, owner } = await served()
+  const target = new URL(server.url)
+  const state = { down: false }
+  const polls: Record<string, number> = {}
+  const gateway = createServer((req, res) => {
+    const route = (req.url ?? '').slice((req.url ?? '').lastIndexOf('/') + 1)
+    polls[route] = (polls[route] ?? 0) + 1
+    if (state.down) return res.writeHead(502, { 'content-type': 'text/html' }).end('<html>502 Bad Gateway</html>')
+    const upstream = httpRequest({ host: target.hostname, port: target.port, method: req.method, path: req.url, headers: req.headers }, (answer) => {
+      res.writeHead(answer.statusCode ?? 502, answer.headers)
+      answer.pipe(res)
+    })
+    req.pipe(upstream)
+  })
+  await new Promise<void>((resolve) => gateway.listen(0, '127.0.0.1', resolve))
+  const port = (gateway.address() as { port: number }).port
+  /** Until a command has asked for a route once more: it is in its loop, past what it does once at the start. */
+  const polling = async (route: string, more = 1) => {
+    const from = polls[route] ?? 0
+    while ((polls[route] ?? 0) < from + more) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  return {
+    state,
+    polls,
+    polling,
+    owner,
+    dir: tempDir(),
+    env: { MUSTER_URL: `http://127.0.0.1:${port}${target.pathname}`, MUSTER_TOKEN: token() },
+    async close() {
+      gateway.close()
+      await server.close()
+    },
+  }
+}
+
+describe('a wait over a URL, through an outage', () => {
+  it('mu wait started before a gateway answers 502 gets what was posted during it', async () => {
+    const { state, polling, owner, dir, env, close } = await behindGateway()
+    const head = (await owner.head()) as number
+    const waiting = cliStart(dir, ['wait', 'work', '--after', String(head), '--timeout', '30s', '--json'], env)
+    await polling('events')
+    state.down = true
+    await owner.post({ channel: 'work', text: 'posted while the gateway was down' })
+    // The wait has been refused at least once before the gateway comes back.
+    await polling('events')
+    state.down = false
+    const waited = await waiting.done
+    expect(waited.code).toBe(0)
+    expect(JSON.parse(waited.stdout).event.data.text).toBe('posted while the gateway was down')
+    await close()
+  }, 60_000)
+
+  it('claim --ready --wait and inbox --wait ride it out too, once they are waiting', async () => {
+    const { state, polls, polling, owner, dir, env, close } = await behindGateway()
+    const claiming = cliStart(dir, ['tasks', 'claim', '--ready', 'work', '--wait', '30s', '--json', '--as', 'fixer'], env)
+    const inbox = cliStart(dir, ['inbox', '--wait', '30s', '--json', '--as', 'fixer'], env)
+    while (!polls.taskClaim || !polls.events) await new Promise((resolve) => setTimeout(resolve, 20))
+    state.down = true
+    await Promise.all([polling('taskClaim'), polling('events')])
+    await owner.taskCreate({ channel: 'work', text: 'fix it', for: 'fixer' })
+    state.down = false
+    expect((await claiming.done).code).toBe(0)
+    expect(JSON.parse((await inbox.done).stdout).items.length).toBeGreaterThan(0)
+    await close()
+  }, 60_000)
+
+  it('an outage that outlasts the deadline says what went wrong, and one from the start is said at once', async () => {
+    const { state, polling, dir, env, close } = await behindGateway()
+    const outlasting = cliStart(dir, ['wait', 'work', '--timeout', '3s', '--json'], env)
+    await polling('events')
+    state.down = true
+    const outlasted = await outlasting.done
+    expect([outlasted.code, JSON.parse(outlasted.stderr).error.reason]).toEqual([1, 'bad_answer'])
+    // Out of reach from the first request: said as any command says it, not waited for until --timeout.
+    const startedAt = Date.now()
+    const unreached = await cli(dir, ['wait', 'work', '--timeout', '30s', '--json'], { env })
+    expect([unreached.code, JSON.parse(unreached.stderr).error.reason]).toEqual([1, 'bad_answer'])
+    expect(Date.now() - startedAt).toBeLessThan(15_000)
+    await close()
+  }, 60_000)
+
+  it('a tail follows through an outage, and Ctrl-C during one stops at once, not after the pause', async () => {
+    const { state, polling, dir, env, close } = await behindGateway()
+    const tailing = cliStart(dir, ['tail', 'work'], env)
+    await polling('events')
+    state.down = true
+    // Tries at about 0, 0.5, 1.5 and 3.5 s: at 4 s it is in a pause that runs to 7.5 s.
+    await new Promise((resolve) => setTimeout(resolve, 4000))
+    const stoppedAt = Date.now()
+    tailing.child.kill('SIGINT')
+    expect((await tailing.done).code).toBe(130)
+    expect(Date.now() - stoppedAt).toBeLessThan(2000)
+    await close()
+  }, 60_000)
+
+  it("a refusal isn't an outage: it ends the wait at once", async () => {
+    const { dir, env, close } = await behindGateway()
+    const refused = await cli(dir, ['wait', 'work', '--timeout', '30s', '--json'], { env: { ...env, MUSTER_TOKEN: 'not-a-token' } })
+    expect(refused.code).toBe(1)
+    expect(JSON.parse(refused.stderr).error.reason).not.toBe('bad_answer')
+    await close()
+  }, 60_000)
 })
