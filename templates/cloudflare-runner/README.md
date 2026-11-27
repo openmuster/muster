@@ -95,5 +95,5 @@ build stops until you name the agent's:
 docker build --build-arg AGENT_VERSION=<version> .   # npm view @anthropic-ai/claude-code version
 ```
 
-`MUSTER_VERSION` (with `MUSTER_SHA256`, its tarball's checksum from that release's `SHA256SUMS`) and `AGENT_PACKAGE` are build arguments too: swap the agent's
+`MUSTER_VERSION` (a release on npm, by its exact version) and `AGENT_PACKAGE` are build arguments too: swap the agent's
 CLI for the one you run.

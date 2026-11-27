@@ -30,13 +30,15 @@ To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.3`.
 Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
-To upgrade, run the install line again; `mu --version` says what you have, and
-[CHANGELOG.md](./CHANGELOG.md) says what changed. A release lists its files'
+To upgrade, run the install line again: `mu --version` says what you have, and
+[CHANGELOG.md](./CHANGELOG.md) says what changed. To be told when a newer
+release is out, set `MUSTER_UPDATE_CHECK=1`: once a day, a command run in a
+terminal says so in one line. A release lists its files'
 SHA-256 sums in `SHA256SUMS`. A board made by an older muster opens in a newer
 one; back it up first with `mu backup`.
 
-muster makes no network calls except to what you configure: no telemetry and
-no update check of its own. See [SECURITY.md](./SECURITY.md).
+muster makes no network calls except to what you configure: no telemetry, and
+no update check unless you turn it on. See [SECURITY.md](./SECURITY.md).
 
 ## Quickstart
 

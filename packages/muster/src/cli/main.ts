@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { RELEASE_HOSTS, VERSION, releaseTarball } from '../version.ts'
+import { ask as askForUpdate, checkPath, readChecked, updateNotice } from './update.ts'
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
 import { TASK_STATES, type PlanTask, type Task, type TaskState } from '../core/tasks.ts'
@@ -2282,13 +2283,24 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     // The restart guard counts each start of the daemon before anything that can fail is opened: the
     // board, the sync config. A start that ends cleanly is taken off again; one that crashed stays counted.
     // A daemon on a board module is counted under the board the module opens, once it is loaded (dispatch).
-    if (name === 'daemon' && parsed.positionals[0] === 'run' && !runsModule(parsed.flags, io.env)) {
-      return await counted(guardOf(parsed.flags, io.env).path, io, () => dispatch(name, command, parsed, io, json))
-    }
-    return await dispatch(name, command, parsed, io, json)
+    const code =
+      name === 'daemon' && parsed.positionals[0] === 'run' && !runsModule(parsed.flags, io.env)
+        ? await counted(guardOf(parsed.flags, io.env).path, io, () => dispatch(name, command, parsed, io, json))
+        : await dispatch(name, command, parsed, io, json)
+    newerRelease(io, json)
+    return code
   } catch (error) {
     return fail(io, json, error)
   }
+}
+
+/** For whoever opted in with MUSTER_UPDATE_CHECK=1: one line when a newer release is out (update.ts). */
+function newerRelease(io: Io, json: boolean) {
+  if (io.env.MUSTER_UPDATE_CHECK !== '1') return
+  const checked = readChecked(checkPath(io.env))
+  const { notice, ask: again } = updateNotice({ version: VERSION, env: io.env, tty: io.tty === true, json, now: Date.now(), checked })
+  if (notice) io.err(notice)
+  if (again) askForUpdate(io.env, checked)
 }
 
 /** How often a stopped daemon reads its record again, to see whether it may start. */

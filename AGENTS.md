@@ -49,23 +49,27 @@ that URL; the cloud runners install from it). Code imports it as
 `@openmuster/muster`; a board module that still says `'muster'` is answered
 too (`src/cli/module.ts`).
 
-1. Set the version in `packages/muster/package.json`. The CLI reads it from
-   there; nothing else holds a version number.
-2. Merge that to `main`, then push the tag `v<version>`.
+1. In one pull request: set the version in `packages/muster/package.json`
+   (the CLI reads it from there), the same number everywhere a release is
+   pinned (the Cloudflare runner's `MUSTER_VERSION`, the README, the
+   quickstart, the template READMEs: `test/versions.test.ts` fails until they
+   all agree), and that version's section of `CHANGELOG.md`, for people who
+   use muster, and for a security fix, which versions it affects. The
+   release's notes are that section.
+2. Merge it to `main`, then push the tag `v<version>`.
 3. `.github/workflows/release.yml` checks that the tag matches the version,
    runs `pnpm check`, packs the package, installs the tarball and runs it,
    and attaches it as `muster-<version>.tgz` and as `muster.tgz`, with a
-   `SHA256SUMS` file. Its `npm` job then publishes that tarball to npm, with
-   no token: npm trusts this workflow (trusted publishing), once an owner of
-   the npm org has added it as a trusted publisher on the package's page
-   (repository `openmuster/muster`, workflow `release.yml`). npm drops a
-   trusted publisher that hasn't published within 48 hours, so one added
-   and never used has to be added again just before a release. If the job
-   fails after the GitHub release was made, publish that release's tarball
-   by hand, checked against its `SHA256SUMS`, and don't re-run the job.
-   The release's notes are that version's section of
-   `CHANGELOG.md`, so write it before tagging: for people who use muster,
-   and for a security fix, which versions it affects.
+   `SHA256SUMS` file, to a GitHub release that isn't "latest" yet. Its `npm`
+   job publishes that tarball to npm with no token: npm trusts this workflow
+   (trusted publishing: repository `openmuster/muster`, workflow
+   `release.yml`, no environment, set on the package's page on npm). Only
+   once npm's `latest` is that version does the `latest` job mark the GitHub
+   release latest, and the `image` job push the container image as `latest`,
+   so none of them disagree.
+4. If a job fails, fix the cause and re-run the failed jobs: every one can
+   run again. The `npm` job skips a version npm already has, so one published
+   by hand (checked against the release's `SHA256SUMS`) finishes the run too.
 
 Versions: there is one line, `main`, and each release from it is the one the
 install line gives. Only the latest release gets fixes: a security fix is a
