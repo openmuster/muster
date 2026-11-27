@@ -32,6 +32,7 @@ async function open(path = '/', options: { context?: BrowserContextOptions; chan
   for (const channel of options.channels ?? []) await team.as('lead').post({ channel, text: `first in ${channel}` })
   const serving = await inspect({ backend })
   const context = await browser.newContext(options.context)
+  await context.addInitScript(SHIFTS)
   const page = await context.newPage()
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -54,6 +55,25 @@ const MANY = Array.from({ length: 40 }, (_, n) => `team/room-${String(n).padStar
 const LONG = 'cards/app/planning-1179-with-a-name-far-longer-than-the-sidebar'
 const box = async (page: Page, selector: string) => (await page.locator(selector).first().boundingBox())!
 const PHONE = { viewport: { width: 390, height: 844 } }
+const DESKTOP = { viewport: { width: 1280, height: 800 } }
+
+/**
+ * Records every layout shift Chromium reports from the first paint on, with what moved. Every one counts,
+ * even one right after a key or a click: something that appears because of a press still mustn't push
+ * what is already on the screen.
+ */
+const SHIFTS = () => {
+  type Shift = { value: number; moved: string[] }
+  const shifts: Shift[] = []
+  ;(window as unknown as { shifts: Shift[] }).shifts = shifts
+  const name = (node: Node | null) => (node instanceof Element ? `${node.tagName.toLowerCase()}${node.className ? `.${String(node.className).trim().split(/\s+/).join('.')}` : ''}` : String(node?.nodeName))
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries() as unknown as { value: number; sources: { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[] }[]) {
+      shifts.push({ value: entry.value, moved: entry.sources.map((source) => `${name(source.node)} y ${source.previousRect.y} -> ${source.currentRect.y}, x ${source.previousRect.x} -> ${source.currentRect.x}`) })
+    }
+  }).observe({ type: 'layout-shift', buffered: true })
+}
+const shifts = (page: Page) => page.evaluate(() => (window as unknown as { shifts: { value: number; moved: string[] }[] }).shifts)
 const TABLET = { viewport: { width: 768, height: 1024 } }
 
 /**
@@ -321,6 +341,32 @@ describe('the inspector, in a browser', () => {
     await page.locator('label.as input').pressSequentially('jk?')
     expect(await page.locator('label.as input').inputValue()).toBe('jk?')
     expect(errors).toEqual([])
+  })
+
+  it('moves nothing once it is drawn: not while the board loads, nor when an error appears, on a desktop or a phone', async () => {
+    for (const context of [DESKTOP, PHONE]) {
+      const { page, errors } = await open('/', { context })
+      await expect.poll(() => rows(page).count()).toBe(2)
+      // A beat for the next read of the board, which redraws what is on the screen.
+      await page.waitForTimeout(1500)
+      expect(await shifts(page), `loading, ${context.viewport.width}px`).toEqual([])
+      // An error that comes with nothing pressed: the address now names a thread the board doesn't have.
+      await page.evaluate(() => {
+        window.history.pushState(null, '', '/?thread=999999')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await page.locator('.error').waitFor()
+      await page.waitForTimeout(500)
+      expect(await shifts(page), `an error, ${context.viewport.width}px`).toEqual([])
+      // What it says is in sight, right under the header, and a click takes it away.
+      expect(await page.locator('.error').isVisible()).toBe(true)
+      expect((await box(page, '.error')).y).toBe((await box(page, 'main header')).height)
+      await page.locator('.error').click()
+      await expect.poll(() => page.locator('.error').count()).toBe(0)
+      expect(await shifts(page), `the error gone, ${context.viewport.width}px`).toEqual([])
+      // The board's answer for the missing thread is the one failed request.
+      expect(errors.filter((error) => !error.includes('status of 404'))).toEqual([])
+    }
   })
 
   it('marks the row whose thread is open, and says so when a channel has nothing in it', async () => {

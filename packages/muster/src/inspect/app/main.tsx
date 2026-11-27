@@ -324,7 +324,7 @@ function App() {
           <em className={state.connected ? 'live' : 'down'}>{state.connected ? 'live' : 'reconnecting'}</em>
         </header>
         {state.error && (
-          <p className="error" onClick={() => dispatch({ type: 'error', error: null })}>
+          <p className="error banner" role="alert" onClick={() => dispatch({ type: 'error', error: null })}>
             {state.error}
           </p>
         )}

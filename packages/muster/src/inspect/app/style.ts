@@ -32,7 +32,7 @@ export const STYLE = `
   --scrollbar: 6px; --tap: 40px; --col-state: 84px; --col-event: 124px; --col-id: 44px; --text-min: 180px;
   --duration-pulse: 1.6s;
   --press: 0.97; --faded: 0.5; --disabled: 0.4;
-  --z-pane: 10; --z-scrim: 20; --z-drawer: 30; --z-keys: 40; --keys-w: 360px;
+  --z-banner: 5; --z-pane: 10; --z-scrim: 20; --z-drawer: 30; --z-keys: 40; --keys-w: 360px;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { ${declarations(COLOURS.light)} --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
@@ -76,12 +76,16 @@ nav h6 { margin: ${s(3.5)} ${s(2)} ${s(1)}; font-size: var(--text-xs); font-weig
 .as { padding: ${s(2.5)} ${s(4)}; border-top: var(--hairline) solid var(--line); color: var(--dim); display: flex; gap: ${s(2)}; align-items: center; }
 .as input { flex: 1; min-width: 0; }
 
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; gap: ${s(3)}; flex: none; height: var(--header-h); padding: 0 ${s(4)}; border-bottom: var(--hairline) solid var(--line); user-select: none; }
 header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-strong); }
 header span { flex: none; color: var(--dim); }
-header em { flex: none; margin-left: auto; font-style: normal; color: var(--dim); }
-header em.live::before { content: "● "; color: var(--fg); }
+/* Wider than "● reconnecting" (14 characters) from the first paint, with room for a font a little
+   wider than the ch, and the word after the dot always starts in one place: the word changing moves
+   nothing. */
+header em { flex: none; margin-left: auto; min-width: 16ch; font-style: normal; color: var(--dim); }
+header em::before { content: "● "; }
+header em.live::before { color: var(--fg); }
 header em.down { animation: pulse var(--duration-pulse) ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: var(--faded); } }
 .icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: ${s(6)}; height: ${s(6)}; margin: 0; padding: 0; border: none; border-radius: var(--radius); background: none; color: var(--dim); transition: transform var(--duration-fast) var(--ease-out), background-color var(--duration-fast); }
@@ -113,6 +117,9 @@ code { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm
 .pending { opacity: var(--faded); }
 .empty { color: var(--dim); padding: ${s(4)}; margin: 0; }
 .error { margin: 0; padding: ${s(2)} ${s(4)}; border-bottom: var(--hairline) solid var(--line); transition: opacity var(--duration) var(--ease-out), transform var(--duration) var(--ease-out); }
+/* What went wrong with a read or a write lies over the top of the list, under the header, rather than
+   pushing the list down: nothing moves after it is drawn. A click takes it away. */
+.error.banner { position: absolute; top: var(--header-h); inset-inline: 0; z-index: var(--z-banner); background: var(--bg); }
 @starting-style { .error { opacity: 0; transform: translateY(calc(var(--spacing) * -1)); } }
 .composer { border-top: var(--hairline) dashed var(--line); padding: ${s(2.5)} ${s(4)}; display: flex; flex-direction: column; gap: ${s(1.5)}; }
 .composer:focus-within { border-top-style: solid; }

@@ -104,6 +104,26 @@ while you type in an input, a text area, a select or anything editable, and
 nothing runs with Cmd, Ctrl or Alt held, which the browser keeps. The
 browser suite drives each key.
 
+## Nothing moves after it is drawn
+
+The page is drawn before the board answers, and what arrives must not push
+what is already on the screen. The browser suite records every layout shift
+Chromium reports, on a desktop and on a phone, while the board loads and
+when an error appears, and fails on any. It counts a shift right after a
+key or a click too: something that appears because you pressed must still
+not push the rest.
+
+- **Something whose width depends on data reserves it.** The header's
+  `live` takes the room of `reconnecting` from the first paint, and the word
+  after its dot starts in one place.
+- **Something that appears over a list lies over it.** The error banner is
+  laid over the top of the list, under the header, rather than inserted
+  above the tabs. A click takes it away.
+- **A list's rows may grow downward.** Nothing in the list's region is
+  under them; the composer is pinned below it.
+- **A layer slides or fades.** The thread pane, the drawer and the list of
+  keys move by `transform` and `opacity`, which aren't layout shifts.
+
 ## Rules for adding to it
 
 - A value is a token. A colour, a corner, a duration or a curve written in
