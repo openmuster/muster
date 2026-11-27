@@ -1,50 +1,60 @@
 ---
 title: A software factory
-description: For a team that wants an agent to answer GitHub issues, Linear issues or Slack questions as they arrive. Sync brings each one in as a thread, a watcher wakes the agent, and it replies, asks or starts work there.
+description: For a team that wants an agent to answer GitHub issues, Linear issues or Slack questions as they arrive. You end with sync bringing each one in as a thread and a watcher waking the agent, which replies, asks or starts work there.
 ---
 
-## The parts
+## What each part does
 
-| Part | What does it |
+| Job | Done by |
 | --- | --- |
-| Threads come in from GitHub, Linear, Slack | [Sync](../02-sync/01-overview.md) |
-| An agent is woken when a thread has news | A [watcher](../01-concepts/09-watchers.md) |
-| The agent is held to its channels | A [token](../01-concepts/11-access.md) |
-| Someone sees what is set up | The factory page |
+| Brings threads in from GitHub, Linear, Slack | [Sync](../02-sync/01-overview.md) |
+| Wakes an agent when a thread has news | A [watcher](../01-concepts/09-watchers.md) |
+| Limits the agent to its channels | A [token](../01-concepts/11-access.md) |
+| Shows what is set up | The factory page |
 
-Wire up the plumbing and leave the decisions to the agent: who is woken, as whom, with which
-access. What a thread needs is for the agent to judge from the thread.
+Wire up the plumbing: who is woken, as whom, and with which access. Leave
+the decisions to the agent, which judges from each thread what it needs.
 
-## Set it up
+## Connect GitHub issues to an agent
 
-`templates/factory` has the pieces: a board module (`lib/board.ts`) with
-the GitHub sync and the watcher, a host that runs them (`host.ts`), a wake
-script (`lib/wake.ts`), the agent's instructions, and a page that also takes
-the webhooks. Put your repository in place of `acme/web` in `lib/board.ts`,
-then start the page and the host, each in its own terminal, from
-`templates/factory`, with the webhook's secret in both:
+`templates/factory` has these pieces:
+
+- a [board module](../01-concepts/17-board-module.md) (`lib/board.ts`) with
+  the GitHub sync and the watcher
+- a host that runs them (`host.ts`)
+- a wake script (`lib/wake.ts`)
+- the agent's instructions
+- a page that also takes the webhooks
+
+Put your repository in place of `acme/web` in `lib/board.ts`. Then start the
+page and the host from `templates/factory`, each in its own terminal, with
+the webhook's secret in both:
 
 ```bash
-export GITHUB_WEBHOOK_SECRET=...
+export GITHUB_WEBHOOK_SECRET=your_webhook_secret
 pnpm dev
 ```
 
 ```bash
-export GITHUB_WEBHOOK_SECRET=...
+export GITHUB_WEBHOOK_SECRET=your_webhook_secret
 pnpm host
 ```
 
-The module names the secret with `env()`, so it is never written in the
-file: the page reads it on its first request, and `host.ts` when it starts,
-refusing to start while it is unset. Point GitHub's webhook at
+The module names the secret with `env()`, so the secret is never in the
+file. The page reads it on its first request. `host.ts` reads it when it
+starts, and refuses to start while it is unset.
+
+Point GitHub's webhook at
 `https://board.example.com/api/board/webhooks/gh`, and list
 `board.example.com` in `ALLOW_HOSTS`. The page listens on 127.0.0.1: the
 webhook reaches it through a proxy or a tunnel with a public HTTPS name. The
 webhook brings a thread in; `host.ts` runs the watcher, and the sync's
 catch-up and sending.
 
-Schedules are sent by a daemon that holds `tick`. Run it without a module:
-`host.ts` runs this one.
+A daemon that holds the
+[`tick` lease](../01-concepts/09-watchers.md#the-daemon) sends scheduled
+messages. Run it with `--no-module`, since `host.ts` already runs this
+module:
 
 ```bash
 mu daemon run --no-module
@@ -57,17 +67,19 @@ wakes the agent and that the agent answers:
 mu daemon check factory --module "$PWD/lib/board.ts" --in factory/issues
 ```
 
-The template's sync brings threads in and sends nothing back. To have the
-agent's replies posted as comments, give the repository `mirror: true` and
+The template's sync brings threads in and sends nothing back. To have sync
+post the agent's replies as comments, give the repository `mirror: true` and
 the sync a `token: env('GITHUB_TOKEN')`: see [GitHub](../02-sync/02-github.md)
 and [Sync](../02-sync/01-overview.md#in-a-board-module).
 
-The page lists what is set up and what isn't, with the command for each, who
-holds each role (`tick` for the daemon, `sync` and `watch:factory` for the
-host), and the recent threads. `/board` shows every thread, where you read
-and reply from a browser.
+The page lists what is set up and what isn't, with the command for each. It
+also shows who holds each role (`tick` for the daemon, `sync` and
+`watch:factory` for the host), and the recent threads. `/board` shows every
+thread, where you read and reply from a browser.
 
-## How a thread goes
+## What happens to a thread
+
+Each issue goes through these steps:
 
 1. Someone opens an issue. It becomes a thread in the mapped channel.
 2. The watcher wakes the agent with the thread's ID. The agent reads it.
@@ -138,9 +150,11 @@ mu label <thread> product=billing --if-unset product
 `--if-unset` makes the first answer stand: a second try exits 1 with
 `label_conflict`, so have `route.sh` treat that as done. Use `product=none`
 for what isn't a product question. It is a label like the others: it stops
-the router from being asked again, and no watcher listens for it.
+the router's gate from waking the router again, and no watcher listens for
+it.
 
-The two gates keep a model from being started for nothing:
+The two [gates](../01-concepts/09-watchers.md#a-gate) stop the watchers from
+starting a model for nothing:
 
 ```bash
 #!/bin/sh
@@ -155,8 +169,9 @@ mu read "$MUSTER_THREAD" --json | grep -q "\"product\": \"$1\"" || echo '{"wake"
 ```
 
 `route.sh` and `answer.sh` do what the factory's `lib/wake.ts` does, with
-other instructions: they pass a pointer, and the agent reads the thread
-itself.
+other instructions: they pass a
+[pointer](../01-concepts/09-watchers.md#what-a-wake-carries), and the agent
+reads the thread itself.
 
 Try the plumbing by hand, with you as the router:
 
@@ -175,38 +190,44 @@ What to know before you rely on it:
   its own: the router's agent labels the thread, and the product's watcher
   hears the label within a second or two. `coalesce` gathers the question and
   its label into one wake, once the oldest is 30 seconds old.
-- **A product's watcher hears more than the label arriving:** later messages
-  in the thread, the label being taken away, and any other label changing on
-  it. The gate handles the label leaving. Tell the agent to reply only when
-  the last message isn't its own. To answer the first question only, drop
-  `message.posted` from its `types`.
+- **A product's watcher hears more than the label arriving.** It also hears
+  later messages in the thread, the label being taken away, and any other
+  label changing on it. The gate handles the label leaving. Tell the agent to
+  reply only when the last message isn't its own. To answer the first
+  question only, drop `message.posted` from its `types`.
 - **A gate that fails wakes the agent.** Only `{"wake": false}` on its last
-  line says no; its exit code isn't read. `unlabelled.sh` wakes the router
-  when `mu read` fails, and `has-product.sh` doesn't wake its agent.
-- **An agent that exits 0 without writing a label isn't tried again.** The
-  thread stays unsorted until someone posts in it or labels it by hand.
-- **Fix a wrong label by hand:** `mu label <thread> product=api`. The api
-  agent is woken, and the gate keeps billing's asleep.
-- **`mu daemon check router` times out,** because the router labels and never
+  line says no; its exit code isn't read. When `mu read` fails,
+  `unlabelled.sh` prints nothing and wakes the router. `has-product.sh`
+  prints `{"wake": false}` through its `||` and doesn't wake its agent.
+- **The watcher doesn't retry an agent that exits 0 without writing a
+  label.** The thread stays unsorted until someone posts in it or labels it
+  by hand.
+- **Fix a wrong label by hand.** Run `mu label <thread> product=api`. The api
+  watcher wakes its agent, and the gate keeps billing's asleep.
+- **`mu daemon check router` times out.** The router labels and never
   replies. Check a product's watcher instead, which builds its message with
   the label: `mu daemon check billing`.
 - **"Label only" is an instruction, not a limit.** The router reads text
   strangers wrote. On a served board give it a
-  [token](../01-concepts/11-access.md) held to that channel.
+  [token](../01-concepts/11-access.md) limited to that channel.
 - **Messages sent while the board is down come in late.** When the board
   starts again it reads what [Slack](../02-sync/04-slack.md) has since, with
   limits that page gives.
 
-## Keep people in the loop
+## Get approvals where identity is verified
 
-Nothing on a board proves that a particular person approved something. For a merge, a deploy
-or a publish, have the agent ask where identity is verified: a review on the
-pull request.
+Nothing on a board proves that a particular person approved something. For a
+merge, a deploy or a publish, have the agent ask where identity is verified:
+a review on the pull request.
 
-## Keep it safe
+## What keeps it safe
+
+How the factory handles secrets and the text that arrives:
 
 - The wake command gets a pointer and a clean environment. It never gets the
   secrets the sync names.
 - A `filter` on the sync can drop or rewrite text on its way in.
 - What arrives from a platform informs the agent; it never authorizes it.
-- A task whose brief is edited from outside is held for its owner.
+- If someone other than a task's owner edits its brief, the board
+  [holds the task](../01-concepts/08-tasks.md#who-may-change-a-task) for its
+  owner.
