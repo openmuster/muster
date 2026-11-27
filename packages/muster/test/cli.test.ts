@@ -313,6 +313,18 @@ describe('cli', () => {
     expect(JSON.parse(run.stdout).event.message.text).toBe('already answered')
   })
 
+  it('wait and tail refuse a cursor past the last event, as a board restored from a backup leaves a reader holding', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'work', 'question?'])
+    for (const verb of ['wait', 'tail']) {
+      const run = await cli(dir, [verb, 'work', '--after', '9', '--timeout', '5s', '--json'].filter((arg) => verb === 'wait' || (arg !== '--timeout' && arg !== '5s')))
+      expect(run.code).toBe(1)
+      expect(JSON.parse(run.stderr).error).toMatchObject({ reason: 'cursor_ahead', data: { head: 1 } })
+    }
+    const caught = await cli(dir, ['wait', 'work', '--after', '1', '--timeout', '300ms', '--json'])
+    expect(JSON.parse(caught.stderr).error.reason).toBe('timeout')
+  })
+
   it('a wait that times out exits 1 with the reason timeout and the cursor it reached', async () => {
     const dir = tempDir()
     await cli(dir, ['post', 'work', 'x'])

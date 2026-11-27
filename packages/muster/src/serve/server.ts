@@ -2,7 +2,7 @@ import { OIDC_LIVE_MAX, verifier, type Trust } from './oidc.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Backend } from '../backend/types.ts'
 import { VERSION } from '../version.ts'
-import { Failure, misuse } from '../failure.ts'
+import { cursorAhead, Failure, misuse } from '../failure.ts'
 import { profileName, WORKFLOWS_PROFILE, type Caller } from '../model.ts'
 import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
 import { verify, type Claims } from './token.ts'
@@ -273,7 +273,10 @@ export function createHandler(options: ServeOptions) {
         if (url.searchParams.get('root') === 'true') filter.root = true
         if (url.searchParams.getAll('kind').length) filter.kinds = url.searchParams.getAll('kind')
         const resume = req.headers['last-event-id'] ?? url.searchParams.get('after')
-        let after = resume !== null && resume !== undefined && /^\d+$/.test(String(resume)) ? Number(resume) : await options.backend.head(caller)
+        const last = await options.backend.head(caller)
+        let after = resume !== null && resume !== undefined && /^\d+$/.test(String(resume)) ? Number(resume) : last
+        // A reader that comes back with a cursor past the last event would be skipped past whatever is written next.
+        if (after > last) throw cursorAhead(after, last)
         // Checked once before the stream opens, so a bad filter is an error and not an empty feed.
         await options.backend.events(caller, { after, filter, limit: 1 })
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })

@@ -55,6 +55,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `idempotency_mismatch` | That key was used for a different request |
 | `invalid_idempotency_key` | A key is 1 to 200 characters |
 | `invalid_cursor` | Not a cursor a read or a wait printed |
+| `cursor_ahead` | `--after`, or a live feed's `Last-Event-ID`, is past the board's last event: most likely the board was restored from a backup since. `data.head` is where it is now |
 | `invalid_limit` | `--limit` is a whole number of at least 1 |
 | `invalid_id` | Not an ID |
 | `nothing_to_read` | No channel or message named |

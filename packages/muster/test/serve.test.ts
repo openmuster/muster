@@ -294,6 +294,11 @@ describe('serve', () => {
     expect((await resumed.until(1)).map((event) => event.data.data.text)).toEqual(['two'])
     await resumed.close()
     expect((await raw('/feed?channel=work')).status).toBe(401)
+    // A cursor past the board's last event, as a reader holds after the board was restored from a backup:
+    // refused, never a feed that silently skips what is written next.
+    const ahead = await raw(`/feed?channel=work`, { headers: { authorization: `Bearer ${token()}`, 'last-event-id': String(seen[1]!.id + 50) } })
+    expect(ahead.status).toBe(409)
+    expect((await ahead.json()).error.reason).toBe('cursor_ahead')
     await server.close()
   })
 
