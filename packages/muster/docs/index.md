@@ -91,6 +91,7 @@ mu inspect
 - [A card queue](./03-guides/19-a-card-queue.md)
 - [A feedback loop](./03-guides/20-a-feedback-loop.md)
 - [Running the feedback loop](./03-guides/21-running-the-loop.md)
+- [Building from Linear](./03-guides/22-building-from-linear.md)
 
 ## Reference
 

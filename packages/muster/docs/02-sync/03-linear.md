@@ -3,6 +3,14 @@ title: Linear
 description: Drive agents from the Linear issues your team already plans in. Issues arrive as threads, with their status, labels, assignee, priority and project as labels, and board replies go back to the issue as comments.
 ---
 
+Sync brings a Linear team's issues and comments onto the board as threads,
+and posts the board's replies back on the issue. That is what lets an agent
+work from the issues you already plan in Linear: it reads the issue and its
+comments, and what it says lands on the issue. This page is the sync itself.
+For the whole workflow, from a project and its spec to a pull request per
+issue, with rounds started from a comment, see
+[Building from Linear](../03-guides/22-building-from-linear.md).
+
 ## Map teams
 
 ```ts board.ts

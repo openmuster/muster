@@ -217,6 +217,9 @@ same way: a trusted reply reopens it, and its status is In progress again.
 
 ## Next
 
+- [Building from Linear](./22-building-from-linear.md): laying out a Linear
+  project, its spec and its issues for this loop, and what to do from Linear
+  and what from the board.
 - [Running the feedback loop](./21-running-the-loop.md): going live,
   approving, answering a blocked task, another round, and what to do when
   something stops.

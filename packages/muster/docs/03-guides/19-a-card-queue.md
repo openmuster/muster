@@ -159,6 +159,8 @@ line that runs what is left.
 
 ## When not to
 
+- For a project you plan and iterate on in Linear, with rounds on the same
+  pull request: [Building from Linear](./22-building-from-linear.md).
 - For work that needs a back-and-forth: the steps are fixed, spec, work and
   review, and the review only comments. Nothing is sent back for a second
   round.
