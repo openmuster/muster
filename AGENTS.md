@@ -41,6 +41,30 @@ through OpenNext once the repository has the Cloudflare variable and secret.
 A guide says who it is for, what it needs, the steps, what you see, when not
 to do it, and what goes wrong. Diagrams are Mermaid, in the markdown.
 
+How the docs are written follows Vercel's writing guidelines
+(github.com/vercel-labs/writing-guidelines), with muster's own conventions
+where they differ:
+
+- The frontmatter `description` is the page's summary: the site shows it
+  under the title. Say who the page is for and what they end up with.
+- Headings are sentence case and say what the section holds; a step is a verb
+  phrase ("Split the work by file ownership"). A heading other pages link to
+  keeps its text: `test/docs.test.ts` checks every `#anchor`.
+- Imperative for steps, present tense, active voice with a named actor,
+  `you` for the reader, never `we`. Sentences under about 25 words,
+  paragraphs of 2 to 4 sentences.
+- No `easy`, `simple`, `just`, `very`, `really`, `many`, `often`, and no
+  metaphor verbs (`lands`, `carries`, `parks`): say the literal action, and
+  give the figure where there is one.
+- Introduce every list with a colon. A bold lead-in is `**Term:** meaning` or
+  `**A full claim.** Detail.`, nothing in between.
+- Spell out an acronym, and link a muster term (lease, gate, profile, board
+  module) to the concept page that defines it, on first use in a page.
+- Placeholders follow `mu help` (`<id>`, `<dir>`); a secret is descriptive
+  snake_case (`your_board_token`), never `...` or `sk-ant-...`.
+- Prose is hard-wrapped at about 78 columns, with straight quotes and no em
+  dashes or dashes as punctuation.
+
 ## Releases
 
 A release is `@openmuster/muster` on npm, and the same tarball attached to a

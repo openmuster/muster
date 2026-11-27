@@ -21,38 +21,42 @@ mu serve --allow-host board.example.com
 mu token create --as fixer --can 'work/=read,post,react,label' --ttl 2h
 ```
 
-## Start one
+## Start an agent in a sandbox
 
 ```bash
 export MUSTER_URL=https://board.example.com/api/board
-export MUSTER_TOKEN=mu1...          # yours: mu run reads the task and has a token made for the agent
+export MUSTER_TOKEN=your_board_token  # yours: mu run reads the task and has a token made for the agent
 mu run 12 --runner vercel --agent claude --as fixer --repo https://github.com/acme/web.git
 mu run --ready work/ --runner cloudflare --agent claude --as worker-3
 ```
 
-What runs in the sandbox is `mu run`
-itself, as it runs on your machine: it claims the task, keeps the claim alive
+What runs in the sandbox is `mu run` itself, as it runs on your machine: it
+[claims](../01-concepts/08-tasks.md#claims) the task, keeps the claim alive
 while the agent works, fails the task if the agent leaves it open, and labels
 it with the session, tokens and cost. With `--ready` the sandbox is a worker
 that takes one task after another until none is ready.
 
-On Vercel, `mu run` here stays with the run: it waits for the one in the
-sandbox to exit, then closes the sandbox's way out and removes it, and says
-how the task ended. Ctrl-C does the same, sooner. A dropped connection is
-waited out, not taken for an exit. `--detach` starts the run and returns,
-and the sandbox is left to its timeout, holding the agent's token in its
-policy until then. On Cloudflare the command returns once the run starts,
-unless it is a `--push` run or a task of a `--ready --loop` worker, which
-are waited on in the same way.
+On Vercel, `mu run` here stays with the run. It waits for the one in the
+sandbox to exit, then closes the sandbox to every host, removes it, and says
+how the task ended. Ctrl-C does the same, sooner. `mu run` waits out a
+dropped connection rather than taking it for an exit. `--detach` starts the
+run and returns, and the sandbox is left to its timeout, with the agent's
+token in its network policy until then.
 
-One length of time sets the rest. `--timeout` is how long the agent works on
-the task: 30 minutes when you don't pass one, except on Cloudflare without
-`--push` and outside a worker, where the Worker gives it an hour. The sandbox lives ten
-minutes longer, to install muster and settle the task, so it is `mu run` in
-it that fails a task that ran out of time, never the platform cutting it off.
-A `--ready` worker's sandbox lives two hours when you pass no `--timeout`,
-and ends as soon as the worker finds no task. The agent's token lasts ten
-minutes past the sandbox, and an attached run revokes it as soon as it ends.
+On Cloudflare the command returns once the run starts, unless it is a
+`--push` run or a task of a `--ready --loop` worker. `mu run` waits on those
+in the same way.
+
+`--timeout` sets every other length of time. It is how long the agent works
+on the task: 30 minutes when you don't pass one, except on Cloudflare without
+`--push` and outside a worker, where the Worker gives it an hour. The sandbox
+lives 10 minutes longer, to install muster and settle the task. So `mu run`
+in the sandbox fails a task that ran out of time, never the platform cutting
+it off.
+
+A `--ready` worker's sandbox lives 2 hours when you pass no `--timeout`, and
+ends as soon as the worker finds no task. The agent's token lasts 10 minutes
+past the sandbox, and an attached run revokes it as soon as it ends.
 
 ### A sandbox per task
 
@@ -61,20 +65,23 @@ mu run --ready work/ --loop --runner vercel --agent claude --as worker-1 --repo 
 mu run --ready work/ --loop --runner cloudflare --agent claude --as worker-2 --repo https://github.com/acme/web.git --push
 ```
 
-On each of the three clouds, `--ready` with `--loop` is a worker that stays
-on this machine.
-It claims the next ready task as `worker-1`, under a claim token made for
-that task, and runs it as above in a sandbox of its own, which takes the same
-claim: no other worker can have it, and each task gets its own clone, its own
-token and, with `--push`, its own pull request. Then the next, until nothing
-is ready for `--wait` (ten minutes by default). Start as many as you want
-running at once; the swarm template starts one per agent. The sandbox holds
-the claim token for its one task. On Cloudflare each task's container is
-waited on and stopped once its agent exits, before the next task is claimed,
-so the Worker keeps none of them for its 15 minutes. A task whose run
-doesn't start, or ends without saying how, is given back, ready, and its
-token revoked. A worker stops at once when the runner refuses a start, and
-after three failures in a row otherwise (`runner_start_failed`).
+On each of the 3 clouds, `--ready` with `--loop` is a worker that stays on
+this machine. It claims the next ready task as `worker-1`, under a claim
+token made for that task. It runs the task as above in a sandbox of its own,
+which takes the same claim, so no other worker can have it. Each task gets
+its own clone, its own token and, with `--push`, its own pull request.
+
+The worker then takes the next task, until nothing is ready for `--wait`
+(10 minutes by default). Start as many as you want running at once; the
+swarm template starts one per agent. The sandbox holds the claim token for
+its one task.
+
+On Cloudflare each task's container is waited on and stopped once its agent
+exits, before the next task is claimed, so the Worker keeps none of them for
+its 15 minutes. A task whose run doesn't start, or ends without saying how,
+is given back, ready, and its token revoked. A worker stops at once when the
+runner refuses a start, and after 3 failures in a row otherwise
+(`runner_start_failed`).
 
 Without `--loop`, `--ready` is one sandbox, or one container, that takes
 task after task itself, sharing one checkout, so it can't `--push`.
@@ -86,11 +93,11 @@ the sandboxes reach it at that address, a tunnel's, say.
 Two tokens are in play. `MUSTER_TOKEN` is yours, for the `mu run` you type.
 The sandbox's requests carry another, made for the agent: your own is never
 passed on. Name the agent with `--as` and `mu run` has the board make one for
-this run: that profile, the task's channel, a little longer than the run, and
-marked so what it writes stays on the board. Or make one yourself and set
-`MUSTER_AGENT_TOKEN`; `mu run` refuses one that isn't held to a profile and to
-named channels, since whatever it may do, anything that steers the agent may
-do too.
+this run: that [profile](../01-concepts/06-actors.md), the task's channel, a
+little longer than the run, and marked so what it writes stays on the board.
+Or make one yourself and set `MUSTER_AGENT_TOKEN`. `mu run` refuses one that
+isn't held to a profile and to named channels: anything that steers the
+agent can do whatever the token allows.
 
 `--repo` takes an HTTPS clone address with no credential in it. A token in the
 address would be readable by everything in the sandbox.
@@ -105,47 +112,48 @@ Cloudflare also needs `MUSTER_CF_WORKER`, your Worker's URL, and
 
 ## What is in the sandbox
 
-The agent needs `mu` and its own CLI where it runs.
+The agent needs `mu` and its own CLI where it runs:
 
-- **Vercel.** Each run installs the release of muster you are running, from
+- **Vercel:** Each run installs the release of muster you are running, from
   its tarball on GitHub. `MUSTER_INSTALL` names another tarball or path to
   install. The agent's CLI has to be in the sandbox's image already:
   `vercel/sandbox/universal` has Claude Code, Codex, git, gh, npm, pnpm and
   bun.
-- **A base, on Vercel.** Installing muster happens once per version, not per
-  run: the first run makes a kept sandbox with muster installed and nothing
+- **A base on Vercel:** Installing muster happens once per version, not per
+  run. The first run makes a kept sandbox with muster installed and nothing
   else in it, no credential, repository or environment, and every run after
   is forked from it. Its name has a random part nobody can guess, and this
-  machine writes it down in `~/.config/muster/vercel-bases.json`: a run
+  machine writes it down in `~/.config/muster/vercel-bases.json`. A run
   forks only a base this machine made, and only one that stopped cleanly, so
-  a sandbox someone else in the project made to look like one is never used.
+  it never uses a sandbox someone else in the project made to look like one.
   A base for a newer muster removes the older ones this machine made there,
   and nothing else. `MUSTER_VERCEL_BASE=off` sets each run up from nothing.
-- **Your repository, on Vercel.** `--repo` is cloned into `/vercel/<name>`
-  as the run starts, before anything of it runs, and the agent starts there. Its dependencies
-  are installed the way its lockfile says (pnpm, npm, yarn or bun, at the
-  version `packageManager` pins), with no install scripts, the
-  dependencies' own included. `--no-install` skips it. A failed install
-  doesn't stop the run: the task gets a `deps` label and a reply that says
-  so, and the agent starts without them.
-- **Cloudflare.** A run's container has no internet. `mu` and the agent's
+- **Your repository on Vercel:** `--repo` is cloned into `/vercel/<name>`
+  as the run starts, before any of the repository's code runs, and the agent
+  starts there. Its dependencies are installed the way its lockfile says
+  (pnpm, npm, yarn or bun, at the version `packageManager` pins), with no
+  install scripts, including the dependencies' own. `--no-install` skips
+  it. A failed install doesn't stop the run: the task gets a `deps` label
+  and a reply that says so, and the agent starts without them.
+- **Cloudflare:** A run's container has no internet. `mu` and the agent's
   CLI are in the image you build: the template's `Dockerfile` installs both.
   `--repo` is cloned through the Worker, which opens that one repository's
   clone routes, adds the GitHub App's read token for a private one, and
-  closes GitHub again before anything of the repository runs. Its
+  closes GitHub again before any of the repository's code runs. Its
   dependencies are then installed with the same script as on Vercel, for at
-  most three minutes (less when the clone was slow), while the Worker lets the container read the public
-  npm registry (`registry.npmjs.org`, `registry.yarnpkg.com`,
-  `repo.yarnpkg.com`) and nothing else there; those hosts are closed again
-  before the agent starts. The image is built for pnpm, npm and yarn; it has no bun, so
-  a `bun.lock` repository says `failed (exit 127)`. A private registry, a
-  git dependency or a package fetched from anywhere else fails the install.
-  `--no-install`, the `deps` label and the reply work as on Vercel. The Worker checks the run every minute and removes the container
-  when the agent exits or `--timeout` has passed: without one, an hour, or 30
-  minutes for a `--push` run or a worker's task. Each
-  run gets a `standard-1` container (half a vCPU, 4 GiB); set `INSTANCE` in
-  the Worker's `wrangler.jsonc` for another size. Cloudflare's default, `lite`,
-  is too small for an agent's CLI.
+  most 3 minutes (less when the clone was slow). Meanwhile the Worker lets
+  the container read the public npm registry (`registry.npmjs.org`,
+  `registry.yarnpkg.com`, `repo.yarnpkg.com`) and nothing else there; those
+  hosts are closed again before the agent starts. The image is built for
+  pnpm, npm and yarn; it has no bun, so a `bun.lock` repository says
+  `failed (exit 127)`. A private registry, a git dependency or a package
+  fetched from anywhere else fails the install. `--no-install`, the `deps`
+  label and the reply work as on Vercel. The Worker checks the run every
+  minute and removes the container when the agent exits or `--timeout` has
+  passed: without one, an hour, or 30 minutes for a `--push` run or a
+  worker's task. Each run gets a `standard-1` container (half a vCPU,
+  4 GiB); set `INSTANCE` in the Worker's `wrangler.jsonc` for another size.
+  Cloudflare's default, `lite`, is too small for an agent's CLI.
 
 ### Push what it changed
 
@@ -172,47 +180,49 @@ reply. Nothing changed, no pull request.
 ### Another round on the same pull request
 
 A task run again after it pushed, reopened with `mu tasks reopen 12 --round`
-or answered after it blocked, carries on from its branch. Before the sandbox
+or answered after it blocked, continues from its branch. Before the sandbox
 starts, `mu run` reads where `mu/task-12` is on GitHub and checks the
 sandbox out there, so the agent's second round adds to the first, and the
-push lands on the same pull request. The agent is told which round it is.
+push updates the same pull request. The agent is told which round it is.
 
 - **The branch only moves forward from where the run found it.** A change
   that doesn't build on that commit, or a branch someone pushed to while the
   agent worked, is refused with `push_conflict`, and the branch is left as
   it was.
-- **A change that wasn't pushed is said on the board.** The task gets a
-  `push` label and a reply with why, and the tasks that wait on it are held
-  with the same kind, so a review never goes on from a change that isn't on
-  the branch. Read the thread, then unblock them or run the task again.
+- **The board shows a change that wasn't pushed.** The task gets a `push`
+  label and a reply with why. The tasks that wait on it are
+  [blocked](../01-concepts/08-tasks.md#states) with the same kind, `push`,
+  so a review never goes on from a change that isn't on the branch. Read
+  the thread, then unblock them or run the task again.
 - **A sandbox that didn't start on the branch starts no agent.** An older
   `@vercel/sandbox`, or a Cloudflare Worker deployed before it knew the
   branch, would clone the default branch instead: the run is stopped with
   `runner_setup_failed` or `runner_too_old`.
-
 - **No token is ever where the agent has been.** The read token is in the
-  sandbox's policy only while Vercel clones the repository, before anything of the
-  repository's runs, and only on its git fetch routes. The push is made here,
-  from a repository made for it, and its branch is the one `mu run` names,
-  so nothing the agent left behind, a hook, a process, a changed `git`, can
-  use the token or pick what it writes.
+  sandbox's policy only while Vercel clones the repository, before any of
+  the repository's code runs, and only on its git fetch routes. The push is
+  made here, from a repository made for it, and its branch is the one
+  `mu run` names. So nothing the agent left behind, a hook, a process, a
+  changed `git`, can use the token or pick what it writes.
 - **What the agent left is data.** Git runs in the sandbox with no hooks, no
   fsmonitor and no global config, under a policy that reaches nothing, and
   all that comes out is the bundle, which becomes the branch.
-- **The pull request is opened from your machine,** so GitHub's API is never
-  reachable from the sandbox.
-- **It needs `mu run` to stay attached:** not with `--detach`, nor `--ready`,
-  whose tasks would share one checkout. It needs `git` on this machine.
-- **On Cloudflare** the Worker does the closing. When it sees the agent
+- **`mu run` opens the pull request from your machine.** GitHub's API is
+  never reachable from the sandbox.
+- **It needs `mu run` to stay attached.** It doesn't work with `--detach`,
+  nor with `--ready`, whose tasks would share one checkout. It needs `git` on
+  this machine.
+- **On Cloudflare the Worker does the closing.** When it sees the agent
   exit, it shuts every host the run opened and kills whatever the agent left
   running, before anything is read. Only then does it run the bundle step and
-  hand the bundle out, each with a time limit and a size limit. With
+  return the bundle, each with a time limit and a size limit. With
   `--push`, a Cloudflare run is waited on, like a Vercel one, and the
   container is kept for up to 15 minutes after the agent exits for `mu run`
   to read; `mu run` removes it as soon as it has. A Cloudflare run without
   `--push` still returns once it starts, unless it is a worker's task.
-- Without `--push`, a GitHub App that is set is used to clone a private
-  repository, the same way, and nothing is pushed. A public repository the
+- **Without `--push`, the App only clones.** `mu run` uses a GitHub App
+  that is set to clone a private repository, the same way, and pushes
+  nothing. A public repository the
   App isn't installed on is cloned without it.
 
 The write token can write any branch of the repository for its hour, though
@@ -243,7 +253,7 @@ runs anyway: launch only on code you would run.
 ## On E2B
 
 ```bash
-export E2B_API_KEY=e2b_...
+export E2B_API_KEY=your_e2b_api_key
 export MUSTER_E2B_TEMPLATE=muster-agents      # built from templates/e2b-runner
 mu run 12 --runner e2b --agent claude --as fixer --repo https://github.com/acme/web.git
 ```
@@ -256,18 +266,19 @@ cloned into the home of the template's user. `E2B_DOMAIN` names an E2B you
 run yourself.
 
 E2B's network rules are for a host. They can add a header to what goes to
-it, and can't tell one path or method from another. Five things follow.
+it, and can't tell one path or method from another. Five things follow:
 
-- **The board holds the agent's token to a sandbox's routes itself.** The
+- **The board itself limits the agent's token to a sandbox's routes.** The
   token `mu run --as` has made is marked for a sandbox, and one you make
-  needs `mu token create --sandbox`: the board then refuses it schedules,
-  cursors, workflow requests, the feed, MCP and the routes that take no
-  token. A token without the mark is refused before anything starts
-  (`agent_token_unmarked`); so is one from a board older than this `mu`.
+  needs `mu token create --sandbox`. The board then refuses that token
+  access to schedules, cursors, workflow requests, the feed, MCP (Model Context
+  Protocol) and the routes that take no token. A token without the mark is
+  refused before anything starts (`agent_token_unmarked`); so is one from a
+  board older than this `mu`.
   Give the board a hostname of its own: whatever else answers on that host
   is sent the token too.
-- **A model key works on every path of its provider's host,** not only the
-  calls that ask the model. So `mu run` refuses to use one there
+- **A model key works on every path of its provider's host.** It isn't
+  limited to the calls that ask the model, so `mu run` refuses to use one there
   (`model_key_unscoped`) until you set `MUSTER_E2B_KEY_ANY_PATH=1`. Use a key
   made for this alone: its own workspace and a spend limit.
 - **Credentials are stored at E2B for the length of the run.** The board's
@@ -289,31 +300,34 @@ it, and can't tell one path or method from another. Five things follow.
 `MUSTER_E2B_MODEL_SECRET=<name>` uses a secret you stored at E2B yourself as
 the model's key: the key then never passes through `mu`, nothing reads it
 from this machine, and `mu` never removes it. It also halves what a run
-stores. A Hobby project holds 10 secrets and each run holds two, so about
-five runs at once, or nine with a secret of your own; a 409 from E2B is said
-as `runner_secrets_full`.
+stores. A Hobby project holds 10 secrets and each run holds 2, so about
+5 runs at once, or 9 with a secret of your own. `mu run` reports a 409 from
+E2B as `runner_secrets_full`.
 
 A sandbox lives an hour at most on E2B's Hobby plan. A run that wouldn't
-fit, its `--timeout` and ten minutes more, is refused with
+fit, its `--timeout` and 10 minutes more, is refused with
 `timeout_too_long`, and a `--ready` worker with no `--timeout` gets 50
 minutes there. On a plan that allows more, set `MUSTER_E2B_MAX_LIFETIME`, to
 `24h` say.
 
-Before the agent starts, `mu whoami` is run in the sandbox as the agent. E2B
+Before the agent starts, `mu run` runs `mu whoami` in the sandbox as the
+agent. E2B
 sends a request without its credential when it can't find the secret, and
 says nothing, so a run whose agent couldn't reach the board is stopped there
 (`runner_setup_failed`). A model key that didn't arrive shows as the agent's
 own 401s.
 
-Closing a sandbox's way out on E2B refuses new connections and leaves the
+Closing a sandbox's network on E2B refuses new connections and leaves the
 open ones open. So once a repository's dependencies are installed, with
-every host open, `mu run` ends every process that wasn't running before the
-repository was there, as root, before the agent's credentials are stored;
-a run where one couldn't be ended is stopped (`runner_setup_failed`). It
-does the same after the agent exits, before a `--push` reads its changes
-out. This ends what an install left running; it is not a wall. Code in an
-E2B sandbox can become root there, and code that is root could hide in a
-process that was already running. As everywhere: launch only on code you
+every host open, `mu run` ends, as root, every process that wasn't running
+before the repository was there. It does this before the agent's
+credentials are stored, and stops a run where one couldn't be ended
+(`runner_setup_failed`). It does the same after the agent exits, before a
+`--push` reads its changes out.
+
+This ends what an install left running; it is not a security boundary. Code
+in an E2B sandbox can become root there, and code that is root could hide in
+a process that was already running. As everywhere: launch only on code you
 would run.
 
 E2B adds a credential only to requests for the host it is for: it connects
@@ -327,19 +341,19 @@ run after starts from it. Its ID is written down in
 machine made. A newer muster makes another and removes the older one.
 `MUSTER_E2B_BASE=off` sets each run up from nothing.
 
-The sandbox can reach a DNS server whenever a host is open to it, and a
-lookup can carry data out: E2B has no way to close that and still resolve
-the hosts that are open. No credential is in the sandbox to take, but a
-private repository's code is.
+The sandbox can reach a Domain Name System (DNS) server whenever a host is
+open to it, and code can send data out inside a lookup: E2B has no way to
+close that and still resolve the hosts that are open. No credential is in
+the sandbox to take, but a private repository's code is.
 
 ## The model's key
 
-The agent's laptop sign-in doesn't travel to a sandbox: it needs a key for its
+The agent's laptop sign-in isn't available in a sandbox: it needs a key for its
 model provider. Set it where you run `mu run`, in `ANTHROPIC_API_KEY` for
 Claude Code or `OPENAI_API_KEY` for Codex.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=your_anthropic_api_key
 mu run 12 --runner vercel --agent claude
 ```
 
@@ -364,8 +378,8 @@ only if the sandbox's image has a sign-in of its own.
 The Vercel runner starts from `vercel/sandbox/universal`. It signs in to
 Vercel with an access token when `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and
 `VERCEL_PROJECT_ID` are all set, and otherwise with a linked project's
-`VERCEL_OIDC_TOKEN`, from `vercel env pull`. Only some of the three is an
-error. None of them enters the sandbox.
+`VERCEL_OIDC_TOKEN`, from `vercel env pull`. Setting only one or two of the
+three is an error. None of them enters the sandbox.
 
 ## Where the credential is
 
@@ -378,8 +392,8 @@ The policy lets the sandbox reach:
 
 - the board's host, the model provider's host when its key is set, and
   nothing else you didn't add. Each credential is sent only to the host it
-  is for, whatever the request's own Host header says. A host you add is a way out of the sandbox
-  for whatever the agent reads, so add few;
+  is for, whatever the request's own Host header says. The agent can send
+  whatever it reads to a host you add, so add few;
 - on it, only the board's own routes, by method;
 - not the routes that run the board: webhooks, tokens, schedules, budgets,
   schemas.
@@ -391,23 +405,27 @@ routes itself, to a token made for a sandbox.
 
 ## What is left afterwards
 
-Nothing, once `mu run` ends it. An E2B sandbox is removed and the secrets
-stored for it are too; a run that was killed leaves them until the next one
-removes them, as [On E2B](#on-e2b) says. A Vercel sandbox is started so that it isn't
-kept, and when the run exits or is stopped its way out is closed and the
-sandbox is deleted, so it isn't left in Vercel's list either. A setup step
-that fails ends it the same way. With `--detach`, or if this machine sleeps
-through the run, it is stopped at its timeout instead, and stays listed as
-stopped. A kept sandbox
+Nothing is left once `mu run` ends the sandbox. An E2B sandbox is removed
+and the secrets stored for it are too; a run that was killed leaves them
+until the next one removes them, as [On E2B](#on-e2b) says. A kept sandbox
 would hold the repository, the agent's transcript and a policy with the
 credentials in it.
+
+`mu run` starts a Vercel sandbox as one that isn't kept. When the run exits
+or is stopped, `mu run` closes it to every host and deletes it, so it isn't
+left in Vercel's list either. A setup step that fails ends it the same way.
+With `--detach`, or if this machine sleeps through the run, it is stopped at
+its timeout instead, and stays listed as stopped.
 
 On the board, a sandbox reaches a named list of routes: messages, tasks,
 files and reads. It can't make schedules or schemas, set budgets, or move a
 stored cursor. A file it stores needs a token that may post, and a narrowed
 token has an allowance of 100 MB a day.
 
-## From code
+## Start a runner from code
+
+The runners are also functions in the package. This starts a task on
+Cloudflare, with the Vercel call left commented out:
 
 ```ts runners.ts
 import { claude, cloudflare, vercel } from '@openmuster/muster'
