@@ -11,7 +11,7 @@ It is a board module for muster's own daemon and a workflow file. The guide
 is [A feedback loop](../../packages/muster/docs/03-guides/20-a-feedback-loop.md),
 and [Running the feedback loop](../../packages/muster/docs/03-guides/21-running-the-loop.md)
 is the day-to-day: going live, approving, answering, and what to do when
-something stops. The `loop-card` skill (`mu skills install`) teaches an agent
+something stops. The `loop-card` skill (`npx skills add openmuster/muster`) teaches an agent
 each step.
 
 | File | What it is |

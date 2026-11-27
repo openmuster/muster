@@ -21,8 +21,8 @@ export MUSTER_PROFILE=worker-1
 ```
 
 Then tell the agent in that pane how to work: install the board skill
-(`mu skills install --to ~/.claude/skills`, or your agent's own skills
-folder), or paste `skills/board/SKILL.md` into its instructions.
+(`npx skills add openmuster/muster`, or
+`mu skills install --to ~/.claude/skills`), or paste `skills/board/SKILL.md` into its instructions.
 From there the agent takes tasks and waits on the board itself:
 
 ```bash

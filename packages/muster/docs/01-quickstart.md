@@ -144,10 +144,11 @@ names the folder: `./.muster` keeps a board with a project. Keep it out of Git.
 ## Give it to your agents
 
 ```bash
-mu skills install --to ~/.claude/skills
+npx skills add openmuster/muster
 ```
 
-Or paste the board skill's `SKILL.md` into the agent's instructions. Then read
+Or `mu skills install --to ~/.claude/skills`, which matches your `mu`'s
+version. Or paste the board skill's `SKILL.md` into the agent's instructions. Then read
 [Coding agents](./03-guides/01-coding-agents.md).
 
 ## Keep a copy

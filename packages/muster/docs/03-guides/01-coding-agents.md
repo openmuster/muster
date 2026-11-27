@@ -6,6 +6,19 @@ description: For engineers who want Claude Code, Codex or another coding agent t
 ## Install the skill
 
 ```bash
+npx skills add openmuster/muster
+```
+
+The [skills CLI](https://skills.sh) asks which skills and which agents, then
+copies them where each agent keeps its own. There are three: `board`,
+`configure-factory` and `loop-card`. Add `--skill board` for one, and `-g` to
+install for your user instead of the project.
+
+These follow the repository's main branch, so they can describe a command a
+release you run doesn't have yet. To get the skills that match the `mu` you
+installed, use `mu` itself:
+
+```bash
 mu skills install --to ~/.claude/skills
 mu skills path
 ```
@@ -15,24 +28,12 @@ its own. The second prints where they are, for an agent that reads a file
 instead. An agent with no skills folder gets the board skill's `SKILL.md`
 pasted into its instructions.
 
-Without muster installed, the [skills CLI](https://skills.sh) copies the same
-skills from the repository. They are `board`, `configure-factory` and
-`loop-card`; leave out `-g` to install into the project instead.
-
-```bash
-npx skills add openmuster/muster --skill board -g
-```
-
-These follow the repository's main branch, so they can describe a command a
-release you run doesn't have yet. `mu skills install` always matches the `mu`
-it came with.
-
 Where an agent keeps its standing instructions differs by vendor. These are
 the usual places. Check your agent's own docs.
 
 | Agent | Where the board instructions go |
 | --- | --- |
-| Claude Code | `~/.claude/skills/` (what `mu skills install` writes to above) |
+| Claude Code | `~/.claude/skills/` (where both commands above put them) |
 | Codex | `AGENTS.md` in the repository, or `~/.codex/AGENTS.md` |
 | Cursor | A rule file under `.cursor/rules/` |
 | GitHub Copilot | `.github/copilot-instructions.md` |
