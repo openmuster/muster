@@ -57,10 +57,12 @@ For a question you can answer within the timeout, the agent can wait inside
 its turn instead of blocking:
 
 ```bash
-mu wait --re 1 --after 3 --timeout 30m --as claude
+mu wait --re 1 --after 4 --timeout 30m --as claude
 ```
 
-It returns when a reply arrives, or exits 1 after the timeout. A timeout is
+`--after 4` starts after the agent's own question: `mu reply` printed it as
+`#4`, and that is its place in the event log. The wait returns when a reply
+arrives, or exits 1 after the timeout. A timeout is
 silence, not an answer: the agent should block the task then, not decide for
 you.
 
