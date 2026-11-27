@@ -31,7 +31,11 @@ the same markdown, read from `packages/muster/docs`; nothing is copied.
 test checks every relative link in the real docs lands on a page. Keep docs
 prose plain markdown with no JSX. The site is dark only, on the inspector's
 colours, in Geist Sans; Geist Mono is for code, terminal output and
-technical values only, never to make something stand out. The home page's demo is data
+technical values only, never to make something stand out. The colours,
+corners and motion both pages share are written once, in
+`packages/muster/src/inspect/tokens.ts`. What the two pages are going for,
+their tokens, keys and motion, and the rules for adding to them are in
+[docs/design.md](./docs/design.md): read it before you change a page. The home page's demo is data
 (`apps/docs/components/story/cues.ts`): what it shows is a function of time, so
 it is tested, pauses, and shows each scene finished to anyone who asked for
 less motion. Its commands print what the CLI really prints, and its code is
