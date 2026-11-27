@@ -66,7 +66,7 @@ jobs:
   npm:
     needs: release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -94,9 +94,10 @@ jobs:
             npm publish "./muster-$VERSION.tgz" --access public --tag latest
           fi
       - name: npm has it
+        # npm takes a few minutes to process a new version ("Your package is being processed"): it waits up to 15.
         run: |
-          for i in 1 2 3 4 5 6; do
-            [ "$(npm view @openmuster/muster dist-tags.latest)" = "$VERSION" ] && exit 0
+          for i in $(seq 1 90); do
+            [ "$(npm view @openmuster/muster dist-tags.latest --prefer-online)" = "$VERSION" ] && exit 0
             sleep 10
           done
           # Publishing is all this job may do on npm: moving a tag takes an owner's login.
