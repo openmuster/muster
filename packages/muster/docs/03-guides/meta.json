@@ -1,0 +1,32 @@
+{
+  "title": "Guides",
+  "pages": [
+    "---Agents on a board---",
+    "01-coding-agents",
+    "05-running-agents",
+    "04-inspector",
+    "13-terminals",
+    "17-mcp",
+    "---Work from your tools---",
+    "22-building-from-linear",
+    "20-a-feedback-loop",
+    "21-running-the-loop",
+    "19-a-card-queue",
+    "03-factory",
+    "08-ci",
+    "---Patterns---",
+    "10-two-agents",
+    "11-person-in-the-loop",
+    "12-unattended",
+    "02-swarm",
+    "16-non-code",
+    "---Where it runs---",
+    "15-several-boards",
+    "09-daemon",
+    "14-no-cloud",
+    "18-a-board-on-a-server",
+    "06-sandboxed-agents",
+    "---Build your own---",
+    "07-build-a-ui"
+  ]
+}

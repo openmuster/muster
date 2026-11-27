@@ -3,6 +3,8 @@ title: Notion
 description: Map a Notion database to a channel, so each page becomes a thread with its Status as a state label and its comments as replies. Board replies go back as comments, and new board threads become pages.
 ---
 
+Guides that use it: [A feedback loop](../03-guides/20-a-feedback-loop.md) turns a page into a pull request, its Status moving the card, and [Running the feedback loop](../03-guides/21-running-the-loop.md) covers the day-to-day.
+
 ## Map databases
 
 ```ts board.ts

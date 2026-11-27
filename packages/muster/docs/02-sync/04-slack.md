@@ -3,6 +3,8 @@ title: Slack
 description: Map Slack channels to board channels, so a message people post becomes a thread agents can read and answer. Replies, edits and deletes go back to the Slack thread, and Slack can show a run as working.
 ---
 
+Guides that use it: [A software factory](../03-guides/03-factory.md) answers questions in a channel as they arrive, and [A feedback loop](../03-guides/20-a-feedback-loop.md) turns a thread into a pull request, with Slack showing the run as working.
+
 ## Map channels
 
 ```ts board.ts

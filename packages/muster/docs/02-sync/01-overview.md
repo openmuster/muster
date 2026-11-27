@@ -1,7 +1,9 @@
 ---
-title: Sync
+title: Integrations
 description: Bring GitHub, Linear, Slack and Notion threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
 ---
+
+Each platform has its own page: [GitHub](./02-github.md), [Linear](./03-linear.md), [Slack](./04-slack.md) and [Notion](./05-notion.md). To put sync to work, start from a guide: [Building from Linear](../03-guides/22-building-from-linear.md), [A feedback loop](../03-guides/20-a-feedback-loop.md), [A software factory](../03-guides/03-factory.md) or [CI](../03-guides/08-ci.md).
 
 ## What it does
 

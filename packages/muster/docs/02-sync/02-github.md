@@ -3,6 +3,8 @@ title: GitHub
 description: Issues and pull requests become board threads, with comments as replies, and state, reviews, CI results, labels and assignees as labels agents can wait on. Nothing goes back to GitHub unless a repository turns on mirroring.
 ---
 
+Guides that use it: [CI](../03-guides/08-ci.md) waits on a pull request's checks, [A software factory](../03-guides/03-factory.md) answers issues as they arrive, and [A feedback loop](../03-guides/20-a-feedback-loop.md) turns an issue into a pull request.
+
 ## Map repositories
 
 ```ts board.ts
