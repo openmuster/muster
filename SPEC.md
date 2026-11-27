@@ -328,7 +328,7 @@ Specified as they are built: see `docs/`. Their rules in brief:
 
 Built and covered by tests, some of it only against stand-ins (listed further
 down): sections 3 to 7, typed blocks and schemas, files, private
-channels, budgets a board keeps, backups; `mu inbox` and the `for` filter;
+channels, budgets a board keeps and `mu report` on how tasks went, backups; `mu inbox` and the `for` filter;
 the daemon and board modules (schedules, watchers, sync and outgoing webhooks declared in code, registered workflows, a
 sleep grace for leases, the LaunchAgent, a restart-storm guard and a slower
 pace for a watcher whose runs keep failing); serve mode with tokens, `mu join`,

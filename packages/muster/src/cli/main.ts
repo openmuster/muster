@@ -11,7 +11,7 @@ import type { Host } from '../watch/host.ts'
 import { processStart } from '../process.ts'
 import { cursor, duration, GLOBAL, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
-import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
+import { eventLine, messageLines, reportText, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { FAILING_PAUSE, clashWithWorkflows, daemonWorkflows, runDaemon } from '../daemon/daemon.ts'
 import { leftover, refuseRetired } from '../config/retired.ts'
 import { DAEMON_SPEC, SERVE_SPEC, chooseModule, defaultModule, endLaunch, invokedAs, launchGuard, loadBoard, loadsModule, refusal, self as thisCopy, type ModulePath } from './module.ts'
@@ -633,6 +633,16 @@ const commands: Record<string, Command> = {
       if (amount === undefined && !on(parsed.flags, 'none')) throw misuse('invalid_budget', 'Say how much: mu budget work 25, or --none to lift it.')
       const set = await run.team.budgetSet({ channel, usd: on(parsed.flags, 'none') ? null : Number(amount) })
       print(run, set, () => (set.usd === null ? `no budget  #${set.channel}` : `budget  #${set.channel}  $${set.spent.toFixed(2)} of $${set.usd.toFixed(2)}`))
+    },
+  },
+
+  report: {
+    spec: { value: ['since'] },
+    async run(run, parsed) {
+      const channel = parsed.positionals[0]
+      const since = new Date(Date.now() - duration(str(parsed.flags, 'since') ?? '30d', 'since') * 1000).toISOString()
+      const found = await run.team.taskReport({ ...(channel !== undefined ? { channel } : {}), since })
+      print(run, found, () => reportText(found))
     },
   },
 

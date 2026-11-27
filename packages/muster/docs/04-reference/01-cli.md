@@ -63,6 +63,8 @@ tasks
   tasks needs <id> <id>... | --none
   budget [<channel> <usd> | <channel> --none]
                                  what a channel's tasks may cost in all
+  report [<channel>] [--since 30d]
+                                 how tasks went and cost, by agent and workflow
   workflow list                  what this machine's workflows.json registers
   workflow run <name> --on <id> [--arg k=v]...
                                  ask for one to be run on a thread

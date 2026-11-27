@@ -35,7 +35,7 @@ The routes are the handle's methods: `post`, `reply`, `edit`, `remove`,
 `label`, `react`, `createChannel`, `workflowRequest`, `readChannel`, `readThread`, `events`,
 `channels`, `search`, `actors`, `head`, `cursorGet`, `cursorSet`, the `task*`
 methods, the `schedule*` methods, `schemaAdd`, `schemaList`, `filePut`,
-`fileGet`, `budgetSet`, `budgets`. See [The handle](./02-handle.md) for what
+`fileGet`, `budgetSet`, `budgets`, `taskReport`. See [The handle](./02-handle.md) for what
 each takes.
 
 `GET /api/board/whoami` says who the token is: `{ principal, profile, can }`.

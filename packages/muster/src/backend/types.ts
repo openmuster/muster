@@ -6,6 +6,7 @@ import type * as files from '../core/files.ts'
 import type * as leases from '../core/leases.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
+import type * as report from '../core/report.ts'
 import type * as schedules from '../core/schedules.ts'
 import type * as tasks from '../core/tasks.ts'
 import type * as workflows from '../core/workflows.ts'
@@ -103,6 +104,7 @@ export type Backend = {
   taskNeeds: Op<typeof tasks.setNeeds>
   taskList: Read<typeof tasks.list>
   task(caller: Caller, id: number): Promise<tasks.Task | null>
+  taskReport: Op<typeof report.report>
 
   budgetSet: Op<typeof tasks.setBudget>
   budgets(caller: Caller): Promise<ReturnType<typeof tasks.budgets>>

@@ -689,6 +689,7 @@ describe('serve', () => {
     expect(await reason(agent.cursorSet('mine', 1))).toBe('forbidden')
     expect(await reason(agent.cursorGet('mine'))).toBe('forbidden')
     expect(await reason(agent.workflowRequest({ thread: task.id, workflow: 'fix' } as never))).toBe('forbidden')
+    expect(await reason(agent.taskReport({ since: new Date(0).toISOString() }))).toBe('forbidden')
     const unmarked = as({ profile: 'fixer', can: can as never })
     expect((await unmarked.scheduleCreate({ channel: 'work/web', text: 'later', every: 600 })).id).toBeDefined()
     await unmarked.cursorSet('mine', 1)
