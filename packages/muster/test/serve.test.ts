@@ -603,7 +603,13 @@ async function behindGateway() {
   const gateway = createServer((req, res) => {
     const route = (req.url ?? '').slice((req.url ?? '').lastIndexOf('/') + 1)
     polls[route] = (polls[route] ?? 0) + 1
-    if (state.down) return res.writeHead(502, { 'content-type': 'text/html' }).end('<html>502 Bad Gateway</html>')
+    // Down, it reads the request and closes the connection, as a proxy does: a body left unread on a
+    // connection the client keeps open can stall its next request.
+    if (state.down) {
+      req.resume()
+      req.on('end', () => res.writeHead(502, { 'content-type': 'text/html', connection: 'close' }).end('<html>502 Bad Gateway</html>'))
+      return
+    }
     const upstream = httpRequest({ host: target.hostname, port: target.port, method: req.method, path: req.url, headers: req.headers }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, answer.headers)
       answer.pipe(res)
@@ -615,12 +621,32 @@ async function behindGateway() {
   /** Until a command has asked for a route once more: it is in its loop, past what it does once at the start. */
   const polling = async (route: string, more = 1) => {
     const from = polls[route] ?? 0
-    while ((polls[route] ?? 0) < from + more) await new Promise((resolve) => setTimeout(resolve, 20))
+    const deadline = Date.now() + 20_000
+    while ((polls[route] ?? 0) < from + more) {
+      if (Date.now() > deadline) throw new Error(`No ${route} request in 20s; requests so far: ${JSON.stringify(polls)}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  /** What a started command ended with, or, if it hasn't within 30s, what it had printed and asked for. */
+  const ended = async (started: ReturnType<typeof cliStart>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        started.child.kill('SIGKILL')
+        reject(new Error(`Still running after 30s. stdout: ${started.output()} stderr: ${started.errors()} requests: ${JSON.stringify(polls)}`))
+      }, 30_000)
+    })
+    try {
+      return await Promise.race([started.done, late])
+    } finally {
+      clearTimeout(timer)
+    }
   }
   return {
     state,
     polls,
     polling,
+    ended,
     owner,
     dir: tempDir(),
     env: { MUSTER_URL: `http://127.0.0.1:${port}${target.pathname}`, MUSTER_TOKEN: token() },
@@ -633,7 +659,7 @@ async function behindGateway() {
 
 describe('a wait over a URL, through an outage', () => {
   it('mu wait started before a gateway answers 502 gets what was posted during it', async () => {
-    const { state, polling, owner, dir, env, close } = await behindGateway()
+    const { state, polling, ended, owner, dir, env, close } = await behindGateway()
     const head = (await owner.head()) as number
     const waiting = cliStart(dir, ['wait', 'work', '--after', String(head), '--timeout', '30s', '--json'], env)
     await polling('events')
@@ -642,32 +668,32 @@ describe('a wait over a URL, through an outage', () => {
     // The wait has been refused at least once before the gateway comes back.
     await polling('events')
     state.down = false
-    const waited = await waiting.done
+    const waited = await ended(waiting)
     expect(waited.code).toBe(0)
     expect(JSON.parse(waited.stdout).event.data.text).toBe('posted while the gateway was down')
     await close()
   }, 60_000)
 
   it('claim --ready --wait and inbox --wait ride it out too, once they are waiting', async () => {
-    const { state, polls, polling, owner, dir, env, close } = await behindGateway()
+    const { state, polls, polling, ended, owner, dir, env, close } = await behindGateway()
     const claiming = cliStart(dir, ['tasks', 'claim', '--ready', 'work', '--wait', '30s', '--json', '--as', 'fixer'], env)
     const inbox = cliStart(dir, ['inbox', '--wait', '30s', '--json', '--as', 'fixer'], env)
-    while (!polls.taskClaim || !polls.events) await new Promise((resolve) => setTimeout(resolve, 20))
+    await Promise.all([polling('taskClaim'), polling('events')])
     state.down = true
     await Promise.all([polling('taskClaim'), polling('events')])
     await owner.taskCreate({ channel: 'work', text: 'fix it', for: 'fixer' })
     state.down = false
-    expect((await claiming.done).code).toBe(0)
-    expect(JSON.parse((await inbox.done).stdout).items.length).toBeGreaterThan(0)
+    expect((await ended(claiming)).code).toBe(0)
+    expect(JSON.parse((await ended(inbox)).stdout).items.length).toBeGreaterThan(0)
     await close()
   }, 60_000)
 
   it('an outage that outlasts the deadline says what went wrong, and one from the start is said at once', async () => {
-    const { state, polling, dir, env, close } = await behindGateway()
+    const { state, polling, ended, dir, env, close } = await behindGateway()
     const outlasting = cliStart(dir, ['wait', 'work', '--timeout', '3s', '--json'], env)
     await polling('events')
     state.down = true
-    const outlasted = await outlasting.done
+    const outlasted = await ended(outlasting)
     expect([outlasted.code, JSON.parse(outlasted.stderr).error.reason]).toEqual([1, 'bad_answer'])
     // Out of reach from the first request: said as any command says it, not waited for until --timeout.
     const startedAt = Date.now()
@@ -678,7 +704,7 @@ describe('a wait over a URL, through an outage', () => {
   }, 60_000)
 
   it('a tail follows through an outage, and Ctrl-C during one stops at once, not after the pause', async () => {
-    const { state, polling, dir, env, close } = await behindGateway()
+    const { state, polling, ended, dir, env, close } = await behindGateway()
     const tailing = cliStart(dir, ['tail', 'work'], env)
     await polling('events')
     state.down = true
@@ -686,7 +712,7 @@ describe('a wait over a URL, through an outage', () => {
     await new Promise((resolve) => setTimeout(resolve, 4000))
     const stoppedAt = Date.now()
     tailing.child.kill('SIGINT')
-    expect((await tailing.done).code).toBe(130)
+    expect((await ended(tailing)).code).toBe(130)
     expect(Date.now() - stoppedAt).toBeLessThan(2000)
     await close()
   }, 60_000)
