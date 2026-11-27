@@ -29,6 +29,29 @@ A looping worker (`mu run --ready work/ --loop`) stops when the board says the
 money is spent. `--budget <usd>` on the worker is a limit of its own, on what
 that one worker has spent.
 
+## Know the cost before a worker starts
+
+```bash
+mu run --ready work --estimate --agent claude
+```
+
+A looping worker (`mu run --ready work --loop`) prints one line before it
+takes its first task, and `--estimate` prints only that line and starts
+nothing:
+
+```text
+3 ready, about $0.90 at $0.30 a task
+```
+
+The count is the ready tasks this worker may take, read as `--ready` reads
+the channel (`work` is that channel, `work/` every channel under it): its
+owners, `--from`, `--by`, `--label`, and tasks assigned to it or to nobody.
+The price is what a task in that channel or under it cost that agent on
+average over the last 30 days, from the `cost` labels below. With no cost
+on record, as for Codex, it says `no cost history` and gives no figure.
+An estimate changes nothing about a budget: the board still refuses claims
+once the money is spent.
+
 ## See how work went
 
 ```bash

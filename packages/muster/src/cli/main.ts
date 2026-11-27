@@ -832,10 +832,24 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push', 'estimate'] },
     async run(run, parsed) {
       // Checked here, on what was typed: a cloud worker passes its flags on to each task it runs by ID.
       refuseByWithoutReady(parsed)
+      if (on(parsed.flags, 'estimate')) {
+        if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--estimate says what the ready tasks may cost: pass --ready <channel>.')
+        const found = await estimate(run, parsed)
+        return print(run, found, () => estimateLine(found))
+      }
+      // Before a worker takes one task after another, what they may cost, from what this channel's cost lately. Said once, never with --json.
+      // A board that won't say (a token closed to reports, a server older than the route) costs the worker nothing: it starts as before.
+      if (on(parsed.flags, 'loop') && str(parsed.flags, 'ready') !== undefined && !run.json) {
+        const found = await estimate(run, parsed).catch((error: unknown) => {
+          if (error instanceof Failure && error.exit === 2) throw error
+          return null
+        })
+        if (found) run.io.out(estimateLine(found))
+      }
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
       // A cloud worker keeps its own loop here, a sandbox (on Cloudflare, a container) per task.
@@ -1688,6 +1702,41 @@ async function filled(run: Run, task: number, owner: string, token: string, team
     await team.taskFail({ id: task, token, reason })
     return reason
   }
+}
+
+/** How far back an estimate looks for what a task cost. */
+const ESTIMATE_SINCE = '30d'
+
+type Estimate = { channel: string; ready: number; more: boolean; agent: string | null; perTask: number | null; usd: number | null; since: string }
+
+/**
+ * What a worker would start on, and what that may cost: the tasks ready in its channel that it may take
+ * (its owners, `--by`, `--label`, assigned to it or to nobody), times what a task under that channel
+ * cost this agent on average over the last 30 days. With no cost on record it says so, never a guess.
+ */
+async function estimate(run: Run, parsed: Parsed): Promise<Estimate> {
+  const channel = str(parsed.flags, 'ready')!
+  const me = await run.team.whoami()
+  const owners = new Set([me.principal, ...list(parsed.flags, 'from')])
+  const by = str(parsed.flags, 'by')
+  const labels = list(parsed.flags, 'label')
+  const found = await run.team.taskList({ channel, state: 'ready', limit: 1000, ...(labels.length ? { labels } : {}) })
+  const ready = found.tasks.filter((task) => owners.has(task.owner.principal) && (by === undefined || actorId(task.owner) === by) && (task.for === null || task.for === me.profile)).length
+  const named = str(parsed.flags, 'agent')
+  const agent = named ?? (parsed.rest.length ? generic(parsed.rest[0]!, parsed.rest.slice(1)).name : null)
+  const since = new Date(Date.now() - duration(ESTIMATE_SINCE, 'since') * 1000).toISOString()
+  const history = await run.team.taskReport({ channel: channel.replace(/^#/, '').replace(/\/$/, ''), since })
+  const rows = agent === null ? history.agents : history.agents.filter((row) => row.key === agent)
+  const costed = rows.reduce((sum, row) => sum + row.costed, 0)
+  const perTask = costed ? Math.round((rows.reduce((sum, row) => sum + row.cost, 0) / costed) * 10_000) / 10_000 : null
+  return { channel, ready, more: found.more, agent, perTask, usd: perTask === null ? null : Math.round(perTask * ready * 100) / 100, since }
+}
+
+const estimateLine = (e: Estimate): string => {
+  const ready = `${e.ready}${e.more ? '+' : ''} ready`
+  if (e.ready === 0) return `${ready} in #${e.channel.replace(/^#/, '')}`
+  if (e.perTask === null) return `${ready}, no cost history${e.agent ? ` for ${e.agent}` : ''} in #${e.channel.replace(/^#/, '')}`
+  return `${ready}, about $${e.usd!.toFixed(2)} at $${e.perTask.toFixed(2)} a task`
 }
 
 /** What the board says when it couldn't answer, rather than answering no: a task claimed meanwhile is given back, not failed. */

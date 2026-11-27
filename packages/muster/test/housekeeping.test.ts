@@ -100,6 +100,41 @@ describe('budgets from the command line', () => {
   }, 30_000)
 })
 
+describe('an estimate before a worker starts', () => {
+  it("says how many tasks are ready and what they may cost from the channel's recent tasks, and --estimate starts none", async () => {
+    const dir = tempDir()
+    // What earlier runs recorded: two claude tasks under work, one codex task with no cost, one elsewhere.
+    for (const [channel, labels] of [['work', ['agent=claude', 'cost=0.20']], ['work/api', ['agent=claude', 'cost=0.40']], ['work', ['agent=codex']], ['other', ['agent=claude', 'cost=9']]] as const) {
+      const id = /#(\d+)/.exec((await cli(dir, ['tasks', 'create', channel, 'done before', ...labels.flatMap((label) => ['--label', label])])).stdout)![1]!
+      await cli(dir, ['tasks', 'claim', id])
+      await cli(dir, ['tasks', 'complete', id, 'ok'])
+    }
+    for (let i = 0; i < 3; i++) await cli(dir, ['tasks', 'create', 'work', `t${i}`])
+    // Not one this worker would take: assigned to someone else.
+    await cli(dir, ['tasks', 'create', 'work', 'for bob', '--for', 'bob'])
+
+    const said = await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'claude'])
+    expect(said.code).toBe(0)
+    expect(said.stdout).toBe('3 ready, about $0.90 at $0.30 a task\n')
+    expect((await cli(dir, ['tasks', 'work'])).stdout.match(/ready/g)).toHaveLength(4)
+    expect((await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'codex'])).stdout).toBe('3 ready, no cost history for codex in #work\n')
+    expect((await cli(dir, ['run', '--ready', 'nowhere', '--estimate', '--agent', 'claude'])).stdout).toBe('0 ready in #nowhere\n')
+    const json = JSON.parse((await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'claude', '--json'])).stdout)
+    expect(json).toMatchObject({ channel: 'work', ready: 3, more: false, agent: 'claude', perTask: 0.3, usd: 0.9 })
+    const misused = await cli(dir, ['run', '1', '--estimate', '--agent', 'claude'])
+    expect(misused.code).toBe(2)
+
+    // A looping worker says it once, first, and then works as before.
+    const env = fakes(dir, { claude: `cat >/dev/null; mu tasks complete $MUSTER_TASK ok >/dev/null; echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.25}'` })
+    const loop = await cli(dir, ['run', '--ready', 'work', '--loop', '--agent', 'claude', '--cwd', dir], { env })
+    expect(loop.code).toBe(0)
+    const lines = loop.stdout.trimEnd().split('\n')
+    expect(lines[0]).toBe('3 ready, about $0.90 at $0.30 a task')
+    expect(lines.filter((line) => line.startsWith('3 ready'))).toHaveLength(1)
+    expect(lines.at(-1)).toBe('nothing more is ready: worked 3 tasks')
+  }, 60_000)
+})
+
 describe('mu report', () => {
   it('prints how tasks went by agent and by workflow, a row each, and --json prints one document', async () => {
     const dir = tempDir()

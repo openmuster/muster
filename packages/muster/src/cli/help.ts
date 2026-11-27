@@ -69,6 +69,7 @@ agents
        --agent claude|codex  (or a command after --)  [--cwd <dir>]
        [--worktree <repo> --branch <name>] [--model <m>] [--timeout 30m]
        [--env K=V]... [--bypass-permissions] [--loop] [--budget <usd>]
+       [--estimate]              say what the ready tasks may cost; start none
   An agent that worked the task before resumes its session; --fresh won't.
   To pick one up by its ID: --resume <session>.
   Claude Code starts lean (a shell and files); --full loads your whole setup.
