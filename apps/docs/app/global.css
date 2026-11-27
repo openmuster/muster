@@ -77,15 +77,35 @@ h4 {
   background: var(--muster-bg);
 }
 
-/* Hairlines, not boxes. */
+/* The sidebar is a list on the page, not a panel: no edge against the content, no guide line down the
+   nested pages and no bar on the current one (its fill marks it). Sections read in the foreground
+   colour, their pages in the dim one, the way Turborepo's docs do it. */
 #nd-sidebar {
-  border-color: var(--muster-line);
+  border-inline-end-width: 0;
+}
+
+#nd-sidebar [data-state]::before,
+#nd-sidebar a[data-active]::before {
+  content: none;
+}
+
+/* Top-level pages and section names: a link straight under the tree, or the trigger of a section. */
+#nd-sidebar [data-radix-scroll-area-viewport] > div > a,
+#nd-sidebar div[data-state] > a,
+#nd-sidebar div[data-state] > button {
+  color: var(--muster-fg);
+  font-weight: 500;
+}
+
+/* A denser tree: 32px rows instead of 36, so a long section like the guides fits on one screen. */
+#nd-sidebar a[data-active],
+#nd-sidebar button[data-state] {
+  padding-block: 0.375rem;
 }
 
 /* Links in prose read as text with a quiet underline: the weight of the words around them, a hairline
    under them in the site's grey, brightening on hover. Fumadocs' default (medium weight, a 1.5px
-   underline in the foreground colour) shouts on a black page. Nested pages in the sidebar already hang
-   from Fumadocs' own 1px guide line, so there is no rule of ours for it: a second one doubled it. */
+   underline in the foreground colour) shouts on a black page. */
 .prose :where(a):not(:where(.not-prose *)) {
   font-weight: inherit;
   text-decoration-color: var(--muster-thumb-hover);
