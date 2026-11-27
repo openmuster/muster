@@ -73,6 +73,6 @@ shows what is ready for you.
 - **A result with no sources.** Send it back with what is missing:
   `mu tasks reopen <id> --round`, and say what in a reply.
 - **A review that waits for the wrong task.** IDs skip, so pass `--needs`
-  the ID `create` printed, not the next number.
+  the ID `create` printed.
 - **A file that won't attach.** A file over 25 MB is refused with
   `file_too_large`. Compress it, or link to it.

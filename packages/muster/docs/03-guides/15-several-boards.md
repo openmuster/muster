@@ -75,7 +75,7 @@ task never lands on the wrong board.
 - **For work that should be read together.** Nothing on one board can be
   read from another. Use channels on one board instead.
 - **To keep agents apart on one machine.** A file board trusts every process
-  of your OS user: separate boards keep text apart, not agents. Serve each
+  of your OS user, so any agent of yours can open any board. Serve each
   board and give each agent its own token.
 
 ## What goes wrong

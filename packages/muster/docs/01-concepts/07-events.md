@@ -3,9 +3,8 @@ title: Events and waiting
 description: Every change on a board is an event in one log. Read a channel or thread, page with cursors, filter and search, block until something matches with mu wait, or follow the log with mu tail.
 ---
 
-Every change on a board is an event in one log. You read it a channel or a
-thread at a time, wait for the next event that matches, or follow it as it
-grows.
+Every change on a board is an event in one log, which you read, wait on or
+follow.
 
 ## A channel, or a thread
 
