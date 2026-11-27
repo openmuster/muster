@@ -14,5 +14,145 @@
     "unicorn/no-useless-spread": "off",
     "unicorn/no-useless-fallback-in-spread": "off",
     "unicorn/prefer-string-starts-ends-with": "off"
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "packages/muster/src/store/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "!../model.ts",
+                  "!../failure.ts"
+                ],
+                "message": "The store knows no rules: it imports only the model and Failure (AGENTS.md, Structure)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/muster/src/core/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "!../store/**",
+                  "!../model.ts",
+                  "!../failure.ts"
+                ],
+                "message": "The policy layer sits on the store alone: nothing above it (AGENTS.md, Structure)."
+              }
+            ],
+            "paths": [
+              {
+                "name": "node:sqlite",
+                "message": "The policy layer reaches SQLite through the store (AGENTS.md, Structure)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/muster/src/cli/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:sqlite",
+                "message": "The CLI never touches the store. It calls the handle (AGENTS.md, Structure)."
+              },
+              {
+                "name": "node:http",
+                "message": "The CLI never touches the network directly. It calls the handle (AGENTS.md, Structure)."
+              },
+              {
+                "name": "node:https",
+                "message": "The CLI never touches the network directly. It calls the handle (AGENTS.md, Structure)."
+              },
+              {
+                "name": "node:net",
+                "message": "The CLI never touches the network directly. It calls the handle (AGENTS.md, Structure)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "../store/**"
+                ],
+                "message": "The CLI never touches the store. It calls the handle (AGENTS.md, Structure)."
+              },
+              {
+                "group": [
+                  "../core/**"
+                ],
+                "allowTypeImports": true,
+                "message": "The CLI calls the handle, not the policy layer: import its types only (AGENTS.md, Structure)."
+              }
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "fetch",
+            "message": "The CLI never touches the network directly. It calls the handle (AGENTS.md, Structure)."
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/muster/src/cli/update.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/muster/src/inspect/app/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "node:*"
+                ],
+                "message": "The inspector's page runs in a browser."
+              },
+              {
+                "group": [
+                  "../../**"
+                ],
+                "allowTypeImports": true,
+                "message": "The inspector's page talks to the server over HTTP: it imports muster's types only."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

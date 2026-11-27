@@ -151,6 +151,7 @@ async function checkWatcher(run: Run, parsed: Parsed, mode: string, guardAt: str
     // A hook answers nothing on the board, so its check is the delivery itself: signed like a real one, sent from here.
     const [armed] = armHooks([hook], run.io.env)
     const started = Date.now()
+    // oxlint-disable-next-line no-restricted-globals -- SPEC §2's one exception: the owner's own service, not a board.
     const sent = await ping(armed!, { now: () => Date.now(), fetch })
     if (!sent.ok) {
       throw new Failure('hook_failed', `Outgoing webhook "${hook.name}" wasn't delivered: ${why(sent)}.`, {
