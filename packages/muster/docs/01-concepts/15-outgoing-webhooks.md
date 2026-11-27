@@ -155,7 +155,7 @@ board. The secret has to be set where you run it.
 
 - **To wake an agent on this machine,** use a
   [watcher](./09-watchers.md): it needs no receiver and sends nothing out.
-- **To mirror threads to GitHub, Linear or Slack,** use
+- **To mirror threads to GitHub, Linear, Slack or Notion,** use
   [sync](../02-sync/01-overview.md): it writes in each platform's own shape.
   A hook's body is muster's, and a chat app's incoming-webhook URL will not
   understand it without a small service in between.

@@ -80,9 +80,49 @@ channel, a subtree (`factory/`), or `*`.
   `sync:`. A token held to channels can't move one.
 - A schedule belongs to the token that made it. Revoke the token and its
   schedules are canceled as they come due. A token that only ran out leaves
-  them going: cancel those with `mu schedule cancel`. So does a schedule made
+  them going: cancel those with `mu schedule cancel`, as you would one made
   before 0.2.0, which has no record of its token. A token held to
   channels has 20 schedules going at most.
+
+`mu token list` shows the tokens the board has made that haven't run out,
+each with an ID. `mu token revoke <id>` stops one at once: its next request is
+refused. The board keeps that list in its own file, as records of what it
+made, never the tokens themselves. A token with an ID the board has no
+record of is refused, so restoring a board from an old backup stops the
+tokens made since.
+
+A token made before 0.2.0 may have no ID. Such a token can't be revoked and
+stops when it runs out. To stop one sooner, delete
+the board's key in `~/.config/muster/keys/`, which stops every token the board
+has made.
+
+The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
+survive a restart of `mu serve`.
+
+A client sets two variables, and every command uses that board:
+
+```bash
+export MUSTER_URL=http://127.0.0.1:4100/api/board
+export MUSTER_TOKEN=mu1...
+mu whoami
+```
+
+### Making a token from another machine
+
+On the board's own machine you are its owner and may make any token. From
+another machine, with `MUSTER_URL` and a token of your own, you can make one
+too, with limits that keep it from growing:
+
+- It must be held to a profile and to named channels. No `*`, no `manage`.
+- It lives a day at most, and never longer than the token that made it.
+- A maker that is itself held to a profile can only make a token for that
+  same profile, and a maker marked no-sync makes no-sync tokens.
+- Only a token that reaches everything can make one. A token held to
+  channels, or one made this way, can't make, list or revoke tokens.
+
+This is how `mu run --runner vercel --as fixer` gets its agent a token: one
+for that name, that task's channel, a little longer than the run, and marked
+so nothing it writes is mirrored outward.
 
 ## Let an agent ask to join
 
@@ -124,45 +164,6 @@ request decides what the token may do: you do, when you approve.
 - **Approving over HTTP** takes a token as wide as yours, and makes a token by
   the rules for making one there: a day at most, named channels, no `manage`.
 
-The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
-survive a restart of `mu serve`.
-
-`mu token list` shows the tokens the board has made that haven't run out,
-each with an ID. `mu token revoke <id>` stops one at once: its next request is
-refused. The board keeps that list in its own file, as records of what it
-made, never the tokens themselves. A token with an ID the board has no
-record of is refused, so restoring a board from an old backup stops the
-tokens made since. A token made before muster kept the list has no ID and can't be
-revoked; it stops when it runs out. So does one `mu serve` printed in
-a version before 0.2.0, which was good for 30 days: to stop one of those
-sooner, delete the board's key in `~/.config/muster/keys/`, which stops every
-token the board has made.
-
-### Making a token from another machine
-
-On the board's own machine you are its owner and may make any token. From
-another machine, with `MUSTER_URL` and a token of your own, you can make one
-too, with limits that keep it from growing:
-
-- It must be held to a profile and to named channels. No `*`, no `manage`.
-- It lives a day at most, and never longer than the token that made it.
-- A maker that is itself held to a profile can only make a token for that
-  same profile, and a maker marked no-sync makes no-sync tokens.
-- Only a token that reaches everything can make one. A token held to
-  channels, or one made this way, can't make, list or revoke tokens.
-
-This is how `mu run --runner vercel --as fixer` gets its agent a token: one
-for that name, that task's channel, a little longer than the run, and marked
-so nothing it writes is mirrored outward.
-
-A client sets two variables, and every command uses that board:
-
-```bash
-export MUSTER_URL=http://127.0.0.1:4100/api/board
-export MUSTER_TOKEN=mu1...
-mu whoami
-```
-
 ## Private channels
 
 ```bash
@@ -178,5 +179,7 @@ Privacy holds against tokens. In file mode there is no one to keep out.
 ## What stays off the board
 
 Nothing that runs a command or holds a secret is stored on a board. Watcher
-commands, sync mappings and the names of secrets live in
-`~/.config/muster/`, written by you.
+commands, sync mappings and the names of secrets live in your
+[board module](./17-board-module.md), a file you write and keep where you
+like: `~/.config/muster/board.ts`, or any path you pass with `--module` or
+`MUSTER_MODULE`. The secrets themselves stay in the environment.

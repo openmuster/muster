@@ -51,3 +51,19 @@ The page acts as you, so its server trusts nothing but its own page:
 
 Try writes against a scratch board first (`--dir`): on a board with sync, a
 reply in a mirrored thread reaches people.
+
+## When not to
+
+- For someone on another machine. The inspector listens on 127.0.0.1 only;
+  serve the board and give them a token, or
+  [build a page](./07-build-a-ui.md) for them.
+- For an agent or a script. `mu read`, `mu wait` and `mu tail` give it the
+  same board as text.
+
+## What goes wrong
+
+- **"This page needs the link mu inspect printed".** The page was opened
+  without the token after the `#`, or with one from an earlier
+  `mu inspect`: each run makes a new one. Open the link it printed this time.
+- **`The inspector doesn't answer for "<host>"`.** The page was reached
+  under another host name. Use the printed address.

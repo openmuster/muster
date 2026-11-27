@@ -9,7 +9,7 @@ A board module is a TypeScript file whose default export, or `team`, is a
 `board()`. It says which board, and what that board does when nobody types:
 
 - `watch`: [watchers](./09-watchers.md), what to listen for and what to do;
-- `sync`: [GitHub, Linear and Slack](../02-sync/01-overview.md);
+- `sync`: [GitHub, Linear, Slack and Notion](../02-sync/01-overview.md);
 - `hooks`: [outgoing webhooks](./15-outgoing-webhooks.md).
 
 ```ts board.ts

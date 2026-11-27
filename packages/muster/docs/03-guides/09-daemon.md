@@ -25,10 +25,11 @@ unit.
   into the service file, which only you can read. Without it, a sync or an
   outgoing webhook that names the secret can't start.
 - **What a restart can't fix parks it.** A module that fails to load, a
-  secret it names that isn't set, or a `watchers.json`, `sync.json` or
-  `hooks.json` left from before board modules makes the daemon say so in its
-  log and exit cleanly, and launchd leaves it stopped instead of restarting it
-  forever. Fix it and install again.
+  secret it names that isn't set, or a leftover `watchers.json`, `sync.json`
+  or `hooks.json` makes the daemon say so in its log and exit cleanly, and
+  launchd leaves it stopped instead of restarting it forever. Those three
+  files are no longer read: move what they list into the module, as
+  [Porting](../04-reference/07-porting.md) shows. Fix it and install again.
 - **A daemon that keeps crashing stops itself.** See below.
 
 Its log is in `~/.config/muster/logs/`.

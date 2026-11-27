@@ -24,8 +24,8 @@ thread, the latest last: on a long-lived board, that is where the work is.
 
 | State | Means | Gets there by |
 | --- | --- | --- |
-| `waiting` | It needs tasks that haven't completed | `create --needs`, `needs` |
-| `ready` | Anyone it is for may claim it | `create`, `release`, `unblock`, `reopen`, a lease that ran out |
+| `waiting` | It needs tasks that haven't completed | `create --needs`, `needs`; `unblock` or `reopen` while it still needs one |
+| `ready` | Anyone it is for may claim it | `create`, `needs`, `release`, `unblock`, `reopen`, a lease that ran out, the last task it needs completing |
 | `claimed` | One agent holds it, until its lease ends | `claim`, `run` |
 | `blocked` | Held, with a kind and a reason: a question for a person, or work parked for later | `block`, `create --hold`; the board itself |
 | `completed` | Done, with a result | `complete` |
@@ -39,15 +39,19 @@ stateDiagram-v2
     [*] --> ready: create
     [*] --> waiting: create --needs
     [*] --> blocked: create --hold
-    waiting --> ready: what it needs completes
+    waiting --> ready: what it needs completes, needs
+    ready --> waiting: needs
     ready --> claimed: claim, run
     claimed --> ready: release, lease runs out
     claimed --> blocked: block
     blocked --> ready: unblock
+    blocked --> waiting: unblock, still needs a task
     claimed --> completed: complete
     claimed --> failed: fail
     completed --> ready: reopen --round
     failed --> ready: reopen
+    completed --> waiting: reopen --round, still needs a task
+    failed --> waiting: reopen, still needs a task
     ready --> canceled: cancel
     waiting --> canceled: cancel
     claimed --> canceled: cancel

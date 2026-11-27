@@ -8,7 +8,8 @@ description: Call a served board over HTTP from any language. The board routes a
 Everything is under `/api/board` on the address `mu serve` prints, or
 under the base a web app mounts
 [`team.fetch`](./02-handle.md#mounting-it-in-a-web-app) at. Every
-request but a webhook carries a token:
+request carries a token, except a webhook, `joinAsk`, `joinPoll`,
+`tokenExchange` and `GET health`:
 
 ```text
 Authorization: Bearer mu1...

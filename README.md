@@ -120,7 +120,7 @@ run it: `mu daemon run`, `mu serve`, or your own process. See
 [Watchers](./packages/muster/docs/01-concepts/09-watchers.md) and
 [The board module](./packages/muster/docs/01-concepts/17-board-module.md).
 
-## Sync Slack, GitHub, and Linear
+## Sync Slack, GitHub, Linear, and Notion
 
 ```ts
 // ~/.config/muster/board.ts
@@ -217,9 +217,8 @@ writing as you. See
   | Clones `--repo` | No | Yes, with dependencies | Yes, with dependencies (pnpm, npm, yarn) | Yes, with dependencies |
   | `--push` opens a pull request | No | Yes | Yes | Yes |
   | A worker's tasks each get their own | Process | Sandbox | Container | Sandbox |
-  | Registered workflows | Yes | Yes | Yes |
-| Another round on the same pull request, and `templates/loop` | Run live on 25 Nov 2026 against a scratch board through a tunnel, Claude Code in Vercel sandboxes, on a private repository with a GitHub App. A report posted with an app's token, held for triage, triaged by an agent into a title and a spec, worked by the `card` workflow (spec, work, review) as a pull request; a reply on the card sent the work and its review back, the second round started on `mu/task-<id>` and added a commit to the same pull request, and the review applied both rounds' changes in order. The same from a Linear issue: the spec and the run's summaries as comments on it, and a comment on the issue starting the second round on its pull request. An untrusted author's report held for approval: its own `approved=yes` did nothing, the owner's started the work. Not run live: Slack, GitHub issues, screenshots relayed to a card, a refused push (`push_conflict`), a Cloudflare runner on a branch |
-  | Run for real with | Claude Code, Codex | Claude Code | Claude Code |
+  | Registered workflows | Yes | Yes | Yes | Yes |
+  | Run for real with | Claude Code, Codex | Claude Code | Claude Code | Claude Code, Codex |
 
   The full comparison is in
   [Runners](./packages/muster/docs/01-concepts/14-runners.md#what-each-runner-does).
@@ -238,14 +237,14 @@ writing as you. See
 - **Registered workflows:** a named plan of tasks and workers you register
   once, and a named person starts with `mu workflow run`. Since 0.2.1
   ([Workflows](./packages/muster/docs/01-concepts/16-workflows.md)).
-- **Sync** with GitHub, Linear and Slack, by webhook. All three have been
-  run against the live services.
+- **Sync** with GitHub, Linear, Slack and Notion, by webhook. GitHub, Linear
+  and Slack have been run against the live services.
 - **Pages:** `mu inspect`, and two apps to fork in `templates/`: a swarm
   launcher with a live view, and a factory page.
 - **A card queue** to copy from `templates/queue`: a Linear issue labelled
   `agent` gets a spec, a pull request and a review from agents in Vercel
-  sandboxes, and you answer only what they ask. Since 0.3.0; run live on
-  25 Nov 2026, by hand and from Linear ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
+  sandboxes, and you answer only what they ask. Since 0.3.0
+  ([A card queue](./packages/muster/docs/03-guides/19-a-card-queue.md)).
 - **Skills** that teach an agent the board: `mu skills install`, or
   `npx skills add openmuster/muster --skill board -g`.
 - **For agents with no shell,** the board as one MCP tool: `mu mcp`, or over
@@ -284,6 +283,8 @@ been used against the real thing, and what has not.
 | Registered workflows | Covered by tests, security-reviewed; not yet run live |
 | `mu run --ready --loop --runner cloudflare`, a container per task, and workflows on Cloudflare | Covered by tests against a stand-in Worker and GitHub; not run live |
 | `mu run --runner e2b` and `templates/e2b-runner` | Run live on 26 Nov 2026 against a scratch board through a tunnel, on E2B's Hobby plan, with Claude Code. Run: the template built; a task worked from start to end with the board's token and the model's key stored at E2B for the run and gone after, the sandbox removed and the agent's token revoked; inside, the environment held placeholders, schedules, cursors, tokens, joins and the feed were refused by the board, and no other host was reached; a private repository cloned with a GitHub App's read token and its dependencies installed; `--push` opening a pull request; a `--ready --loop` worker giving two tasks a sandbox and a pull request each; a kept snapshot made by one run and started from by the next. Checked on E2B itself: a credential is added only to the host it is for, a secret that is removed stops being added at once, and closing a sandbox's way out leaves open connections open, which is why the runner ends what an install left running. Also run, on 27 Nov 2026: a registered workflow, its work step opening a pull request and its review step after it, each in a sandbox; Codex, from a template built with `@openai/codex`: a task worked from start to end, and one in a private repository with `--push` opening a pull request. Not run: a self-hosted E2B |
+| A card queue, `templates/queue` | Run live on 25 Nov 2026, by hand and from Linear |
+| Another round on the same pull request, and `templates/loop` | Run live on 25 Nov 2026 against a scratch board through a tunnel, Claude Code in Vercel sandboxes, on a private repository with a GitHub App. A report posted with an app's token, held for triage, triaged by an agent into a title and a spec, worked by the `card` workflow (spec, work, review) as a pull request; a reply on the card sent the work and its review back, the second round started on `mu/task-<id>` and added a commit to the same pull request, and the review applied both rounds' changes in order. The same from a Linear issue: the spec and the run's summaries as comments on it, and a comment on the issue starting the second round on its pull request. An untrusted author's report held for approval: its own `approved=yes` did nothing, the owner's started the work. Not run live: Slack, GitHub issues, screenshots relayed to a card, a refused push (`push_conflict`), a Cloudflare runner on a branch |
 
 [SPEC.md](./SPEC.md) is the design and lists what is not built.
 

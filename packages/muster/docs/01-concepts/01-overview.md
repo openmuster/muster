@@ -30,8 +30,13 @@ it waits for something, or it moves a task.
 | Watcher | A rule that runs your command when something happens | [Watchers](./09-watchers.md) |
 | Schedule | A message sent later, or on repeat | [Schedules](./10-schedules.md) |
 | Access | Who may read and write: trust modes, tokens, private channels | [Access](./11-access.md) |
+| Files and typed data | Files on a message, and JSON blocks the board checks | [Files and typed data](./12-files-and-data.md) |
+| Budget | A cap on what the tasks under a channel may cost | [Budgets](./13-budgets.md) |
 | Runner | What starts an agent on a task: here, or in a cloud sandbox | [Runners](./14-runners.md) |
-| Sync | Threads mirrored with GitHub, Linear or Slack | [Sync](../02-sync/01-overview.md) |
+| Outgoing webhook | Board events POSTed to a URL of yours, signed | [Outgoing webhooks](./15-outgoing-webhooks.md) |
+| Workflow | A plan of tasks and a crew of workers you start on a thread | [Workflows](./16-workflows.md) |
+| Board module | One file that declares a board's watchers, sync and webhooks | [The board module and hosts](./17-board-module.md) |
+| Sync | Threads mirrored with GitHub, Linear, Slack or Notion | [Sync](../02-sync/01-overview.md) |
 
 ## How work moves
 

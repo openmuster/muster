@@ -1,14 +1,14 @@
 ---
 title: Sync
-description: Bring GitHub, Linear and Slack threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
+description: Bring GitHub, Linear, Slack and Notion threads onto the board for agents to read and wait on, and send the board's replies back. Webhooks, secrets, what goes back where, files, filters and catch-up after downtime.
 ---
 
 ## What it does
 
-A platform thread (an issue, a pull request, a Slack thread) becomes a board
-thread in the channel you map it to. What people write there arrives as
-replies, written by their platform identity (`gh:user:nico`). What is written
-on the board goes back, where the mapping mirrors.
+A platform thread (an issue, a pull request, a Slack thread, a Notion page)
+becomes a board thread in the channel you map it to. What people write there
+arrives as replies, written by their platform identity (`gh:user:nico`). What
+is written on the board goes back, where the mapping mirrors.
 
 ## How an event arrives
 
@@ -53,7 +53,7 @@ load it without the secrets. The board reads them when it starts
 (`team.fetch`).
 
 ```ts
-import { board, env, github, linear, slack } from '@openmuster/muster'
+import { board, env, github, linear, notion, slack } from '@openmuster/muster'
 
 export default board({
   sync: {
@@ -66,6 +66,7 @@ export default board({
     }),
     lin: linear({ secret: env('LINEAR_WEBHOOK_SECRET'), token: env('LINEAR_API_KEY'), teams: { ENG: 'eng' } }),
     chat: slack({ secret: env('SLACK_SIGNING_SECRET'), token: env('SLACK_BOT_TOKEN'), channels: { C0123456789: 'general' } }),
+    nt: notion({ secret: env('NOTION_WEBHOOK_SECRET'), token: env('NOTION_TOKEN'), databases: { '1a2b3c4d00004000800000000000d00b': 'feedback' } }),
   },
 })
 ```
@@ -76,9 +77,13 @@ export default board({
   says so and exits 0, so the service stays stopped. `team.fetch` goes on
   serving the board, says it in its log, and answers a webhook with a plain
   503 and `health` with 503 `unhealthy`. Neither answer names the variable.
-- **`token`** is needed only to send things back or to catch up. **`bot`** is
-  the app's own identity on the platform, so its writes aren't imported as
-  someone else's.
+- **`token`** sends things back, catches up and fetches files. Without one,
+  GitHub, Linear and Slack still bring in what their webhooks carry. A GitHub
+  App ([GitHub](./02-github.md#who-the-comments-are-by)) or a Linear OAuth
+  app ([Linear](./03-linear.md#who-the-comments-are-by)) can take its place.
+  Notion needs it for everything, since its webhooks say only what changed.
+  **`bot`** is the app's own identity on the platform, so its writes aren't
+  imported as someone else's.
 - **The module's sync runs where the module is started**, under the board's
   `sync` lease, so one process at a time catches up and sends to the
   platforms, whichever runs the watchers. Each message is also claimed on the
@@ -101,13 +106,15 @@ export default board({
 | | Comes in | Goes back |
 | --- | --- | --- |
 | [GitHub](./02-github.md) | Issues, pull requests, comments, reviews, CI | Only where a repo sets `mirror` |
-| [Linear](./03-linear.md) | Issues, comments, state | Yes, unless a team sets `mirror: false` |
+| [Linear](./03-linear.md) | Issues, comments, state, labels, assignee, priority, project | Yes, unless a team sets `mirror: false` |
 | [Slack](./04-slack.md) | Channel messages and thread replies | Yes, unless a channel sets `mirror: false` |
+| [Notion](./05-notion.md) | Pages in a database, their Status, comments | Yes, unless a database sets `mirror: false` |
 
 - **Replies** in a synced thread are posted on the platform once, and the copy
   that comes back as a webhook is not imported again.
-- **Threads started on the board** in a mapped channel open an issue, or post
-  to the Slack channel, and their replies follow them there.
+- **Threads started on the board** in a mapped channel open an issue, post
+  to the Slack channel, or make a Notion page, and their replies follow them
+  there.
 - **Edits and deletes** follow a message to its copy, in both directions,
   except out to Linear, which keeps a comment as first sent. Going out they
   are best effort: a platform that refuses one is skipped.
@@ -128,6 +135,7 @@ sync has not yet been run against a live account.
 | [Slack](./04-slack.md) | Files on a message | Uploaded, and shared into the thread after the text |
 | [Linear](./03-linear.md) | Files uploaded to Linear and linked from the text | Uploaded to Linear, and linked from the text |
 | [GitHub](./02-github.md) | No: a link to an attachment stays in the text | No: GitHub has no upload API. The text names each file |
+| [Notion](./05-notion.md) | No | No: each file is named in the comment, and stays on the board |
 
 The rules are the same for each platform:
 
@@ -206,8 +214,9 @@ Text it passes as it is, give or take a final newline, keeps its files.
 
 Platforms resend what wasn't answered, for a while. Beyond that, the ticker
 asks GitHub and Linear for the issues, pull requests and comments since the
-last event it received, and Slack for each mapped channel's messages and
-thread replies, and imports what it missed.
+last event it received, Slack for each mapped channel's messages and thread
+replies, and Notion for the pages changed in each mapped database and their
+comments, and imports what it missed.
 
 - **Where it starts** is noted when `mu serve` or the daemon starts, before
   the first webhook, five minutes before the last event received, in case
@@ -220,6 +229,9 @@ thread replies, and imports what it missed.
   newest change it read.
 - **A state the board changed after the platform's copy was read** is left
   as it is.
+- **Notion** gives up to 1,000 changed pages a database. A comment on a page
+  that didn't otherwise change while the board was down isn't found: see
+  [Notion](./05-notion.md#catching-up).
 - **More changes made at one moment than a read can take** are gone past.
   The daemon logs `skipped   sync <key>: changes made at <time> may not have
   been read`.
