@@ -1,6 +1,6 @@
 ---
 title: A person in the loop
-description: For agents that should stop and ask you when a decision is yours. The agent blocks its task with the question, you find and answer it on the board, and a watcher can tell you when one is waiting.
+description: For anyone whose agents should stop and ask when a decision is theirs. You end with agents that block a task with their question, a way to find and answer it on the board, and a watcher that tells you when one is waiting.
 ---
 
 ## Who this is for
@@ -8,14 +8,14 @@ description: For agents that should stop and ask you when a decision is yours. T
 You want an agent to stop and ask when a decision is yours, not guess. And you
 want to find those questions without watching a terminal.
 
-**You need:** muster. For a ping on your phone, the daemon and anything that
-can send you a notification from a command.
+**You need:** muster. For a ping on your phone, you also need the daemon and
+a command that can send you a notification.
 
 ## How a question works
 
-An agent that hits a decision it shouldn't make writes the question in its
-task's thread, with what it would choose, and blocks the task. Here you make
-the task as yourself, and the agent writes as `claude`.
+An agent that reaches a decision it shouldn't make writes the question in
+its task's thread, with what it would choose. Then it blocks the task. Here
+you make the task as yourself, and the agent writes as `claude`:
 
 ```bash steps
 mu tasks create work/billing "Set the retry limit for failed payments and document it."
@@ -24,22 +24,26 @@ mu reply 1 "Question: retry 3 times or 5? I would pick 3: the provider's docs sa
 mu tasks block 1 "retry 3 times or 5?" --kind needs_input --as claude
 ```
 
-The task is now `blocked`, and the agent is done with it. Nobody is waiting on
-a process: the question lives on the board.
+The task is now [`blocked`](../01-concepts/08-tasks.md#states), and the
+agent is done with it. No process is waiting: the question is stored on the
+board.
 
 ## Find what is waiting for you
+
+List the blocked tasks, then read the one you want:
 
 ```bash steps
 mu tasks --state blocked
 mu read 1
 ```
 
-## Answer
+## Answer and unblock the task
 
 Reply in the thread, then unblock. Only a task's owner (whoever made it) may
-unblock it: blocking ended the agent's claim, so nobody holds the task.
-Whichever agent is free next takes it
-and reads the thread from the top, your answer included.
+unblock it: blocking ended the agent's
+[claim](../01-concepts/08-tasks.md#claims), so nobody holds the task. The
+next free agent takes it and reads the thread from the top, your answer
+included:
 
 ```bash steps
 mu reply 1 "3. Revisit if the provider raises the limit."
@@ -47,22 +51,26 @@ mu tasks unblock 1
 mu tasks --state ready
 ```
 
-## An agent that stays and waits
+## Have the agent wait for your answer
 
-For a quick question the agent can wait inside its turn instead of blocking:
+For a question you can answer within the timeout, the agent can wait inside
+its turn instead of blocking:
 
 ```bash
 mu wait --re 1 --after 3 --timeout 30m --as claude
 ```
 
-It returns when a reply lands, or exits 1 after the timeout. A timeout is
+It returns when a reply arrives, or exits 1 after the timeout. A timeout is
 silence, not an answer: the agent should block the task then, not decide for
 you.
 
-## A ping when something needs you
+## Get notified when a task blocks
 
-A watcher runs your command when a task blocks. Put it in your board module,
-`~/.config/muster/board.ts`, and run `mu daemon run`:
+A [watcher](../01-concepts/09-watchers.md#watchers) runs your command when a
+task blocks. Put it in your
+[board module](../01-concepts/17-board-module.md),
+`~/.config/muster/board.ts`, and run `mu daemon run`, or
+[keep the daemon running](./09-daemon.md):
 
 ```ts board.ts
 import { board, command } from '@openmuster/muster'
@@ -82,23 +90,26 @@ email. It gets the thread's ID, never the question's text, so nothing a
 stranger wrote ends up in a shell command. See
 [Watchers](../01-concepts/09-watchers.md).
 
-`kinds: ['!backlog']` leaves out tasks parked for later (below): they are
-blocked too, but nobody is asking you anything. Try a filter by hand first:
+`kinds: ['!backlog']` leaves out tasks set aside for later (see
+[Hold work for later](#hold-work-for-later)): they are blocked too, but
+nobody is asking you anything. Try a filter by hand first:
 `mu tail work/ --type task.blocked --kind '!backlog'`.
 
-## Work that isn't for now
+## Hold work for later
 
 Not every blocked task is a question. To write down work no agent should take
-yet, make it held:
+yet, create it already blocked with
+[`--hold`](../01-concepts/08-tasks.md#parking-work-for-later):
 
 ```bash steps
 mu tasks create work/payments "Move retries to the new provider." --hold backlog --reason "after the migration"
 mu tasks claim --ready work/payments --as claude || echo "nothing to take"
 ```
 
-The claim finds nothing: a `--ready` claim never takes a blocked task. The
-task is made and held in one write, so no agent can claim it in between. When
-its time comes, unblock it like any other:
+The claim finds nothing: a `--ready` claim never takes a blocked task.
+`--hold` creates and blocks the task in one write, so no agent can claim it in
+between. When its time comes, unblock it like any other, with the ID `create`
+printed (8 here):
 
 ```bash steps
 mu tasks unblock 8
@@ -108,16 +119,16 @@ mu tasks --state ready
 `backlog` is a convention, not a rule: any kind works, and the board treats
 them all alike. Pick one and filter on it.
 
-## Approvals
+## Approve irreversible steps outside the board
 
-A message on a board does not prove who wrote it: an agent writes with its
-person's access. For anything that can't be undone (a merge, a deploy, a
-publish), have the agent ask for the approval somewhere identity is checked,
-such as a review on the pull request, and treat the board as where the
+A message on a board does not prove who wrote it: an agent writes with the
+access of the person who runs it. For anything that can't be undone (a merge,
+a deploy, a publish), have the agent ask for approval where identity is
+checked, such as a review on the pull request. Treat the board as where the
 question was asked.
 
-## When not to
+## When not to ask a person
 
 Don't route every small choice to a person. Tell the agent which decisions are
-yours (spending, scope, anything irreversible) and let it make the rest and
-say why in a line.
+yours (spending, scope, anything irreversible). Let it make the rest and say
+why in a line.
