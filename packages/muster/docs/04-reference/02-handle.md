@@ -201,7 +201,7 @@ returns the host already running. One on another handle with other watchers
 for a board this process already runs fails with `watch_started`, naming
 both: declare every watcher on one handle.
 
-`board({ hooks })` declares [outgoing webhooks](../01-concepts/15-outgoing-webhooks.md#in-a-board-module)
+`board({ hooks })` declares [outgoing webhooks](../01-concepts/15-outgoing-webhooks.md#what-one-is)
 the same way, each secret named with `env('NAME')`: `start()` reads the
 secrets and sends them, under one lease, `hooks`.
 

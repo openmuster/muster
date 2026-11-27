@@ -79,6 +79,32 @@ describe('docs and skills', () => {
     expect(broken).toEqual([])
   })
 
+  it('every link to a heading lands on a heading that exists', () => {
+    // The site slugs headings as github-slugger does: lowercase, punctuation dropped, spaces to
+    // dashes, and a repeat gets -1, -2. A renamed heading would otherwise break its links silently.
+    const anchors = (file: string): Set<string> => {
+      const seen = new Map<string, number>()
+      const out = new Set<string>()
+      const text = readFileSync(file, 'utf8').replace(/```[\s\S]*?```/g, '')
+      for (const heading of text.matchAll(/^#{1,6}\s+(.+?)\s*#*$/gm)) {
+        const base = heading[1]!.replace(/`/g, '').toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '').replace(/ /g, '-')
+        const count = seen.get(base) ?? 0
+        seen.set(base, count + 1)
+        out.add(count ? `${base}-${count}` : base)
+      }
+      return out
+    }
+    const sources = [...pages, join(root, 'README.md'), join(root, 'templates/loop/README.md')]
+    const broken: string[] = []
+    for (const page of sources) {
+      for (const link of readFileSync(page, 'utf8').matchAll(/\]\((\.{1,2}\/[^)#]+\.md)#([^)]+)\)/g)) {
+        const target = resolve(dirname(page), link[1]!)
+        if (existsSync(target) && !anchors(target).has(link[2]!)) broken.push(`${page.slice(root.length + 1)}: ${link[1]}#${link[2]}`)
+      }
+    }
+    expect(broken).toEqual([])
+  })
+
   it('the CLI reference page is what mu help prints', () => {
     expect(readFileSync(join(root, 'packages/muster/docs/04-reference/01-cli.md'), 'utf8')).toContain(HELP)
   })
