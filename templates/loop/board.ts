@@ -26,7 +26,7 @@
 // Nothing here reads what a message means. The triage agent decides what the change is; people decide who
 // is trusted and what is approved; the board says who wrote what.
 import { spawn, spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { board, env, fenced, github, linear, LINEAR_SCOPES, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from '@openmuster/muster'
 import { readProjects, type Project } from './projects.ts'
@@ -40,19 +40,25 @@ const OURS = new Set(['intake', 'triage', 'shots', 'workflows', 'loop', 'cards',
 /** An actor as the board names it: `slack:user:U123`, `local:user:ada+pino-app`. */
 const actorId = (by: By) => (by.profile ? `${by.principal}+${by.profile}` : by.principal)
 
+/** loop-projects.json as last read, by where it is and when it last changed. */
+let read: { key: string; projects: Record<string, Project> } | undefined
 
 /**
- * The projects in loop-projects.json, beside workflows.json (LOOP_PROJECTS names another file), read each time
- * they are needed. None without the file: every card is then right under `cards/`, as before projects.
+ * The projects in loop-projects.json, beside workflows.json, read again when it changes. None without the file:
+ * every card is then right under `cards/`, as before projects. A file that is wrong throws, rather than run a
+ * project's cards on the template's repository.
  */
 function projects(): Record<string, Project> {
-  let text: string
+  const path = join(dirname(workflowsPath()), 'loop-projects.json')
+  let key: string
   try {
-    text = readFileSync(process.env.LOOP_PROJECTS ?? join(dirname(workflowsPath()), 'loop-projects.json'), 'utf8')
+    const stat = statSync(path)
+    key = `${path}:${stat.mtimeMs}:${stat.size}`
   } catch {
     return {}
   }
-  return readProjects(JSON.parse(text))
+  if (read?.key !== key) read = { key, projects: readProjects(JSON.parse(readFileSync(path, 'utf8'))) }
+  return read.projects
 }
 
 /** The project a channel is under (`cards/acme/linear` is acme's), or null for a card right under `cards/`. */
@@ -87,7 +93,10 @@ export function trusted(by: By, owner: string, project: string | null): boolean 
  */
 function isCardChannel(channel: string): boolean {
   const project = projectOf(channel)
-  return new RegExp(`^cards/${project === null ? '' : `${project}/`}[a-z0-9][a-z0-9_.-]*$`).test(channel)
+  if (project !== null) return new RegExp(`^cards/${project}/[a-z0-9][a-z0-9_.-]*$`).test(channel)
+  // `cards/acme` is a project's subtree, never a source's channel.
+  const segment = /^cards\/([a-z0-9][a-z0-9_.-]*)$/.exec(channel)?.[1]
+  return segment !== undefined && !Object.hasOwn(projects(), segment)
 }
 
 /** A run's channel as the daemon names it, under its card's (`cards/acme/linear/card.acme-41`), or null. */
@@ -157,15 +166,9 @@ async function requestsOn(team: Board, card: number, owner: string, name: string
  * the triage quotes with `{on.text}`, so it can say which are related, or the same request.
  */
 async function askTriage(team: Board, card: number, owner: string, since: number): Promise<void> {
-  const project = projectOf((await team.readThread({ id: card })).message.channel)
-  const name = flow('triage', project)
+  const name = flow('triage', projectOf((await team.readThread({ id: card })).message.channel))
   if ((await requestsOn(team, card, owner, name)).some((request) => request.seq > since)) return
-  await inSlot(async () => {
-    const waiting = await full(team, owner, project)
-    if (waiting !== null) return note(team, card, `waiting: ${waiting}, so its triage starts when one ends`, `wait-triage-${since}`)
-    const list = await team.as('cards').reply({ to: card, text: await triageContext(team, card, owner), noSync: true, idempotencyKey: `loop-cards-${card}-${since}` })
-    await team.as('intake').workflowRequest({ name, on: list.id })
-  })
+  await request(team, card, owner, name, 'its triage', `${since}`, async () => (await team.as('cards').reply({ to: card, text: await triageContext(team, card, owner), noSync: true, idempotencyKey: `loop-cards-${card}-${since}` })).id)
 }
 
 /** How much a triage is shown besides the report: a run quotes a message up to 2,000 characters. */
@@ -197,12 +200,15 @@ async function triageContext(team: Board, card: number, owner: string): Promise<
  * Whether anyone can read a card channel where its cards come from (a public repository's issues): a triage of
  * a card from one is shown only cards from these, since what it writes is mirrored there and could repeat another
  * card's words. `cards/github` by default; LOOP_PUBLIC (comma separated) replaces the list. On a project's cards,
- * its own sources by name (`public`, `["github"]` by default).
+ * its own sources by name (`public`), or the same sources LOOP_PUBLIC names.
  */
 function isPublic(channel: string): boolean {
   const project = projectOf(channel)
-  if (project === null) return (process.env.LOOP_PUBLIC ?? 'cards/github').split(',').map((each) => each.trim()).includes(channel)
-  return (projects()[project]?.public ?? ['github']).some((source) => channel === `cards/${project}/${source}`)
+  const open = (process.env.LOOP_PUBLIC ?? 'cards/github').split(',').map((each) => each.trim())
+  if (project === null) return open.includes(channel)
+  // A project's sources by name, or the ones LOOP_PUBLIC names under `cards/`: `cards/github` is `cards/acme/github`.
+  const sources = projects()[project]?.public ?? open.map((each) => each.replace(/^cards\//, ''))
+  return sources.some((source) => channel === `cards/${project}/${source}`)
 }
 
 /** The other cards of the same project, newest first, after a heading: `#id  stage  first line`. Canceled ones aren't. */
@@ -224,14 +230,9 @@ async function otherCards(team: Board, card: number, owner: string): Promise<str
 
 /** Asks for the card's planning run, unless one was asked for after `since`. */
 async function askPlan(team: Board, card: number, owner: string, since: number): Promise<void> {
-  const project = projectOf((await team.readThread({ id: card })).message.channel)
-  const name = flow('planning', project)
+  const name = flow('planning', projectOf((await team.readThread({ id: card })).message.channel))
   if ((await requestsOn(team, card, owner, name)).some((request) => request.seq > since)) return
-  await inSlot(async () => {
-    const waiting = await full(team, owner, project)
-    if (waiting !== null) return note(team, card, `waiting: ${waiting}, so its planning starts when one ends`, `wait-plan-${since}`)
-    await team.as('intake').workflowRequest({ name, on: card })
-  })
+  await request(team, card, owner, name, 'its planning', `${since}`, async () => card)
 }
 
 /**
@@ -248,19 +249,15 @@ async function nextPlanRound(team: Board, cardId: number): Promise<boolean> {
   const project = projectOf(card.channel)
   const waiting = takenSince(replies, owner, run.request, project)
   if (waiting.length === 0) return false
-  return inSlot(async () => {
-  const busy = await full(team, owner, project)
-  if (busy !== null) return note(team, card.id, `waiting: ${busy}, so the next planning round starts when one ends`, `wait-plan-round-${waiting.at(-1)!.id}`).then(() => false)
-  const round = run.plan!.rounds + 2
+  const round = run.plan.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
   const last = asked.at(-1)!.id
-  await team.as('intake').reply({ to: run.plan!.id, text: `Round ${round}: what was said on card #${card.id} since your last answer. Answer it, and give the card as it stands now.\n\n${quoted}`, idempotencyKey: `loop-ask-${run.plan!.id}-${last}` })
-  const now = (await team.readThread({ id: run.plan!.id })).task
-  if (now?.state === 'completed' || now?.state === 'failed') await asOwner(team).taskReopen({ id: run.plan!.id, round: true }).catch(() => {})
+  await team.as('intake').reply({ to: run.plan.id, text: `Round ${round}: what was said on card #${card.id} since your last answer. Answer it, and give the card as it stands now.\n\n${quoted}`, idempotencyKey: `loop-ask-${run.plan.id}-${last}` })
+  const now = (await team.readThread({ id: run.plan.id })).task
+  if (now?.state === 'completed' || now?.state === 'failed') await asOwner(team).taskReopen({ id: run.plan.id, round: true }).catch(() => {})
   startWorker(run, owner, flow('planning', project))
   await team.as('intake').reply({ to: card.id, text: `planning round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-plan-round-${card.id}-${last}` })
   return true
-  })
 }
 
 /**
@@ -313,17 +310,13 @@ async function relateInLinear(team: Board, card: number, others: Message[]): Pro
  * per spec, then the card held as working, so a watcher tried again half way finishes what it began.
  */
 async function startWork(team: Board, card: number, spec: number, owner: string): Promise<void> {
-  const project = projectOf((await team.readThread({ id: card })).message.channel)
-  const name = flow('card', project)
+  const { message, task } = await team.readThread({ id: card })
+  const name = flow('card', projectOf(message.channel))
   if (!(await requestsOn(team, card, owner, name)).some((request) => request.on === spec)) {
-    const waiting = await inSlot(async () => {
-      const busy = await full(team, owner, project)
-      if (busy === null) await team.as('intake').workflowRequest({ name, on: spec })
-      return busy
-    })
+    const waiting = await request(team, card, owner, name, 'the change', `${spec}`, async () => spec)
     if (waiting !== null) {
-      await rehold(team, card, 'queued', `waiting: ${waiting}`)
-      return note(team, card, `waiting: ${waiting}, so the change starts when one ends`, `wait-card-${spec}`)
+      if (task?.hold?.kind !== 'queued') await rehold(team, card, 'queued', `waiting: ${waiting}`)
+      return
     }
   }
   await rehold(team, card, 'working', 'the card workflow is making the change')
@@ -592,52 +585,67 @@ function notify(line: string, channel: string): void {
   spawn(bin!, [...args, project === null ? line : `${project}: ${line}`], { stdio: 'ignore', detached: true }).unref()
 }
 
-/**
- * Why a new run on a project's card would wait now (its `maxRuns`, or LOOP_MAX_RUNS across every run, reached),
- * or null when it may start. With neither set, nothing is counted and every run starts at once.
- */
-async function full(team: Board, owner: string, project: string | null): Promise<string | null> {
-  const most = project === null ? undefined : projects()[project]?.maxRuns
+/** The caps set: each project's `maxRuns`, and LOOP_MAX_RUNS for every run of the loop. Null with neither. */
+function caps(): { all: number | null; of: Record<string, number> } | null {
   const all = Number.parseInt(process.env.LOOP_MAX_RUNS ?? '', 10)
-  const runs = (n: number) => `${n} run${n === 1 ? '' : 's'}`
-  if (most !== undefined) {
-    const going = await runsGoing(team, owner, project)
-    if (going >= most) return `${runs(going)} of ${project} ${going === 1 ? 'is' : 'are'} going`
-  }
-  if (all >= 1) {
-    const going = await runsGoing(team, owner)
-    if (going >= all) return `${runs(going)} ${going === 1 ? 'is' : 'are'} going on the board`
-  }
-  return null
+  const of = Object.fromEntries(Object.entries(projects()).flatMap(([name, project]) => (project.maxRuns === undefined ? [] : [[name, project.maxRuns]])))
+  return all >= 1 || Object.keys(of).length > 0 ? { all: all >= 1 ? all : null, of } : null
 }
 
 /**
- * The loop's runs going, from the board: asked for and not yet made by the daemon (after its place among
- * requests), or with a task ready or being worked. A run waiting on a person, or ended, takes no place. Only
- * one project's (null: the cards right under `cards/`) when `project` is given.
+ * The loop's runs going, by project (`''` for the cards right under `cards/`): asked for and not yet made by the
+ * daemon (after its place among requests), or with a task ready or being worked. A run waiting on a person, or
+ * ended, takes no place.
  */
-async function runsGoing(team: Board, owner: string, project?: string | null): Promise<number> {
-  const counts = (channel: string) => project === undefined || projectOf(channel) === project
-  const going = new Set<string>()
+async function runsGoing(team: Board, owner: string): Promise<Map<string, number>> {
+  const going = new Map<string, string>()
   for (const state of ['ready', 'claimed'] as const) {
     for (const task of (await team.taskList({ channel: 'cards/', state, limit: 1000 })).tasks) {
-      if (task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null && counts(task.channel)) going.add(task.channel)
+      if (task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null) going.set(task.channel, projectOf(task.channel) ?? '')
     }
   }
   for (let after = (await asOwner(team).cursorGet('workflow:requests')) ?? 0; ; ) {
     const page = await team.events({ after, filter: { types: ['workflow.requested'] }, limit: 200 })
-    for (const event of page.events) if (event.by.principal === owner && event.by.profile === 'intake' && event.channel !== null && counts(event.channel)) going.add(`#${event.seq}`)
+    for (const event of page.events) if (event.by.principal === owner && event.by.profile === 'intake' && event.channel !== null) going.set(`#${event.seq}`, projectOf(event.channel) ?? '')
     if (page.events.length < 200 || page.cursor <= after) break
     after = page.cursor
   }
-  return going.size
+  const counts = new Map<string, number>()
+  for (const project of going.values()) counts.set(project, (counts.get(project) ?? 0) + 1)
+  return counts
 }
 
-/** Checking for a free place and taking it, one at a time here: two watchers at once can't both take the last one. */
-let slots: Promise<unknown> = Promise.resolve()
-function inSlot<T>(start: () => Promise<T>): Promise<T> {
-  const next = slots.then(start, start)
-  slots = next.catch(() => {})
+/** Why a new run of a project (null: the cards right under `cards/`) would wait now, or null when it may start. */
+async function busy(team: Board, owner: string, project: string | null): Promise<string | null> {
+  const set = caps()
+  if (set === null) return null
+  const going = await runsGoing(team, owner)
+  const runs = (n: number, of = '') => `${n} run${n === 1 ? '' : 's'}${of} ${n === 1 ? 'is' : 'are'} going`
+  const mine = going.get(project ?? '') ?? 0
+  if (project !== null && set.of[project] !== undefined && mine >= set.of[project]) return runs(mine, ` of ${project}`)
+  const all = [...going.values()].reduce((sum, each) => sum + each, 0)
+  return set.all !== null && all >= set.all ? `${runs(all)} on the board` : null
+}
+
+/** Checking for a place and asking, one at a time here: two watchers at once can't both take the last place. */
+let asking: Promise<unknown> = Promise.resolve()
+
+/**
+ * Asks for the `name` workflow on the message `on()` gives, unless a cap is reached: then the card says once why
+ * `what` waits (`key` tells the times apart), and this returns that reason. A run that ends starts it.
+ */
+function request(team: Board, card: number, owner: string, name: string, what: string, key: string, on: () => Promise<number>): Promise<string | null> {
+  const ask = async () => {
+    const waiting = await busy(team, owner, projectOf((await team.readThread({ id: card })).message.channel))
+    if (waiting !== null) {
+      await note(team, card, `waiting: ${waiting}, so ${what} starts when one ends`, `wait-${name}-${key}`)
+      return waiting
+    }
+    await team.as('intake').workflowRequest({ name, on: await on() })
+    return null
+  }
+  const next = asking.then(ask, ask)
+  asking = next.catch(() => {})
   return next
 }
 
@@ -787,13 +795,10 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
   const project = projectOf(card.channel)
   const waiting = takenSince(replies, owner, run.request, project)
   if (waiting.length === 0) return false
-  return inSlot(async () => {
-  const busy = await full(team, owner, project)
-  if (busy !== null) return note(team, card.id, `waiting: ${busy}, so the next round starts when one ends`, `wait-round-${waiting.at(-1)!.id}`).then(() => false)
-  const round = run.work!.rounds + 2
+  const round = run.work.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
   const last = asked.at(-1)!.id
-  await team.as('intake').reply({ to: run.work!.id, text: `Round ${round}: what was asked on card #${card.id} since the last round. Do this on top of the work on your branch.\n\n${quoted}`.slice(0, 10_000), idempotencyKey: `loop-ask-${run.work!.id}-${last}` })
+  await team.as('intake').reply({ to: run.work.id, text: `Round ${round}: what was asked on card #${card.id} since the last round. Do this on top of the work on your branch.\n\n${quoted}`.slice(0, 10_000), idempotencyKey: `loop-ask-${run.work.id}-${last}` })
   // The work first: a review reopened first would be ready before the work it reviews. Each only while it is
   // still ended, so two watchers here at once, or a retry, send it back once.
   const owned = asOwner(team)
@@ -810,26 +815,25 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
     if (now?.state === 'completed' || now?.state === 'failed') await owned.taskReopen({ id, round: true }).catch(() => {})
     else if (now?.state === 'blocked' && (now.hold?.kind ?? '').startsWith('push_')) await owned.taskUnblock({ id }).catch(() => {})
   }
-  await again(run.work!.id)
-  await again(run.review!.id)
+  await again(run.work.id)
+  await again(run.review.id)
   startWorker(run, owner, flow('card', project))
   // Last: the marker says these comments were taken, so a retry before it takes them again rather than losing them.
   await team.as('intake').reply({ to: card.id, text: `round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-round-${card.id}-${last}` })
   return true
-  })
 }
 
 /**
- * Starts what waited for a place, oldest card first, as far as places allow: a change held `queued`, a triage
- * or a planning never asked for, and a round. Each checks for a place itself, so one that still has none says
- * so once and waits for the next run to end.
+ * Starts what waited for a place, oldest card first: a change held `queued`, and a triage or a planning not yet
+ * asked for. Each checks for a place itself, so one that still has none waits for the next run to end.
  */
 async function startWaiting(team: Board): Promise<void> {
   const owner = await ownerOf(team)
-  const waiting: { id: number; channel: string; state: string; hold: string }[] = []
+  const waiting: { id: number; channel: string; hold: string }[] = []
   for (const path of (await team.channels()).channels.map((each) => each.path).filter(isCardChannel)) {
-    for (const task of (await team.taskList({ channel: path, state: 'all', limit: 1000 })).tasks) {
-      if (task.channel === path && task.owner.principal === owner && task.owner.profile === 'intake' && (task.state === 'blocked' || task.state === 'completed')) waiting.push({ id: task.id, channel: path, state: task.state, hold: task.hold?.kind ?? '' })
+    for (const task of (await team.taskList({ channel: path, state: 'blocked', limit: 1000 })).tasks) {
+      const hold = task.hold?.kind ?? ''
+      if (task.channel === path && task.owner.principal === owner && task.owner.profile === 'intake' && ['queued', 'triage', 'planning'].includes(hold)) waiting.push({ id: task.id, channel: path, hold })
     }
   }
   for (const card of waiting.sort((a, b) => a.id - b.id)) {
@@ -837,8 +841,7 @@ async function startWaiting(team: Board): Promise<void> {
       const spec = await latestSpec(team, card.id, owner)
       if (spec !== null) await startWork(team, card.id, spec.id, owner)
     } else if (card.hold === 'triage') await askTriage(team, card.id, owner, await heldSince(team, card.id, 'triage'))
-    else if (card.hold === 'planning' && (await requestsOn(team, card.id, owner, flow('planning', projectOf(card.channel)))).length === 0) await askPlan(team, card.id, owner, 0)
-    else if (!(await nextPlanRound(team, card.id))) await nextRound(team, card.id)
+    else if ((await requestsOn(team, card.id, owner, flow('planning', projectOf(card.channel)))).length === 0) await askPlan(team, card.id, owner, 0)
   }
 }
 
@@ -1103,8 +1106,7 @@ export const watch = {
     as: 'intake',
     run: async ({ event, board: team }) => {
       if (runOf(event.task!.channel) === null) return
-      if (!(Number.parseInt(process.env.LOOP_MAX_RUNS ?? '', 10) >= 1) && !Object.values(projects()).some((project) => project.maxRuns !== undefined)) return
-      await startWaiting(team)
+      if (caps() !== null) await startWaiting(team)
     },
   },
 } satisfies Record<string, Watch>

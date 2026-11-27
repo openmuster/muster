@@ -7,7 +7,8 @@
 //   node templates/loop/projects.ts ~/.config/muster/loop-projects.json > ~/.config/muster/workflows.json
 //
 // then restart `mu serve`. With no projects, it writes the template's workflows as they are.
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 /**
  * A project: a repository whose cards are in `cards/<project>/`, one channel per source as the board module's
@@ -52,20 +53,24 @@ export function projectWorkflows(base: Workflow[], projects: Record<string, Proj
   const out = [...base]
   for (const [name, project] of Object.entries(projects)) {
     for (const workflow of base) {
-      const { template: _, model: __, ...workers } = workflow.workers
+      const runner = project.runner ?? workflow.workers.runner
+      // The template's own settings stand unless the project names its own; a template only where E2B makes the sandbox.
+      const { template, ...workers } = workflow.workers
+      const kept = runner === 'e2b' && template !== undefined ? { template } : {}
       out.push({
         ...workflow,
         name: `${workflow.name}.${name}`,
         // The daemon refuses a request for it on any other project's cards.
         channels: [`cards/${name}/`],
-        workers: { ...workers, repo: project.repo, ...(project.runner ? { runner: project.runner } : {}), ...(project.template ? { template: project.template } : {}), ...(project.model ? { model: project.model } : {}) },
+        workers: { ...workers, ...kept, repo: project.repo, ...(project.runner ? { runner: project.runner } : {}), ...(project.template ? { template: project.template } : {}), ...(project.model ? { model: project.model } : {}) },
       })
     }
   }
   return out
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a script, however its path was written: a symlink or a space in it still counts.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const [projectsPath, basePath = new URL('./workflows.json', import.meta.url).pathname] = process.argv.slice(2)
   const projects = projectsPath ? readProjects(JSON.parse(readFileSync(projectsPath, 'utf8'))) : {}
   const base = (JSON.parse(readFileSync(basePath, 'utf8')) as { workflows: Workflow[] }).workflows

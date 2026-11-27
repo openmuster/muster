@@ -233,6 +233,11 @@ describe('templates/loop', () => {
       expect(card.workers).toMatchObject({ repo: 'https://github.com/acme/web', runner: 'e2b', template: 'acme-go', model: 'claude-opus-5-5', as: 'agent' })
       // The prompts are the template's, written once.
       expect(card.steps).toEqual(base.find((each: { name: string }) => each.name === 'card').steps)
+      // A setting the template's workflow has stands unless the project names its own; a template only on e2b.
+      const modelled = base.map((each: { workers: object }) => ({ ...each, workers: { ...each.workers, model: 'claude-sonnet-5-5', template: 'base-tpl' } }))
+      const plain = projectWorkflows(modelled, readProjects({ projects: { acme: ACME } })).find((each: { name: string }) => each.name === 'card.acme')!
+      expect(plain.workers).toMatchObject({ model: 'claude-sonnet-5-5', runner: 'vercel' })
+      expect(plain.workers).not.toHaveProperty('template')
       // With none, the template's as they are.
       expect(projectWorkflows(base, readProjects({}))).toEqual(base)
       // A source's own channel name, a dot, or a setting it doesn't know is refused, not guessed at.
@@ -314,19 +319,59 @@ describe('templates/loop', () => {
       expect(await heard('needs your approval')).toContain(`acme: card #${first.id} needs your approval: mu read ${first.id}, then mu label ${first.id} approved=yes`)
     })
 
-    it('LOOP_MAX_RUNS caps the runs going across every project and the cards right under cards/', async () => {
+    it('LOOP_MAX_RUNS caps the runs going across every project and the cards right under cards/, and needs no projects', async () => {
       process.env.LOOP_MAX_RUNS = '1'
-      const { team, tick, run, complete } = await setup({ projects: { acme: ACME } })
-      const first = await team.post({ channel: 'cards/acme/linear', text: 'first' })
+      const { team, as, tick, run, complete } = await setup()
+      const first = await as('slack:user:U9').post({ channel: 'cards/slack', text: 'first' })
       await tick()
-      const legacy = await team.post({ channel: 'cards/app', text: 'second' })
+      const second = await team.post({ channel: 'cards/app', text: 'second' })
       await tick()
-      expect(await run(legacy.id, 'triage')).toBeNull()
+      expect(await run(second.id, 'triage')).toBeNull()
+      expect((await team.readThread({ id: second.id })).replies.map((reply) => reply.text).join('\n')).toMatch(/waiting: 1 run is going on the board/)
+      // The first triage ends at an approval, with no change after it: the second starts.
+      await complete((await run(first.id, 'triage'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect(await run(second.id, 'triage')).not.toBeNull()
+    })
+
+    it("a change past the cap is held queued, says so once, and starts on its spec when a run ends", async () => {
+      process.env.LOOP_MAX_RUNS = '1'
+      const { team, as, tick, run, complete, card } = await setup({ projects: { acme: ACME } })
+      // Both from someone not trusted: each triage ends at an approval, with no change after it.
+      const first = await as('slack:user:U9').post({ channel: 'cards/acme/slack', text: 'first' })
+      await tick()
       await complete((await run(first.id, 'triage.acme'))!.triage!.id, SPEC)
       await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'approval' } })
+      const second = await as('slack:user:U9').post({ channel: 'cards/acme/app', text: 'second' })
       await tick()
-      // The card run that followed the triage holds the one slot now, so the app's card still waits.
-      expect(await run(legacy.id, 'triage')).toBeNull()
+      expect(await run(second.id, 'triage.acme')).not.toBeNull()
+      // The second's triage has the one place: the first, approved now, waits, held queued, and says so once.
+      await team.label({ id: first.id, set: { approved: 'yes' } })
+      await tick()
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'queued' } })
+      expect(await run(first.id, 'card.acme')).toBeNull()
+      const waits = async () => (await team.readThread({ id: first.id })).replies.filter((reply) => reply.text.startsWith('waiting:')).length
+      expect(await waits()).toBe(1)
+      // The second's triage ends: the place is free, and the queued change starts on the first's spec.
+      await complete((await run(second.id, 'triage.acme'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'working' } })
+      expect(await run(first.id, 'card.acme')).not.toBeNull()
+      expect(await waits()).toBe(1)
+    })
+
+    it("a project's public sources default to the ones LOOP_PUBLIC names, under its own channel", async () => {
+      process.env.LOOP_PUBLIC = 'cards/github,cards/forum'
+      const { team, tick, run } = await setup({ projects: { acme: ACME } })
+      const secret = await team.post({ channel: 'cards/acme/linear', text: 'private plan' })
+      await tick()
+      const report = await team.post({ channel: 'cards/acme/forum', text: 'from the public forum' })
+      await tick()
+      expect((await run(report.id, 'triage.acme'))!.triage!.text).not.toContain(`#${secret.id} `)
     })
   })
 
