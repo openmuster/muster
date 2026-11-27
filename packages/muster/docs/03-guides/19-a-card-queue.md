@@ -252,10 +252,7 @@ was done again keeps the old quote.
 - **`answer.sh` says `isn't yours to change`.** It ran with a profile: unset
   `MUSTER_PROFILE`.
 
-## Not tried live
+## Status
 
-The template is covered by tests: a Linear issue starting a run through the
-module's watchers, the real scripts and the daemon's workflow tick; the
-module run by `mu daemon run --module`; and `mu serve --module` taking
-Linear's webhook and commenting back on the issue, with workers and Linear's
-API as stand-ins. It has not been run against Linear, Vercel and GitHub together.
+Experimental: not yet run end to end against Linear, Vercel and GitHub
+together.

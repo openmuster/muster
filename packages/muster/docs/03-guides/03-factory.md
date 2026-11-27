@@ -62,10 +62,6 @@ agent's replies posted as comments, give the repository `mirror: true` and
 the sync a `token: env('GITHUB_TOKEN')`: see [GitHub](../02-sync/02-github.md)
 and [Sync](../02-sync/01-overview.md#in-a-board-module).
 
-> [!NOTE]
-> GitHub, Linear and Slack sync have all been run against the live services:
-> see [Sync](../02-sync/01-overview.md).
-
 The page lists what is set up and what isn't, with the command for each, who
 holds each role (`tick` for the daemon, `sync` and `watch:factory` for the
 host), and the recent threads. `/board` shows every thread, where you read

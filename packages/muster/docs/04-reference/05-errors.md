@@ -138,7 +138,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `config_retired` | A `watchers.json`, `sync.json` or `hooks.json` is left in `~/.config/muster/` from before board modules. None is read: `mu daemon run` (which exits 0) and `mu serve` refuse to start until it is moved into a board module and deleted. The hint shows a module that does what it did; [Porting](./07-porting.md) has each field |
 | `missing_env` | `daemon install --env` named a variable that is not set |
 | `invalid_env` | `env()` was given something that isn't an environment variable's name |
-| `invalid_sync` | A sync given to `board({ sync })` is wrong: a key that isn't a sync name, a value that isn't `github()`, `linear()` or `slack()`, a missing `secret`, a bad `filter` or `filesPerDayMB`, or a `sync` beside a `backend` |
+| `invalid_sync` | A sync given to `board({ sync })` is wrong: a key that isn't a sync name, a value that isn't `github()`, `linear()`, `slack()` or `notion()`, a missing `secret`, a bad `filter` or `filesPerDayMB`, or a `sync` beside a `backend` |
 | `invalid_hook` | A hook given to `board({ hooks })` is wrong: a bad name, a key it doesn't take, a URL that isn't https, a secret not named with `env()`, a filter that isn't one, or a name a watcher in the module has. The message names the hook |
 | `invalid_watch` | A watcher given to `board({ watch })` is wrong: a bad name, a key it doesn't take, a filter that isn't one. The message names the watcher |
 | `watch_aborted` | A watcher's run wrote after its `timeout`, or after it was aborted. Its writes are refused, and the try counted as failed |
@@ -213,7 +213,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `module_failed` | The board module didn't load: Node's message, and what to change in the module. `mu daemon run` says so and exits 0, so a service manager leaves it stopped; `mu serve` serves the board without it |
 | `module_not_a_board` | The board module exports no board: `export default board({ ... })`, or `export const team` |
 | `module_two_copies` | The board module's board was made by a second copy of muster: give the project one |
-| `module_version_skew` | The first `node_modules/muster` above the board module can't run a module: update it there, or remove it. The message names where it is |
+| `module_version_skew` | The first muster in a `node_modules` above the board module can't run a module: update it there, or remove it. The message names where it is |
 | `module_and_board` | `--dir`, `--board` or `--url` beside a module named with `--module` or `MUSTER_MODULE`, which names its own board. The default `~/.config/muster/board.ts` is left out instead whenever a flag or `MUSTER_DIR`, `MUSTER_BOARD` or `MUSTER_URL` names the board |
 | `module_and_profile` | `--as` or `MUSTER_PROFILE` beside a board module: the module says who its board and watchers write as |
 | `module_and_no_module` | `--module` and `--no-module` together |

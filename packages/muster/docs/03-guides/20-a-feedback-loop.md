@@ -43,7 +43,7 @@ flowchart LR
   repository, changes nothing, and completes with a title on the first line,
   then what to change and how to check it. The spec goes on the card as a
   reply, written as `triage`, only when the triage run's own worker completed
-  it (`workflowResult`).
+  it.
 - **The card run quotes that reply** with `{on.text}`, fenced as content,
   not instructions. The triage step alone reads the report.
 
@@ -51,7 +51,7 @@ flowchart LR
 
 ```bash
 cp templates/loop/workflows.json ~/.config/muster/
-export LOOP_TRUSTED=slack:user:U0123,gh:user:octocat
+export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a9c1e-4b7d-4e0a-9a51-7c2d8e6b1f03
 mu serve --module "$PWD/templates/loop/board.ts" --allow-host board.example.com
 ```
 

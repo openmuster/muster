@@ -210,8 +210,8 @@ is told apart from anything a person writes.
   `mu run` would: `MUSTER_URL` or `MUSTER_SANDBOX_URL`, and for `vercel` the
   Vercel token, team and project, for `cloudflare` `MUSTER_CF_WORKER` and
   `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`, and with `push` the GitHub App's. Set them where the
-  daemon starts; `mu daemon install` takes each with `--env <name>`. Cloudflare workers are covered by tests only; they have not
-  been run live.
+  daemon starts; `mu daemon install` takes each with `--env <name>`. Experimental: Cloudflare workers have not yet
+  run against a live Cloudflare account.
 - **Each request is one run.** Run it twice and the second run is a second
   set of tasks and workers. A `mu workflow run` you retried after a timeout
   may have started one already, so read the thread before you send it again.
@@ -323,7 +323,7 @@ A `pr` is shown only for a pull request URL on github.com.
   [watcher](./09-watchers.md).
 - **To cancel a run.** There is no `mu workflow cancel`. Cancel its tasks with
   `mu tasks cancel`; the workers stop on their own once nothing is ready.
-- **From Slack.** There is no slash command yet. Use `mu workflow run`, or ask
+- **From Slack.** There is no Slack slash command. Use `mu workflow run`, or ask
   from code.
 
 ## What goes wrong

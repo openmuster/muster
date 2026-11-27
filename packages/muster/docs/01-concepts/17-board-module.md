@@ -51,8 +51,8 @@ watcher doesn't take. The error names it.
 so `--dir`, `--board`, `--url`, `--as` and `MUSTER_PROFILE` don't go with it.
 
 It needs no project. A bare `~/.config/muster/board.ts`, with no
-`package.json` and no `node_modules`, is the shell-only and container case:
-`mu` answers its `import '@openmuster/muster'` with its own copy. A module in a project
+`package.json` and no `node_modules`, works too, as on a machine with only a
+shell or in a container: `mu` answers its `import '@openmuster/muster'` with its own copy. A module in a project
 that installs muster runs on that project's install: `mu` becomes that
 install's `mu`, so a process holds one copy of muster. It is refused when the
 project's muster is too old to run a module, naming both versions.
@@ -106,8 +106,10 @@ waits for an answer, or sends a signed ping to a hook.
 - **A module that fails to load** stops `mu daemon run` with exit 0, so a
   service manager leaves it stopped, and `mu serve` serves the board without
   it. Both say why, loudly.
-- **A variable a sync or a hook names that isn't set** stops `start()`, by
-  name: `mu daemon run` exits 0, `mu serve` exits 1.
+- **A variable a sync names that isn't set** stops both, by name:
+  `mu daemon run` exits 0, and `mu serve` exits 1 before it listens. One only
+  a hook names stops `start()`: `mu daemon run` exits 0, and `mu serve` says
+  so and serves the board without the module's watchers and hooks.
 - **A watcher or hook named like a workflow** in `workflows.json` is refused:
   one name is one thing.
 - **A `watchers.json`, `sync.json` or `hooks.json` left from before** makes

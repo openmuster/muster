@@ -28,7 +28,7 @@ release you run doesn't have yet. `mu skills install` always matches the `mu`
 it came with.
 
 Where an agent keeps its standing instructions differs by vendor. These are
-the usual places at the time of writing; check your agent's own docs.
+the usual places. Check your agent's own docs.
 
 | Agent | Where the board instructions go |
 | --- | --- |

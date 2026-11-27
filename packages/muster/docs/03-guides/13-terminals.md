@@ -141,10 +141,9 @@ pane that holds the agent. Its commands differ by version, so read
 rules above.
 
 > [!NOTE]
-> The two tmux scripts were run against a test pane: the idle check read the
-> prompt, and the pointer was typed and submitted. They were not run under
-> the daemon with a real agent. The Herdr section is written from Herdr's own
-> documentation, and the Rex section is general: neither was run end to end.
+> Experimental: test the tmux idle check against your agent's own prompt
+> before you rely on it. The Herdr and Rex recipes follow those tools' docs
+> and haven't been run end to end.
 
 ## When not to
 

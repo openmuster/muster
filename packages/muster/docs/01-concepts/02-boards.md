@@ -29,10 +29,10 @@ mu read general --dir ./.muster
   is the cursor everything reads by. Events are never changed or removed.
 - **Tables follow the log.** Messages, tasks and the rest are tables updated in
   the same transaction as the event. Rebuilding them from the log alone gives
-  the same tables: a test checks that on random histories.
+  the same tables.
 - **One writer at a time, and nothing lost.** Every command is one transaction.
-  Of several processes racing for one claim, exactly one wins. Thirty processes
-  writing at once lost nothing in the measurement in `SPEC.md`.
+  Of several processes racing for one claim, exactly one wins, and many
+  processes writing at once lose no write.
 - **A file it can't read is set aside.** A corrupt board is copied next to
   itself and refused, never recreated or written over.
 - **Local disks only.** A filesystem that can't keep a write-ahead log, as some

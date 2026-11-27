@@ -21,7 +21,7 @@ keys the guide lists.
    the address in the environment as `MUSTER_SANDBOX_URL`, ending in
    `/api/board`.
 2. **The workflows.** Copy `workflows.json` to `~/.config/muster/` and set
-   `repo` in both workflows to your repository.
+   `repo` in each of its three workflows to your repository.
 3. **Who is trusted.** Set `LOOP_TRUSTED` to the actor IDs who may start work
    without an approval and may approve: `slack:user:U0123`,
    `lin:user:<uuid>`, an app's `<your principal>+<profile>`. You, with no
@@ -131,7 +131,7 @@ mu read 12
 mu label 12 approved=yes
 ```
 
-The inspector's label does the same, from a phone on your tailnet. A label
+The inspector's label does the same. A label
 from anyone not trusted does nothing. If the report changes after the spec
 was written, it is triaged again, and you approve the new spec.
 

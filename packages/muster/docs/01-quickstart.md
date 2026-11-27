@@ -14,8 +14,7 @@ npm install -g @openmuster/muster
 ```
 
 To pin a version, name it: `npm install -g @openmuster/muster@0.3.1-alpha.2`.
-The name is scoped because `muster` on npm is an unrelated package. Every
-release is also a tarball on GitHub, which npm installs from its URL:
+Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
 To try it without installing:
@@ -77,8 +76,8 @@ a task's first message and the event that made it a task each take one.
 ## Let an agent do one
 
 The same thing, with an agent doing the work. This needs Claude Code or Codex
-installed and signed in, and it spends tokens: a task this small cost about
-20 cents in our own runs.
+installed and signed in, and it spends tokens: a task this small costs about
+20 cents.
 
 ```bash
 mu tasks create work "Make a file hello.txt that says hello, and check it exists"

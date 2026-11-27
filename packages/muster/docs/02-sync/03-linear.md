@@ -60,11 +60,8 @@ export default board({
 - Catch-up and files use the app as well, so no `token` is needed. With both
   set, the app is used.
 
-> [!NOTE]
-> Run against a live workspace on 26 Nov 2026: a board reply arrived on the
-> issue as a comment by the application, under the application's name. A token
-> running out after thirty days, and one ended early, are covered by tests
-> against a stand-in for Linear's API only.
+Not yet seen against a live workspace: a token renewed after thirty days,
+or one Linear ends early.
 
 ## Show an issue being worked on
 
@@ -110,13 +107,8 @@ session events** and nothing else, and name the signing secret Linear shows
 there as `appSecret`. The board checks what arrives with it and answers;
 nothing in it is imported. The token needs no more than `read` and `write`.
 
-> [!NOTE]
-> The calls were run against a live workspace on 26 Nov 2026: a session
-> opened on an issue nobody had mentioned the application in, notes, a
-> response that completed it, and a note that made a completed session active
-> again. The board doing it by itself is covered by tests against a stand-in
-> for Linear's API. A person writing in the session's thread is not handled:
-> it reaches the application's webhook, which the board answers and drops.
+A person writing in the session's thread is not imported: it reaches the
+application's webhook, which the board answers and drops.
 
 `bot` is optional: the user ID whose comments are never imported. Set it only
 when the token acts as a user of its own, such as an OAuth app that posts as
@@ -225,16 +217,15 @@ user named in `bot`.
   Linear's answer; an upload URL anywhere else is refused and the file named.
 
 A personal API key with read and write access fetches and uploads files.
-What an OAuth app's scopes need for files has not been checked.
+Experimental: files through an OAuth app have not been checked against a
+live workspace.
 
-Linear's docs don't say whether `uploads.linear.app` answers with the file
-or redirects to a storage host. The board follows no redirect, so if Linear
-sends one, the file is named in the text instead of attached. This has not
-been tried against Linear. See [Files](./01-overview.md#files) for the limits.
+The board follows no redirect from `uploads.linear.app`: a file Linear
+redirects is named in the text instead of attached. See [Files](./01-overview.md#files) for the limits.
 
 ## Catching up
 
-After downtime, and when a token is set, the ticker asks Linear for the issues in
+After downtime, and when a token or an OAuth app is set, the ticker asks Linear for the issues in
 the mapped teams updated since the last event it received, then the comments
 on them. An issue created while the board was down arrives whole, with its
 title, description and labels, and its comments as replies. A state change

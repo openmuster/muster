@@ -58,4 +58,5 @@ Against `mu serve` a page can hold the live feed open instead: see
 - Live updates never move what someone is reading or clobber what they type.
 - The view is in the URL.
 
-The inspector (`src/inspect/app`) and both templates are built this way.
+`mu inspect` and the pages in `templates/swarm` and `templates/factory` are
+built this way.

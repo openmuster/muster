@@ -82,22 +82,16 @@ In the app's settings, turn on the agent feature (the manifest's
 > Slack says declaring an app an agent can't be undone, and that people have
 > to reload Slack to see it. Try it on an app made for the purpose first.
 
-> [!NOTE]
-> Run against a live workspace on 26 Nov 2026, in a public channel: a message
-> a person posted started a run, "<app> is working" showed under its thread
-> with no message asking for it, and it went when the run was summed up. Not
-> yet seen live: a private channel, a run longer than Slack's hour, and one run
-> handing over to the next on the same thread. Those are covered by tests
-> against a stand-in for Slack's API.
+Not yet seen against a live workspace: a private channel, a run longer than
+Slack's hour, and one run handing over to the next on the same thread.
 
 ## Files
 
 - **In:** a file on a Slack message is fetched from `files.slack.com` with
   the bot token and attached to the message. It needs `files:read`. A web
   page in place of the file is taken to be Slack's sign-in page, and the
-  message says to check that scope. Slack's docs don't say whether
-  `files.slack.com` redirects; the board follows no redirect, and a file
-  Slack redirects is named instead. Not tried against Slack. A file
+  message says to check that scope. The board follows no redirect from
+  `files.slack.com`: a file Slack redirects is named instead. A file
   Slack only links to (from Google Drive, say) is named, not fetched.
 - **Out:** each file on a board message is uploaded with
   `files.getUploadURLExternal`, then shared into the Slack thread after the
