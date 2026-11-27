@@ -85,9 +85,10 @@ in it approves; an author sync couldn't name is never trusted, nor a GitHub
 author, whom sync names by a login that can change hands, so a GitHub issue
 always waits for an approval. The run that does the work quotes the approved
 spec alone, never the report, and the spec reaches the card's mirrors with
-no mention, link or unfurl in it. The work
-step's sandbox pushes a branch and opens a pull request, which runs your CI
-on the agent's code: keep secrets away from pull-request jobs. The rest is
+no mention, link or unfurl in it. The worker reads the work step's change
+out of its sandbox, then pushes a branch and opens a pull request from its
+own machine; the sandbox never holds the GitHub token. That pull request
+runs your CI on the agent's code: keep secrets away from pull-request jobs. The rest is
 in [A card queue](../../packages/muster/docs/03-guides/19-a-card-queue.md#what-a-card-can-reach),
 which this template builds on.
 

@@ -10,6 +10,8 @@ want an agent to take a card from start to finish: write a spec, make the
 change as a pull request, and review it. You only want to hear about a card
 when the agent needs a decision from you.
 
+## Before you begin
+
 You need:
 
 - muster on the machine that holds the board
@@ -24,7 +26,7 @@ GitHub parts. `"runner": "e2b"` in `workflows.json` runs the steps in E2B
 sandboxes instead, with `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE` in place of
 the Vercel settings.
 
-## Files in the queue template
+## How it fits together
 
 `templates/queue` is a [board module](../01-concepts/17-board-module.md), a
 workflow file, and three scripts:
@@ -51,6 +53,11 @@ flowchart LR
 
 ## Set it up
 
+`mu serve` runs the module's sync, its watchers and the workflow, and the
+workers start with its environment.
+
+### Copy the workflow file
+
 Copy the workflow file to muster's config folder:
 
 ```bash
@@ -62,11 +69,12 @@ Then edit the copy: `repo` is your repository's https address. In
 `templates/queue`, and names the scripts beside it by their full paths,
 wherever it is run from.
 
+### Start `mu serve` with the module
+
 Put the settings in the environment `mu serve` starts with, and give it the
-module. `mu serve` runs the module's sync, its watchers and the workflow, and
-the workers start with its environment. The module names the Linear secrets
-with `env()`. `mu serve` reads them when it starts. If one isn't set, it
-refuses to start and names the variable:
+module. The module names the Linear secrets with `env()`. `mu serve` reads
+them when it starts. If one isn't set, it refuses to start and names the
+variable:
 
 ```bash
 export LINEAR_WEBHOOK_SECRET=your_linear_webhook_secret  LINEAR_API_KEY=your_linear_api_key
@@ -79,46 +87,34 @@ mu serve --module "$PWD/templates/queue/board.ts" --allow-host board.example.com
 
 Use `MUSTER_SANDBOX_URL`, not `MUSTER_URL`. The watchers' scripts run `mu`
 against the board's file on this machine; with `MUSTER_URL` set they would go
-to the server instead, with no token, and be refused. Point Linear's webhook
-at `https://board.example.com/api/board/webhooks/lin`, as
-[Linear](../02-sync/03-linear.md) says. Then cap what the cards may cost at
-$10, and check that the `card` workflow is listed:
+to the server instead, with no token, and be refused.
+
+### Point Linear's webhook at the board
+
+Point Linear's webhook at `https://board.example.com/api/board/webhooks/lin`,
+as [Linear](../02-sync/03-linear.md) says.
+
+### Cap the cost and check the workflow
+
+Cap what the cards may cost at $10, and check that the `card` workflow is
+listed:
 
 ```bash
 mu budget cards 10
 mu workflow list
 ```
 
-## How a card goes
+## Hand it a card
 
-Each card goes through these steps:
+A card starts from a Linear issue or from a thread you post in `cards`.
 
-1. An issue in the team gets the label `agent`, when it is made or later.
-   Sync brings it in as a thread in `cards` with `tag.agent=agent`.
-2. Within a few seconds the watcher `card-start` runs `start.sh` with the
-   thread's ID, as the [profile](../01-concepts/06-actors.md) `intake`. The
-   script sets `started=yes` on the card only if it still has
-   `tag.agent=agent` and has no `started`, in one write. Then it asks for the
-   `card` workflow on it. Any later wake, from a comment or the run's own
-   reply, finds `started` set and does nothing.
-3. `mu serve` makes three tasks in `cards/card-<n>`: `spec`, `work`, which
-   needs the spec, and `review`, which needs the work. The spec task quotes
-   the card's text as content, not instructions. The work and review tasks
-   quote the spec's result the same way, and the review task also quotes the
-   work's summary. The worker fills each quote in when it takes the task. One
-   worker takes the tasks in turn, each in its own Vercel sandbox. The worker
-   pushes only the work task's change, to `mu/task-<id>`, and opens a pull
-   request for it.
-4. The card gets two replies, which go to Linear as comments: `started card:
-   3 tasks in cards/card-<n>`, and once the tasks have ended, a summary with
-   each task's result and the pull request. On the board the first reply also
-   says where each task is, as the run goes. Linear keeps it as it was first
-   written, since edits don't go to Linear.
+### Label an issue `agent`
 
-Sync doesn't send the run's tasks to Linear: only `cards` is mapped, and
-`cards/card-<n>` is another channel.
+Give an issue in the team the label `agent`, when you make it or later. Sync
+brings it in as a thread in `cards` with `tag.agent=agent`, and the card
+starts.
 
-## A card you post yourself
+### Or post a card yourself
 
 A card needs no issue. Post it with the label, and with `--no-sync`, so it
 doesn't open an issue in Linear: that issue would have no `agent` label, and
@@ -136,13 +132,49 @@ with `label_conflict`, which is how the script knows the card has started:
 mu label 1 started=yes --if tag.agent=agent --if-unset started --as intake
 ```
 
-## When it needs you
+## What you see
+
+Each card goes through these steps:
+
+1. Within a few seconds the watcher `card-start` runs `start.sh` with the
+   thread's ID, as the [profile](../01-concepts/06-actors.md) `intake`. The
+   script sets `started=yes` on the card only if it still has
+   `tag.agent=agent` and has no `started`, in one write. Then it asks for the
+   `card` workflow on it. Any later wake, from a comment or the run's own
+   reply, finds `started` set and does nothing.
+2. `mu serve` makes three tasks in `cards/card-<n>`: `spec`, `work`, which
+   needs the spec, and `review`, which needs the work. Each task quotes the
+   text it builds on as content, not instructions (see
+   [What a card can reach](#what-a-card-can-reach)). One worker takes the
+   tasks in turn, each in its own Vercel sandbox. The worker pushes only the
+   work task's change, to `mu/task-<id>`, and opens a pull request for it.
+3. The card gets two replies, which go to Linear as comments: `started card:
+   3 tasks in cards/card-<n>`, and once the tasks have ended, a summary with
+   each task's result and the pull request. On the board the first reply also
+   says where each task is, as the run goes. Linear keeps it as it was first
+   written, since edits don't go to Linear.
+
+Sync doesn't send the run's tasks to Linear: only `cards` is mapped, and
+`cards/card-<n>` is another channel.
+
+## Answer when it needs you
 
 A worker that can't go on without a decision blocks its task with one line on
 where things stand, then `->`, the decision it needs and what it recommends.
+
+### Get the notification
+
 The watcher `needs-me` runs `notify.sh` with the task's ID: a macOS
 notification, or, with `NOTIFY_CMD` in `mu serve`'s environment, your own
 command, given one line. Neither receives any of the task's text.
+
+### Read the task and answer it
+
+Run `answer.sh` as yourself, with no `--as` and no `MUSTER_PROFILE`:
+`mu serve` makes the run's tasks as the profile `workflows`, and only the
+board's owner with no profile may unblock them. Run it where `mu serve` runs,
+with the same `MUSTER_SANDBOX_URL`, Vercel, GitHub App and model settings in
+your shell:
 
 ```bash
 mu read 14
@@ -160,13 +192,9 @@ answered one first. It is limited to that run's tasks, as the workers
 as `workflows.json`. `answer.sh` starts none while a worker of the run is
 still going on this machine; that one takes the task.
 
-Run it as yourself, with no `--as` and no `MUSTER_PROFILE`: `mu serve` makes
-the run's tasks as the profile `workflows`, and only the board's owner with
-no profile may unblock them. Run it where `mu serve` runs, with the same
-`MUSTER_SANDBOX_URL`, Vercel, GitHub App and model settings in your shell. It
-starts the worker itself, and stays until the worker ends, since a `--push`
-run's change is pushed from here. If the worker ends badly, the script prints
-the `mu run` line that runs what is left.
+`answer.sh` stays until its worker ends, since that worker pushes the work
+step's change from this machine, as the run's own worker does. If the worker
+ends badly, the script prints the `mu run` line that runs what is left.
 
 ## When not to use a card queue
 
@@ -185,7 +213,11 @@ These cases need something else:
 ## What a card can reach
 
 Whoever files a card writes its text, and agents that can push act on it.
-Know what a run reaches before you map a team:
+Know what a run reaches before you map a team.
+
+### What a run reaches
+
+What a run reaches, and what it can't:
 
 - **Who starts one:** anyone who can label an issue in the mapped team, or
   post or label a thread in `cards`, starts a run. `intake`, the watcher's
@@ -208,11 +240,22 @@ Know what a run reaches before you map a team:
 - **What it can't reach:** the sandbox holds no board credential of yours, no
   GitHub token and no model key; its token reaches the run's channel only.
 
+### How each step quotes the one before
+
 The spec task quotes the card as content, defused. The spec's result was
 written by an agent that read the card. So the work and review tasks quote it
 the same way, with `{steps.spec.result}`: under a line that says whose it is,
 in a fence nothing in it can close, with `@`, `<`, `>` and Markdown links
-defused. The review quotes the work's summary too.
+defused. The review quotes the work's summary too. The worker fills each
+quote in when it takes the task.
+
+A task quotes a step's result only when the run's own worker completed that
+step. An agent that claimed and completed another step itself, with its
+sandbox's token, gets a `no result` note in the next task instead. A task
+quotes a result once, when it is first taken: a task reopened after a step
+it quotes was done again keeps the old quote.
+
+### What still reaches a step unfenced
 
 A fence marks what is content; it can't stop an agent from following
 instructions in it anyway. Three things still reach a later step unfenced:
@@ -229,15 +272,13 @@ changed, and unblock it yourself only if it is safe. Even then its worker
 doesn't fill results into text it didn't write, and holds it again as
 `workflow.edited`.
 
-A task quotes a step's result only when the run's own worker completed that
-step. An agent that claimed and completed another step itself, with its
-sandbox's token, gets a `no result` note in the next task instead. A task
-quotes a result once, when it is first taken: a task reopened after a step
-it quotes was done again keeps the old quote.
-
 ## What goes wrong
 
-The failures you may hit, and what to do:
+The failures you may hit, grouped by when they happen.
+
+### A card doesn't start
+
+These stop a card before its run begins:
 
 - **The request fails.** `start.sh` leaves `started` set, so a request that
   went through before the error doesn't start a second run, and replies on
@@ -247,6 +288,16 @@ The failures you may hit, and what to do:
   After a run started, it goes on: cancel its tasks with `mu tasks cancel`.
 - **A script keeps failing.** The watcher tries the same event again, with a
   growing wait, and after 5 tries says so on the card or task, once.
+- **A label write's answer is lost.** Over HTTP, `start.sh`'s label is keyed
+  by the event that woke it, so the watcher's retry gets the same answer and
+  the card still starts. If new activity arrives on the card before that
+  retry, the retry has another key and finds `started` set: start it with
+  `mu label <id> --unset started`.
+
+### Linear and the board disagree
+
+These come from what sync brings in:
+
 - **The board was down.** With `LINEAR_API_KEY` set, `mu serve` catches up
   when it starts again. An issue made meanwhile arrives with its labels. An
   `agent` label added meanwhile to a card the board already has is brought
@@ -261,6 +312,11 @@ The failures you may hit, and what to do:
   commented on it first, after sync was set up, the thread started from that
   comment, which includes only the title: the card then runs on the title
   alone. See [Linear](../02-sync/03-linear.md#an-issue-from-before-sync).
+
+### A step goes wrong
+
+These happen inside a run:
+
 - **A card is long.** The spec task quotes the first 2,000 characters.
 - **A step completes with no result.** The next task says so where the result
   would be: `(No result from step "spec", #12: it completed without one.)`.
@@ -273,13 +329,13 @@ The failures you may hit, and what to do:
   default branch, and the pushed branch isn't there. The work step attaches
   its diff to a reply on its task, and the review reads that; if the work
   step didn't, the review says so and reviews nothing.
-- **A label write's answer is lost.** Over HTTP, `start.sh`'s label is keyed
-  by the event that woke it, so the watcher's retry gets the same answer and
-  the card still starts. If new activity arrives on the card before that
-  retry, the retry has another key and finds `started` set: start it with
-  `mu label <id> --unset started`.
 - **The agent reaches a usage limit.** The worker stops and the task fails;
   the summary says so.
+
+### Setup and answers
+
+These come from how you run `mu serve` or `answer.sh`:
+
 - **`answer.sh` says `isn't yours to change`.** It ran with a profile: unset
   `MUSTER_PROFILE`.
 - **`mu serve` refuses to start with `config_retired`.** `~/.config/muster/`
