@@ -131,7 +131,8 @@ serve
   MUSTER_INSECURE_HTTP=1: for a network that is private some other way.
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
-exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated`
+exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated
+update: MUSTER_UPDATE_CHECK=1 says, once a day, when a newer muster is out`
 
 const GLOBAL_LINE = 'global: [--as <profile>] [--board <name>] [--dir <path>] [--url <board url>] [--json]'
 

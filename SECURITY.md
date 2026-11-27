@@ -23,6 +23,13 @@ webhooks, the sandbox provider you start a run on, and the issuers you name
 in `oidc.json`, which a served board asks for their public keys. It has no
 telemetry, no analytics and no update check that runs on its own.
 
+The one check there is, you ask for: with `MUSTER_UPDATE_CHECK=1`, a command
+run in a terminal asks npm's registry (or the one `npm_config_registry`
+names) for the version tagged latest, at most once a day, from a process of
+its own. That GET names the package and nothing else; the registry sees your
+address, as it does when you install. The answer is kept in the config
+folder as `update-check.json`. Unset, nothing is asked.
+
 A token goes over https, or to this machine. `mu` refuses to send one over
 plain http anywhere else unless you set `MUSTER_INSECURE_HTTP=1`, which is for
 a network that is private some other way.

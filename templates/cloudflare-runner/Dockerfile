@@ -9,13 +9,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && apt-get clean
 
-# One release, by its version and its checksum: an image built twice is the same image, and "latest" is
-# whatever was published last. The build stops if the tarball isn't the one that release's SHA256SUMS
-# names: change both together.
-ARG MUSTER_VERSION=0.3.1-alpha.2
-ARG MUSTER_SHA256=648f703eb48a34fc152d6a847824e4b6426958e334dda983909ad384123746a7
-ADD --checksum=sha256:${MUSTER_SHA256} https://github.com/openmuster/muster/releases/download/v${MUSTER_VERSION}/muster-${MUSTER_VERSION}.tgz /tmp/muster.tgz
-RUN npm install --global /tmp/muster.tgz && rm /tmp/muster.tgz
+# One release, by its exact version, from npm: an image built twice is the same image, since a version on
+# npm is never replaced, and npm checks the tarball against the integrity the registry gives for it.
+# "latest" would be whatever was published last. A test keeps this at the package's own version, so a
+# release moves it in the same pull request.
+ARG MUSTER_VERSION=0.3.1-alpha.3
+RUN npm install --global "@openmuster/muster@${MUSTER_VERSION}"
 
 # A `pnpm` that fetches the version a repository pins (the latest without one) while the registry is
 # open for its install, and keeps it, so the agent can still run it once the registry is closed. npm is Node's own; yarn comes through corepack or npx.

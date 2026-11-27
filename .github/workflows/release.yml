@@ -5,6 +5,10 @@ name: release
 # twice (under its version, and as muster.tgz so releases/latest/download/muster.tgz works) with
 # their checksums. muster is still alpha, so every release is "latest", an alpha or beta
 # (0.3.1-alpha.1) included: that is the one the install line and releases/latest give.
+#
+# The GitHub release and the container image become "latest" only once npm has the same version, so
+# none of them disagree: a run that fails leaves the previous release latest everywhere. Every job can be run again: the npm
+# job skips a version npm already has, so after a failure, fix the cause and re-run the failed jobs.
 on:
   push:
     tags: ['v*']
@@ -48,7 +52,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest
+          # Run again, the release is already there, and its files stay as they are: npm may have the tarball
+          # it carries, and a tarball packed again need not be the same bytes.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME is there already: its files are left as they are"
+          else
+            gh release create "$GITHUB_REF_NAME" out/muster-"$VERSION".tgz out/muster.tgz out/SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest=false
+          fi
 
   # The same tarball on npm, as @openmuster/muster. The job holds no npm token: npm trusts this workflow
   # in this repository (trusted publishing) and takes the job's OIDC token. It runs no install and no
@@ -75,13 +85,42 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Publish
         # muster is still alpha, so an alpha is "latest" on npm as it is on GitHub: npm won't guess that for a prerelease.
+        # A version npm already has (a re-run, or one published by hand) is left as it is: npm never takes one twice.
         run: |
           npm --version
-          npm publish "./muster-$VERSION.tgz" --access public --tag latest
+          if npm view "@openmuster/muster@$VERSION" version >/dev/null 2>&1; then
+            echo "@openmuster/muster@$VERSION is on npm already"
+          else
+            npm publish "./muster-$VERSION.tgz" --access public --tag latest
+          fi
+      - name: npm has it
+        run: |
+          for i in 1 2 3 4 5 6; do
+            [ "$(npm view @openmuster/muster dist-tags.latest)" = "$VERSION" ] && exit 0
+            sleep 10
+          done
+          # Publishing is all this job may do on npm: moving a tag takes an owner's login.
+          echo "npm's latest is $(npm view @openmuster/muster dist-tags.latest), not $VERSION. An owner runs: npm dist-tag add @openmuster/muster@$VERSION latest" >&2
+          exit 1
 
-  # The same release as a container image on GitHub's registry, tagged with its version and "latest".
+  # Only now is the GitHub release "latest": npm has the same version, so the install line, releases/latest
+  # and the runners that install from either all give one release.
+  latest:
+    needs: npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Mark the release latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --latest
+
+  # The same release as a container image on GitHub's registry, tagged with its version and "latest":
+  # only once npm has it, as the GitHub release is.
   image:
-    needs: release
+    needs: npm
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

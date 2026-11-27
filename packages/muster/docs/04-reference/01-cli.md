@@ -140,6 +140,7 @@ serve
 
 states: waiting, ready, claimed, blocked, completed, failed, canceled
 exit:   0 ok, 1 failed or timed out, 2 misuse, 130 interrupted, 143 terminated
+update: MUSTER_UPDATE_CHECK=1 says, once a day, when a newer muster is out
 ```
 
 ## One command's help

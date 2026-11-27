@@ -3,6 +3,22 @@
 What changed for people who use muster, newest first. Security fixes say which
 versions are affected.
 
+## Unreleased
+
+### Added
+
+- `MUSTER_UPDATE_CHECK=1` has `mu` say when a newer release is out: once a
+  day, a command run in a terminal asks npm's registry, from a process of its
+  own, for the version tagged latest, and the next command says so in one
+  line on stderr. Never with `--json`, in CI, or with no terminal. It is off
+  unless you set it: muster still makes no request of its own otherwise.
+
+### Changed
+
+- The Cloudflare runner's image installs muster from npm, by exact version,
+  instead of from the GitHub release's tarball by checksum. Its pinned
+  version now moves with each release.
+
 ## 0.3.1-alpha.3
 
 ### Fixed
