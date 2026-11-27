@@ -600,12 +600,14 @@ async function behindGateway() {
   const target = new URL(server.url)
   const state = { down: false }
   const polls: Record<string, number> = {}
+  const refused: Record<string, number> = {}
   const gateway = createServer((req, res) => {
     const route = (req.url ?? '').slice((req.url ?? '').lastIndexOf('/') + 1)
     polls[route] = (polls[route] ?? 0) + 1
     // Down, it reads the request and closes the connection, as a proxy does: a body left unread on a
     // connection the client keeps open can stall its next request.
     if (state.down) {
+      refused[route] = (refused[route] ?? 0) + 1
       req.resume()
       req.on('end', () => res.writeHead(502, { 'content-type': 'text/html', connection: 'close' }).end('<html>502 Bad Gateway</html>'))
       return
@@ -624,6 +626,18 @@ async function behindGateway() {
     const deadline = Date.now() + 20_000
     while ((polls[route] ?? 0) < from + more) {
       if (Date.now() > deadline) throw new Error(`No ${route} request in 20s; requests so far: ${JSON.stringify(polls)}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  /**
+   * Until a request for a route has been refused: the command has met the outage. Only then is there
+   * something to ride out. A request already through when the gateway went down can still bring back
+   * what is written after it, and the command then ends without ever being refused.
+   */
+  const refusing = async (route: string) => {
+    const deadline = Date.now() + 20_000
+    while (!refused[route]) {
+      if (Date.now() > deadline) throw new Error(`No ${route} request refused in 20s; requests so far: ${JSON.stringify(polls)}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
   }
@@ -646,6 +660,7 @@ async function behindGateway() {
     state,
     polls,
     polling,
+    refusing,
     ended,
     owner,
     dir: tempDir(),
@@ -659,14 +674,14 @@ async function behindGateway() {
 
 describe('a wait over a URL, through an outage', () => {
   it('mu wait started before a gateway answers 502 gets what was posted during it', async () => {
-    const { state, polling, ended, owner, dir, env, close } = await behindGateway()
+    const { state, polling, refusing, ended, owner, dir, env, close } = await behindGateway()
     const head = (await owner.head()) as number
     const waiting = cliStart(dir, ['wait', 'work', '--after', String(head), '--timeout', '30s', '--json'], env)
     await polling('events')
     state.down = true
+    // Written only once the wait has been refused: what it then gets, it got by trying again.
+    await refusing('events')
     await owner.post({ channel: 'work', text: 'posted while the gateway was down' })
-    // The wait has been refused at least once before the gateway comes back.
-    await polling('events')
     state.down = false
     const waited = await ended(waiting)
     expect(waited.code).toBe(0)
@@ -675,12 +690,12 @@ describe('a wait over a URL, through an outage', () => {
   }, 60_000)
 
   it('claim --ready --wait and inbox --wait ride it out too, once they are waiting', async () => {
-    const { state, polls, polling, ended, owner, dir, env, close } = await behindGateway()
+    const { state, polling, refusing, ended, owner, dir, env, close } = await behindGateway()
     const claiming = cliStart(dir, ['tasks', 'claim', '--ready', 'work', '--wait', '30s', '--json', '--as', 'fixer'], env)
     const inbox = cliStart(dir, ['inbox', '--wait', '30s', '--json', '--as', 'fixer'], env)
     await Promise.all([polling('taskClaim'), polling('events')])
     state.down = true
-    await Promise.all([polling('taskClaim'), polling('events')])
+    await Promise.all([refusing('taskClaim'), refusing('events')])
     await owner.taskCreate({ channel: 'work', text: 'fix it', for: 'fixer' })
     state.down = false
     expect((await ended(claiming)).code).toBe(0)
