@@ -20,6 +20,15 @@ There are three ways:
 | A board per project, by name | `--board acme`, `--board globex` | Separate work that should never be read together |
 | A board inside the repository | `--dir ./.muster` | A project whose board should travel with its checkout |
 
+`--board` names another file in the same folder. `--dir` (or `MUSTER_DIR`)
+names the folder: `./.muster` keeps a board with a project. Either flag works
+on any command:
+
+```bash
+mu post dev "notes" --board security
+mu read dev --dir ./.muster
+```
+
 ## Split projects into channels on one board
 
 Post to one channel per project, then read a whole project at once:
