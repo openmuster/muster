@@ -71,7 +71,8 @@ Notion's webhooks say only what changed, not what it says now. The board
 answers each at once and reads the page or comment from Notion's API on its
 next tick, so what it imports is always what Notion says then, and a late
 delivery brings nothing older. A read that fails is tried again on later
-ticks, rather than import less than the page says. A page's text is cut at 9,000 characters,
+ticks, rather than import less than the page says. One Notion won't answer for
+24 hours is given up with a `sync.dropped` event. A page's text is cut at 9,000 characters,
 with a link to the rest.
 
 A page in a database the sync doesn't map is not brought in.

@@ -10,13 +10,13 @@ import { clock, tempDir } from './helpers.ts'
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const SECRET = 'whsec'
 
-function setup(options: { mirror?: boolean; fail?: () => boolean } = {}) {
+function setup(options: { mirror?: boolean; fail?: () => boolean; status?: number } = {}) {
   const time = clock()
   const sent: { url: string; body: any; auth: string | null }[] = []
   let made = 9000
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}'))
-    if (options.fail?.()) return new Response('{"message":"nope"}', { status: 502 })
+    if (options.fail?.()) return new Response('{"message":"nope"}', { status: options.status ?? 422 })
     sent.push({ url: String(url), body, auth: new Headers(init?.headers).get('authorization') })
     made += 1
     if (String(url).includes('slack')) return Response.json({ ok: true, ts: `1700000000.${made}` })
@@ -180,7 +180,48 @@ describe('sync: GitHub', () => {
     await backend.syncTick()
     expect(sent.map((call) => call.body.body)).toEqual(['second'])
     const failed = (await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events
-    expect(failed.map((event) => [event.thread, event.data.key, event.data.error])).toEqual([[root.id, 'gh', 'platform_502']])
+    expect(failed.map((event) => [event.thread, event.data.key, event.data.error])).toEqual([[root.id, 'gh', 'platform_422']])
+  })
+
+  it('a platform that is down uses none of a reply\'s tries: it waits, backing off, and goes once the platform is back', async () => {
+    let failing = true
+    let asked = 0
+    const { team, gh, backend, sent, time } = setup({ mirror: true, status: 503, fail: () => (asked++, failing) })
+    await backend.syncTick()
+    await gh('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    const root = (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message
+    await team.reply({ to: root.id, text: 'first' })
+    // Fifteen minutes of outage, ticking every second.
+    for (let second = 0; second < 900; second++) {
+      await backend.syncTick()
+      time.advance(1000)
+    }
+    // Backed off: asked far fewer times than it ticked.
+    expect(asked).toBeLessThan(20)
+    failing = false
+    time.advance(300_000)
+    await backend.syncTick()
+    expect(sent.map((call) => call.body.body)).toEqual(['first'])
+    expect((await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events).toEqual([])
+  })
+
+  it('a platform down for over a day gives up on the reply, says so on the thread, and the next one goes', async () => {
+    let failing = true
+    const { team, gh, backend, sent, time } = setup({ mirror: true, status: 503, fail: () => failing })
+    await backend.syncTick()
+    await gh('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    const root = (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message
+    await team.reply({ to: root.id, text: 'stale' })
+    await backend.syncTick()
+    time.advance(25 * 3_600_000)
+    await backend.syncTick()
+    failing = false
+    await team.reply({ to: root.id, text: 'fresh' })
+    time.advance(300_000)
+    await backend.syncTick()
+    expect(sent.map((call) => call.body.body)).toEqual(['fresh'])
+    const failed = (await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events
+    expect(failed.map((event) => [event.thread, event.data.error])).toEqual([[root.id, 'platform_503']])
   })
 
   it('labels a platform sets never leave the board, and board labels never go to the platform', async () => {

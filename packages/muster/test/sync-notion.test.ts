@@ -201,7 +201,7 @@ describe('sync: Notion', () => {
 
   it("a page whose text can't be read now keeps what the board has, and is read again later", async () => {
     process.env.MUSTER_CONFIG = tempDir()
-    const { hook, page, threads, backend, api } = setup()
+    const { hook, page, threads, backend, api, time } = setup()
     page(P1)
     await hook('page.created', { id: P1, type: 'page' })
     await backend.syncTick()
@@ -214,9 +214,33 @@ describe('sync: Notion', () => {
     await backend.syncTick()
     expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nEach stack row shows how many are in it.')
     down = false
+    // Notion was down: it is asked again once a pause has passed, not on the very next tick.
+    time.advance(2000)
     await backend.syncTick()
     expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nNow with a second paragraph.')
     void realFetch
+  })
+
+  it("a page Notion won't hand over for a day is given up, and the board's log says so", async () => {
+    process.env.MUSTER_CONFIG = tempDir()
+    const { hook, page, threads, backend, api, team, time } = setup()
+    page(P1)
+    await hook('page.created', { id: P1, type: 'page' })
+    await backend.syncTick()
+    Object.assign(api.pages.get(P1.replace(/-/g, ''))!, { markdown: 'Never read.' })
+    api.markdownDown = () => true
+    await hook('page.content_updated', { id: P1, type: 'page' }, {}, 'u-ada', 'evt-lost')
+    // An hour of ticks: Notion is down the whole time, and the page waits.
+    for (let minute = 0; minute < 60; minute++) {
+      await backend.syncTick()
+      time.advance(60_000)
+    }
+    expect((await team.events({ after: 0, filter: { types: ['sync.dropped'] } })).events).toEqual([])
+    time.advance(24 * 3_600_000)
+    await backend.syncTick()
+    expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nEach stack row shows how many are in it.')
+    const dropped = (await team.events({ after: 0, filter: { types: ['sync.dropped'] } })).events
+    expect(dropped.map((event) => [event.data.key, event.data.id, event.data.error])).toEqual([['nt', 'notion:evt-lost', 'platform_500']])
   })
 
   it("a reply on the board goes to Notion as a comment on the page, and Notion's echo of it isn't brought back", async () => {

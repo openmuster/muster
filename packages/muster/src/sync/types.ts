@@ -1,3 +1,4 @@
+import { Failure } from '../failure.ts'
 import type { Attachment, Message } from '../model.ts'
 
 /** What a platform sent, as the parts a provider needs to check and read it. */
@@ -135,3 +136,28 @@ export const DELIVERY_ATTEMPTS = 5
 export const SEND_MS = 30_000
 
 export const IMPORT_ATTEMPTS = 10
+
+/**
+ * How long a platform may be down before what waits on it is given up: an outage uses none of an event's tries
+ * (`IMPORT_ATTEMPTS`, `DELIVERY_ATTEMPTS`), since it says nothing about the event, so this is what ends a wait.
+ */
+export const OUTAGE_MS = 24 * 3_600_000
+
+/** The longest a platform that keeps failing as if down is left alone between tries. */
+export const OUTAGE_PAUSE_MS = 300_000
+
+const SLACK_DOWN = new Set(['slack_ratelimited', 'slack_internal_error', 'slack_fatal_error', 'slack_service_unavailable', 'slack_request_timeout'])
+
+/**
+ * Whether an error says the platform is down or busy, rather than anything about what was asked of it: a 5xx, a
+ * 429, Slack's own words for those, no answer at all, or none in time.
+ */
+export function isOutage(error: unknown): boolean {
+  if (error instanceof Failure) {
+    const status = /^platform_(\d+)$/.exec(error.reason)
+    if (status) return Number(status[1]) === 429 || Number(status[1]) >= 500
+    return SLACK_DOWN.has(error.reason)
+  }
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  return error instanceof TypeError && error.message === 'fetch failed'
+}
