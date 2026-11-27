@@ -569,7 +569,13 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
         // this. Its description's uploads stay links: the update's own event would otherwise wait for them.
         const opener = typeof data.title === 'string' ? rootOf({ ...data, creator: data.creator ?? (data.creatorId ? { id: data.creatorId } : undefined) }, '') : null
         const parent = opener ? { parent: { author: opener.author, text: opener.text ?? '', labels: opener.labels ?? {} } } : {}
-        return [{ id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels', thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels }, ...parent, ...updated }]
+        const labelled = { id: delivery, author, place: String(data.team?.key ?? ''), self, kind: 'labels' as const, thread: `issue:${data.id}`, external: delivery, ...filed, labels: { ...(data.state?.name ? { state: slug(String(data.state.name)) } : {}), ...filed.labels }, ...parent, ...updated }
+        // Linear names the fields an update changed in `updatedFrom`. A new title or description is the thread's
+        // first message, edited, as an edited GitHub issue's is.
+        const from = (payload.updatedFrom ?? {}) as Record<string, unknown>
+        const rewritten = typeof data.title === 'string' && ('title' in from || 'description' in from)
+        if (!rewritten) return [labelled]
+        return [labelled, { id: `${delivery}:text`, author, place: labelled.place, self, kind: 'edit' as const, thread: `issue:${data.id}`, external: `issue:${data.id}`, text: `${data.title}\n\n${data.description ?? ''}`.trim(), ...updated }]
       }
       if (payload.type === 'Comment' && (payload.action === 'update' || payload.action === 'remove')) {
         return [{ id: delivery, author, place: String(data.issue?.team?.key ?? data.team?.key ?? ''), self, kind: payload.action === 'remove' ? 'delete' : 'edit', thread: `issue:${data.issueId ?? data.issue?.id}`, external: `comment:${data.id}`, ...(payload.action === 'update' ? { text: String(data.body ?? ''), ...updated } : {}) }]

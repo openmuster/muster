@@ -192,12 +192,11 @@ it suggests as the project's issues.
 
 ## Write issues an agent can finish
 
-- **Write the issue in full before you save it.** Linear sends the board an
-  issue's title and description once, when it is made. Edits to either after
-  that don't reach the board, and a comment made before the work starts
-  doesn't reach the triage. To add to an issue, move it to Triage and say it
-  there: the triage writes the spec from the planner's draft and the comments
-  after it.
+- **Change the issue itself until the work starts.** An edited title or
+  description reaches the board, and the issue is triaged again from its new
+  text. A comment made before the work starts doesn't reach the triage; in
+  Triage it goes to the planner. Once the issue is In Progress, say changes in
+  a comment: that is what starts another round.
 - **One issue, one pull request.** A card is one branch. Split anything
   bigger.
 - **Say how to check it.** The triage writes the spec as a title, what to
@@ -219,8 +218,8 @@ Move the issue to Todo. On the issue you see, in order:
 
 1. **The spec,** written by the triage, as a comment. If the triage finds
    nothing to change in this repository, it says why, and the card is held
-   `declined`. Move the issue to Triage, answer the planner, and move it to
-   Todo again.
+   `declined`. Edit the issue to say more, and it is triaged again. Or move
+   it to Triage and work it out with the planner first.
 2. **Approval,** for an issue whose author isn't trusted. The card waits
    until someone trusted runs `mu label <card> approved=yes`, or sets the
    label in the inspector. Read the spec, not only the issue: the spec is what
@@ -304,9 +303,9 @@ done, what is in progress and what is next. On the board,
   the board (Linear's webhook settings list each delivery; `mu daemon status`
   names the sync), the issue is in a team that isn't mapped, or its status
   has a name the loop doesn't know, which parks it.
-- **The agent works from an old description.** The issue was edited after it
-  was made, and edits don't reach the board. Move it to Triage and say the
-  change there, or file it again.
+- **A round ignores what you wrote in the description.** The issue was
+  edited after its work started. Say the change in a comment, which starts a
+  round.
 - **A card waits for approval on your own issue.** Your Linear user ID isn't
   in `LOOP_TRUSTED`.
 - **The status doesn't change.** The loop writes it as the OAuth app, with

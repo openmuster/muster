@@ -465,3 +465,31 @@ describe('sync: Linear updates that arrive late', () => {
     expect((await team.readThread({ id: root.id })).replies.map((reply) => reply.text)).toEqual(['third'])
   })
 })
+
+describe('sync: an edited Linear issue', () => {
+  const text = async (team: ReturnType<typeof setup>['team']) => (await team.readChannel({ channel: 'eng' })).threads[0]!.message
+  it("a new title or description edits the thread's first message, and a label changed in the same update is applied too", async () => {
+    const { team, lin, labels } = setup()
+    await lin({ type: 'Issue', action: 'create', data: linearIssue({ updatedAt: '2026-11-27T10:00:00.000Z' }) })
+    await lin({ type: 'Issue', action: 'update', updatedFrom: { title: 'SAML sign-in', description: 'Okta first' }, data: linearIssue({ title: 'SAML sign-in for Okta and Entra', description: 'Okta first, then Entra', labels: [{ name: 'Agent' }], updatedAt: '2026-11-27T10:05:00.000Z' }) })
+    const root = await text(team)
+    expect(root.text).toBe('SAML sign-in for Okta and Entra\n\nOkta first, then Entra')
+    expect(root.revision).toBe(2)
+    expect(await labels('eng')).toMatchObject({ 'tag.agent': 'agent' })
+  })
+
+  it('an update that names no new title or description edits nothing', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'create', data: linearIssue() })
+    await lin({ type: 'Issue', action: 'update', updatedFrom: { stateId: 's-1' }, data: linearIssue({ title: 'renamed without saying so', state: { name: 'Done' } }) })
+    expect((await text(team)).text).toBe('SAML sign-in\n\nOkta first')
+  })
+
+  it('an older update that arrives late does not put the old text back', async () => {
+    const { team, lin } = setup()
+    await lin({ type: 'Issue', action: 'create', data: linearIssue({ updatedAt: '2026-11-27T10:00:00.000Z' }) })
+    await lin({ type: 'Issue', action: 'update', updatedFrom: { title: 'SAML sign-in' }, data: linearIssue({ title: 'newest', updatedAt: '2026-11-27T10:10:00.000Z' }) })
+    await lin({ type: 'Issue', action: 'update', updatedFrom: { title: 'SAML sign-in' }, data: linearIssue({ title: 'older', updatedAt: '2026-11-27T10:05:00.000Z' }) })
+    expect((await text(team)).text).toBe('newest\n\nOkta first')
+  })
+})
