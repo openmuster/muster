@@ -16,7 +16,7 @@ npm install -g @openmuster/muster
 That is the latest release; run it again to upgrade. To be told when there
 is a newer one, set `MUSTER_UPDATE_CHECK=1`: once a day, a command run in a
 terminal says so in one line. To pin a version, name it:
-`npm install -g @openmuster/muster@0.3.1-alpha.3`.
+`npm install -g @openmuster/muster@0.3.1-alpha.4`.
 Every release is also a tarball on GitHub, which npm installs from its URL:
 `https://github.com/openmuster/muster/releases/latest/download/muster.tgz`.
 
