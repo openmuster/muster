@@ -21,7 +21,7 @@ import { catchUp, deliverPending, holdCatchUp, importPending, readPending, recei
 import { workingPending } from '../sync/working.ts'
 import { resolveSync } from '../sync/declare.ts'
 import { fetchFiles } from '../sync/files.ts'
-import { boardKey } from '../serve/token.ts'
+import { boardKey, retiredKeys } from '../serve/token.ts'
 import { dbRegistry, mintToken, type Registry } from '../serve/tokens.ts'
 import { dbJoins } from '../serve/joins.ts'
 import type { Backend } from './types.ts'
@@ -92,6 +92,7 @@ export function file(options: FileOptions = {}): Backend {
   const ctx = (): Context => ({ db: open(), now: options.now ?? (() => new Date()), alive: options.alive ?? sameProcess })
   /** The board's list of the tokens it made: a table in the board itself. */
   const signingKey = () => options.key ?? boardKey(where())
+  const oldKeys = () => (options.key ? [] : retiredKeys(where()))
   const registry = (): Registry => options.tokens ?? dbRegistry(open(), () => (options.now ?? (() => new Date()))().getTime())
   const principal = options.principal ?? `local:user:${userInfo().username.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`
 
@@ -116,6 +117,7 @@ export function file(options: FileOptions = {}): Backend {
     },
     registry,
     signingKey,
+    retiredKeys: oldKeys,
     leases: {
       take: async (request) => leases.take(ctx(), request),
       renew: async (request) => leases.renew(ctx(), request),
