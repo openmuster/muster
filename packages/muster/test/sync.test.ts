@@ -222,6 +222,24 @@ describe('sync: GitHub', () => {
     expect(JSON.stringify(failed)).not.toContain('ghs_token')
   })
 
+  it('a reply that waited a day for any other reason still goes after one short outage: the day counts from when the platform went down', async () => {
+    let failing = false
+    const { team, gh, backend, sent, time } = setup({ mirror: true, status: 503, fail: () => failing })
+    await backend.syncTick()
+    await gh('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    const root = (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message
+    await team.reply({ to: root.id, text: 'written before the weekend' })
+    // Nothing synced for a day and more: the host was off.
+    time.advance(25 * 3_600_000)
+    failing = true
+    await backend.syncTick()
+    failing = false
+    time.advance(5_000)
+    await backend.syncTick()
+    expect(sent.map((call) => call.body.body)).toEqual(['written before the weekend'])
+    expect((await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events).toEqual([])
+  })
+
   it('a platform down for over a day gives up on the reply, says so on the thread, and the next one goes', async () => {
     let failing = true
     const { team, gh, backend, sent, time } = setup({ mirror: true, status: 503, fail: () => failing })
