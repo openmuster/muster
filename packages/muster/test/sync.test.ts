@@ -10,12 +10,14 @@ import { clock, tempDir } from './helpers.ts'
 const sign = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const SECRET = 'whsec'
 
-function setup(options: { mirror?: boolean; fail?: () => boolean; status?: number } = {}) {
+function setup(options: { mirror?: boolean; fail?: () => boolean; status?: number; throws?: () => Error | undefined } = {}) {
   const time = clock()
   const sent: { url: string; body: any; auth: string | null }[] = []
   let made = 9000
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}'))
+    const thrown = options.throws?.()
+    if (thrown) throw thrown
     if (options.fail?.()) return new Response('{"message":"nope"}', { status: options.status ?? 422 })
     sent.push({ url: String(url), body, auth: new Headers(init?.headers).get('authorization') })
     made += 1
@@ -203,6 +205,21 @@ describe('sync: GitHub', () => {
     await backend.syncTick()
     expect(sent.map((call) => call.body.body)).toEqual(['first'])
     expect((await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events).toEqual([])
+  })
+
+  it('records why a delivery failed as a short code, never the error\'s text, which the log keeps for good', async () => {
+    let throwing = true
+    const { team, gh, backend } = setup({ mirror: true, throws: () => (throwing ? new Error('echoed back: Authorization: Bearer ghs_token') : undefined) })
+    await backend.syncTick()
+    throwing = false
+    await gh('issues', { action: 'opened', issue: issue(7), repository: repo, sender: { login: 'nico' } })
+    const root = (await team.readChannel({ channel: 'web/issues' })).threads[0]!.message
+    throwing = true
+    await team.reply({ to: root.id, text: 'first' })
+    for (let i = 0; i < 5; i++) await backend.syncTick()
+    const failed = (await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events
+    expect(failed.map((event) => event.data.error)).toEqual(['error'])
+    expect(JSON.stringify(failed)).not.toContain('ghs_token')
   })
 
   it('a platform down for over a day gives up on the reply, says so on the thread, and the next one goes', async () => {

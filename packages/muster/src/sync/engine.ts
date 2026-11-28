@@ -476,7 +476,7 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
           break
         }
         ctx.db.write(() => {
-          append(ctx.db, { type: 'sync.failed', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, error: error instanceof Failure ? error.reason : String((error as Error).message).slice(0, 200) } }, ctx.now().toISOString())
+          append(ctx.db, { type: 'sync.failed', by: board, channel: message.channel, thread: message.thread, data: { id: message.id, key, error: failureOf(error) } }, ctx.now().toISOString())
           ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(event.seq, name)
         })
         cursor = event.seq
