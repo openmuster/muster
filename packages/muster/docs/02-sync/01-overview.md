@@ -182,10 +182,21 @@ board doesn't remove the files it put in a Slack thread.
 
 A delivery that fails is tried again on the next tick, and the messages after
 it wait their turn. After five tries the board records a `sync.failed` event on
-the thread, with the platform's answer, and the next message goes.
+the thread, with a short code for the platform's answer (`platform_422`), and
+the next message goes.
+
+A platform that is down or busy uses none of those tries. That is a 5xx, a 429,
+or no answer at all. The board stops asking that platform for 1 second, then 2,
+4 and so on, up to 5 minutes, and sends as soon as it answers again. A message
+still waiting after 24 hours gets its `sync.failed` and the next one goes.
+
+What comes in is held to the same rules. An event the board can't read or
+import after ten tries, or after 24 hours of the platform being down, is given
+up with a `sync.dropped` event on its thread, so nothing a platform sent goes
+missing without a record.
 
 ```bash
-mu tail web/ --type sync.failed
+mu tail web/ --type sync.failed --type sync.dropped
 ```
 
 ## A filter for what comes in
