@@ -54,6 +54,12 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...good.workers, timeout: 'soon' } })).toMatch(/"release".*timeout/)
   })
 
+  it('takes a mode of "run" or "suggest", and refuses any other', () => {
+    expect(loadWorkflows(write({ workflows: [{ ...good, mode: 'suggest' }] }))).toEqual([{ ...good, mode: 'suggest' }])
+    expect(loadWorkflows(write({ workflows: [{ ...good, mode: 'run' }] }))).toEqual([{ ...good, mode: 'run' }])
+    expect(bad({ mode: 'maybe' })).toMatch(/"release".*"mode"/)
+  })
+
   it('refuses bad JSON, a missing array and a bad or repeated name', () => {
     expect(refuses(write('{nope'))).toMatch(/isn't JSON/)
     expect(refuses(write({}))).toMatch(/needs a "workflows" array/)
@@ -88,6 +94,17 @@ describe('the workflows file', () => {
     expect(bad({ workers: { ...noCwd, runner: 'vercel' } })).toBe('loaded')
     expect(bad({ workers: { ...noCwd, runner: 'cloudflare' } })).toBe('loaded')
     expect(bad({ workers: { ...noCwd, runner: 'e2b' } })).toBe('loaded')
+  })
+
+  it("takes an E2B worker's own template, and any worker's model, as strings: a template only for e2b", () => {
+    const e2b = { ...good.workers, runner: 'e2b', repo: 'https://github.com/acme/web', template: 'acme-go', model: 'claude-opus-5-5' }
+    expect(loadWorkflows(write({ workflows: [{ ...good, workers: e2b }] }))[0]!.workers).toMatchObject({ template: 'acme-go', model: 'claude-opus-5-5' })
+    expect(bad({ workers: { ...good.workers, model: 'claude-opus-5-5' } })).toBe('loaded')
+    expect(bad({ workers: { ...e2b, template: 7 } })).toMatch(/Workflow "release".*"workers.template"/)
+    expect(bad({ workers: { ...e2b, template: '' } })).toMatch(/Workflow "release".*"workers.template"/)
+    expect(bad({ workers: { ...e2b, model: '' } })).toMatch(/Workflow "release".*"workers.model"/)
+    // Only E2B makes a sandbox from a template you name: on any other runner it would do nothing, so it is refused.
+    expect(bad({ workers: { ...e2b, runner: 'vercel' } })).toMatch(/Workflow "release".*"workers.template", which is for "e2b"/)
   })
 
   it('says a bad runner needs to be local, vercel, cloudflare or e2b', () => {
@@ -227,7 +244,10 @@ describe('mu workflow', () => {
     config(dir)
     const listed = await cli(dir, ['workflow', 'list'])
     expect(listed.code).toBe(0)
-    expect(listed.stdout).toMatch(/release\s+Ship a release\s+who: ada\s+channels: general/)
+    expect(listed.stdout).toMatch(/release\s+Ship a release\s+who: ada\s+channels: general\n/)
+    writeFileSync(join(dir, 'config', 'workflows.json'), JSON.stringify({ workflows: [{ ...good, mode: 'suggest' }] }))
+    expect((await cli(dir, ['workflow', 'list'])).stdout).toMatch(/channels: general  suggest only\n/)
+    config(dir)
     expect(JSON.parse((await cli(dir, ['workflow', 'list', '--json'])).stdout).workflows[0].name).toBe('release')
     const root = JSON.parse((await cli(dir, ['post', 'work', 'ship 1.2', '--json'])).stdout).message
     const ran = await cli(dir, ['workflow', 'run', 'release', '--on', String(root.id), '--arg', 'version=1.2.0'])
@@ -357,6 +377,19 @@ describe('the daemon starts a requested workflow', () => {
     expect(same(rec.spawned[1]!.argv, hostile.seq, runs[1]!)).toEqual(same(rec.spawned[0]!.argv, plain.seq, runs[0]!))
     // Filled once, as text: an argument that looks like a placeholder stays as written.
     expect((await tasksIn(team, runs[1]!))[0]!.text).toBe(`Plan --push ; rm -rf / for #${root.id} in work/app, work in ${runs[1]}. $(id) \`id\` {run} {nope} {args.constructor}`)
+  })
+
+  it("gives an E2B worker its workflow's template and model on its command line, and nothing else from the request", async () => {
+    const e2b: Workflow = { ...release, workers: { count: 1, agent: 'claude', as: 'w', runner: 'e2b', repo: 'https://github.com/acme/web', template: 'acme-go', model: 'claude-opus-5-5' } }
+    const { team, root, rec } = await ready([e2b])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { template: '--template=evil' } })
+    await runWorkflows(team, [e2b], { ...rec.deps, env: { ...rec.deps.env, E2B_API_KEY: 'k' } })
+    const argv = rec.spawned[0]!.argv
+    expect(argv.slice(argv.indexOf('--runner'), argv.indexOf('--runner') + 2)).toEqual(['--runner', 'e2b'])
+    expect(argv[argv.indexOf('--template') + 1]).toBe('acme-go')
+    expect(argv[argv.indexOf('--model') + 1]).toBe('claude-opus-5-5')
+    expect(argv.filter((word) => word.includes('evil'))).toEqual([])
+    expect(argv).toContain(`request=${seq}`)
   })
 
   it('starts a cloudflare worker with the runner named and no folder of its own, as a vercel one', async () => {
@@ -495,6 +528,26 @@ describe('the daemon starts a requested workflow', () => {
       'local:user:eve+releaser may not start release',
     ])
     expect((await repliesOn(team, elsewhere.id)).map((reply) => reply.text)).toEqual(["release doesn't run in random"])
+  })
+
+  it('in suggest mode says on the thread what it would start and starts nothing, then or later', async () => {
+    const suggest: Workflow = { ...release, mode: 'suggest' }
+    const { team, as, root, rec } = await ready([suggest])
+    const { seq } = await team.workflowRequest({ name: 'release', on: root.id, args: { version: '1.2.0' } })
+    expect(await runWorkflows(team, [suggest], rec.deps)).toEqual({ started: [], refused: [], suggested: [seq] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect(await channelNames(team)).not.toContain(`work/app/release-${seq}`)
+    const said = 'would start release: 2 tasks, 2 workers; suggest only, nothing started'
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([said])
+    // The operator switches it to run, and the daemon starts again: what was suggested is still only that.
+    expect(await runWorkflows(team, [release], { ...rec.deps, runs: openRuns() })).toEqual({ started: [], refused: [] })
+    expect(rec.spawned).toEqual([])
+    expect(await allTasks(team)).toEqual([])
+    expect((await repliesOn(team, root.id)).map((reply) => reply.text)).toEqual([said])
+    // A suggestion is said only to someone who may start it: anyone else is refused, as in run mode.
+    const stranger = await as('local:user:eve').workflowRequest({ name: 'release', on: root.id })
+    expect(await runWorkflows(team, [suggest], rec.deps)).toEqual({ started: [], refused: [stranger.seq] })
   })
 
   it("lets a bare profile name in who stand for that profile under the daemon owner's principal only", async () => {
@@ -850,6 +903,9 @@ describe('the daemon starts a requested workflow', () => {
     expect(missingSettings(cloudflare.workers, rec.deps.env)).toBeNull()
     expect(missingSettings({ ...cloudflare.workers, runner: 'e2b' }, rec.deps.env)).toMatch(/no E2B_API_KEY, MUSTER_E2B_TEMPLATE, which its e2b workers need/)
     expect(missingSettings({ ...cloudflare.workers, runner: 'e2b' }, { ...rec.deps.env, E2B_API_KEY: 'k', MUSTER_E2B_TEMPLATE: 't' })).toBeNull()
+    // A workflow that names its own template needs none in the daemon's environment.
+    expect(missingSettings({ ...cloudflare.workers, runner: 'e2b', template: 'acme-go' }, { ...rec.deps.env, E2B_API_KEY: 'k' })).toBeNull()
+    expect(missingSettings({ ...cloudflare.workers, runner: 'e2b', template: 'acme-go' }, rec.deps.env)).toMatch(/no E2B_API_KEY, which/)
     expect(missingSettings(release.workers, {})).toBeNull()
   })
 

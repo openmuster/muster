@@ -40,6 +40,15 @@ less motion. Its commands print what the CLI really prints, and its code is
 run against the library before it is changed. `.github/workflows/deploy-docs.yml` deploys it to Cloudflare Workers
 through OpenNext once the repository has the Cloudflare variable and secret.
 
+The docs follow Diátaxis (diataxis.fr): each page does one of four jobs, and
+its section says which. The quickstart is the one tutorial: a single path to
+an agent finishing a task, with no options or detours. `03-guides` are how-to
+guides. `04-reference` is reference: facts to look up, with no procedures.
+`01-concepts` is explanation: how and why it works, with an example per idea
+but no step-by-step setup. Each `02-sync` page is a tool's setup steps first,
+then its reference. A procedure has one home, in a guide or an integration's
+setup, and other pages link to it.
+
 A guide says who it is for, what it needs, the steps, what you see, when not
 to do it, and what goes wrong. Diagrams are Mermaid, in the markdown.
 

@@ -100,6 +100,87 @@ describe('budgets from the command line', () => {
   }, 30_000)
 })
 
+describe('an estimate before a worker starts', () => {
+  it("says how many tasks are ready and what they may cost from the channel's recent tasks, and --estimate starts none", async () => {
+    const dir = tempDir()
+    // What earlier runs recorded: two claude tasks under work, one codex task with no cost, one elsewhere.
+    for (const [channel, labels] of [['work', ['agent=claude', 'cost=0.20']], ['work/api', ['agent=claude', 'cost=0.40']], ['work', ['agent=codex']], ['other', ['agent=claude', 'cost=9']]] as const) {
+      const id = /#(\d+)/.exec((await cli(dir, ['tasks', 'create', channel, 'done before', ...labels.flatMap((label) => ['--label', label])])).stdout)![1]!
+      await cli(dir, ['tasks', 'claim', id])
+      await cli(dir, ['tasks', 'complete', id, 'ok'])
+    }
+    for (let i = 0; i < 3; i++) await cli(dir, ['tasks', 'create', 'work', `t${i}`])
+    // Not one this worker would take: assigned to someone else.
+    await cli(dir, ['tasks', 'create', 'work', 'for bob', '--for', 'bob'])
+
+    const said = await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'claude'])
+    expect(said.code).toBe(0)
+    expect(said.stdout).toBe('3 ready, about $0.90 at $0.30 a task\n')
+    expect((await cli(dir, ['tasks', 'work'])).stdout.match(/ready/g)).toHaveLength(4)
+    expect((await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'codex'])).stdout).toBe('3 ready, no cost history for codex in #work\n')
+    expect((await cli(dir, ['run', '--ready', 'nowhere', '--estimate', '--agent', 'claude'])).stdout).toBe('0 ready in #nowhere\n')
+    const json = JSON.parse((await cli(dir, ['run', '--ready', 'work', '--estimate', '--agent', 'claude', '--json'])).stdout)
+    expect(json).toMatchObject({ channel: 'work', ready: 3, more: false, agent: 'claude', perTask: 0.3, usd: 0.9 })
+    const misused = await cli(dir, ['run', '1', '--estimate', '--agent', 'claude'])
+    expect(misused.code).toBe(2)
+
+    // A looping worker says it once, first, and then works as before.
+    const env = fakes(dir, { claude: `cat >/dev/null; mu tasks complete $MUSTER_TASK ok >/dev/null; echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.25}'` })
+    const loop = await cli(dir, ['run', '--ready', 'work', '--loop', '--agent', 'claude', '--cwd', dir], { env })
+    expect(loop.code).toBe(0)
+    const lines = loop.stdout.trimEnd().split('\n')
+    expect(lines[0]).toBe('3 ready, about $0.90 at $0.30 a task')
+    expect(lines.filter((line) => line.startsWith('3 ready'))).toHaveLength(1)
+    expect(lines.at(-1)).toBe('nothing more is ready: worked 3 tasks')
+  }, 60_000)
+})
+
+describe('mu report', () => {
+  it('prints how tasks went by agent and by workflow, a row each, and --json prints one document', async () => {
+    const dir = tempDir()
+    const make = async (channel: string, labels: string[]) => {
+      const id = /#(\d+)/.exec((await cli(dir, ['tasks', 'create', channel, 'a task', ...labels.flatMap((label) => ['--label', label])])).stdout)![1]!
+      await cli(dir, ['tasks', 'claim', id])
+      return id
+    }
+    const a = await make('work', ['agent=claude', 'cost=0.40', 'workflow=implement'])
+    await cli(dir, ['tasks', 'complete', a, 'done'])
+    const b = await make('work/api', ['agent=claude', 'cost=0.20'])
+    await cli(dir, ['tasks', 'block', b, 'which endpoint?', '--kind', 'needs_input'])
+    const c = await make('work', ['agent=codex'])
+    await cli(dir, ['tasks', 'fail', c, 'tests fail'])
+    await make('other', ['agent=claude', 'cost=5'])
+    await make('work', ['workflow=implement-the-api'])
+    await make('work', ['workflow=implement-the-web'])
+
+    const plain = await cli(dir, ['report', 'work'])
+    expect(plain.code).toBe(0)
+    const lines = plain.stdout.trimEnd().split('\n')
+    expect(lines[0]).toMatch(/^since \d{4}-\d\d-\d\d in #work$/)
+    expect(lines.slice(1).map((line) => line.split(/\s{2,}/).join(' | '))).toEqual([
+      'agent | tasks | 1st round | rounds | failed | failing | input | cost | per task',
+      'claude | 2 | 1 50% | 1.00 | 0 | 0 | 1 | $0.60 | $0.30',
+      '(none) | 2 | 0 0% | 1.00 | 0 | 0 | 0 | - | -',
+      'codex | 1 | 0 0% | 1.00 | 1 | 0 | 0 | - | -',
+      'workflow | tasks | 1st round | rounds | failed | failing | input | cost | per task',
+      'implement | 1 | 1 100% | 1.00 | 0 | 0 | 0 | $0.40 | $0.40',
+      'implement-the-api | 1 | 0 0% | 1.00 | 0 | 0 | 0 | - | -',
+      'implement-the-web | 1 | 0 0% | 1.00 | 0 | 0 | 0 | - | -',
+    ])
+    expect(lines.slice(0, 5).every((line) => line.length <= 80)).toBe(true)
+
+    const json = await cli(dir, ['report', '--json', '--since', '7d'])
+    const document = JSON.parse(json.stdout)
+    expect(document.channel).toBeNull()
+    expect(document.agents.map((row: { key: string; tasks: number }) => [row.key, row.tasks])).toEqual([['claude', 3], [null, 2], ['codex', 1]])
+
+    expect((await cli(dir, ['report', 'nowhere'])).stdout).toMatch(/^no tasks in #nowhere since \d{4}-\d\d-\d\d\n$/)
+    const bad = await cli(dir, ['report', '--since', 'last week'])
+    expect(bad.code).toBe(2)
+    expect(bad.stderr).toContain('--since takes a duration')
+  }, 30_000)
+})
+
 describe('mu demo', () => {
   it('plays the six steps on a scratch board of its own and ends with the ship task ready', async () => {
     const dir = tempDir()

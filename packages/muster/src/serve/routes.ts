@@ -8,7 +8,7 @@ export const ROUTES = [
   'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
   'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head', 'cursorGet', 'cursorSet',
   'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
-  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',
+  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task', 'taskReport',
   'scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'schemaList', 'filePut', 'fileGet', 'budgetSet', 'budgets',
 ] as const
 
@@ -28,6 +28,7 @@ export const SANDBOX_ROUTES = [
  * What stays closed, and why: schedules and schemas change what the board does later, a budget is the
  * owner's to set, and a stored cursor is how a watcher knows where it is, so moving one silences it.
  * A workflow request starts work beyond the sandbox: workers on the daemon's machine, which a steered
- * agent in a sandbox must not be able to set going.
+ * agent in a sandbox must not be able to set going. A report of how agents did and what they cost is the
+ * owner's to read: an agent doing a task has no need of it.
  */
-export const SANDBOX_CLOSED = ['scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'budgetSet', 'cursorGet', 'cursorSet', 'workflowRequest'] as const satisfies readonly (typeof ROUTES)[number][]
+export const SANDBOX_CLOSED = ['scheduleCreate', 'scheduleCancel', 'scheduleList', 'schemaAdd', 'budgetSet', 'cursorGet', 'cursorSet', 'workflowRequest', 'taskReport'] as const satisfies readonly (typeof ROUTES)[number][]

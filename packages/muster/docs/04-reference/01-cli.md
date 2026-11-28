@@ -63,6 +63,8 @@ tasks
   tasks needs <id> <id>... | --none
   budget [<channel> <usd> | <channel> --none]
                                  what a channel's tasks may cost in all
+  report [<channel>] [--since 30d]
+                                 how tasks went and cost, by agent and workflow
   workflow list                  what this machine's workflows.json registers
   workflow run <name> --on <id> [--arg k=v]...
                                  ask for one to be run on a thread
@@ -75,6 +77,7 @@ agents
        --agent claude|codex  (or a command after --)  [--cwd <dir>]
        [--worktree <repo> --branch <name>] [--model <m>] [--timeout 30m]
        [--env K=V]... [--bypass-permissions] [--loop] [--budget <usd>]
+       [--estimate]              say what the ready tasks may cost; start none
   An agent that worked the task before resumes its session; --fresh won't.
   To pick one up by its ID: --resume <session>.
   Claude Code starts lean (a shell and files); --full loads your whole setup.
@@ -83,6 +86,7 @@ agents
        [--safe]                  keep the agent's permission prompts on there
        [--detach]                return once started, not when it ends
        [--no-install]            with --repo: don't install its dependencies
+       [--template <name>]       e2b: in place of MUSTER_E2B_TEMPLATE
        [--push]                  push what it changed and open a pull request
   The agent is told where its task is, not what it says.
   It settles the task itself; one left unsettled is failed or released.
@@ -130,6 +134,9 @@ serve
   token list | token revoke <id>
   token exchange [-]             a CI job's own OIDC token for a board token:
                                  on stdin with -, or in MUSTER_OIDC_TOKEN
+  token rotate-key               sign new tokens with a new key; tokens the
+                                 old one signed still work
+  token drop-old-keys            stop every token an old key signed
   join <board url> --as <name>   ask a served board for a token, and wait
        [--note <text>] [--timeout 10m]
   join list | join deny <code>

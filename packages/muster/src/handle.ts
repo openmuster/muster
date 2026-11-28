@@ -80,7 +80,7 @@ const METHODS = [
   'post', 'reply', 'edit', 'remove', 'label', 'react', 'createChannel', 'workflowRequest',
   'readChannel', 'readThread', 'events', 'channels', 'search', 'actors', 'head', 'cursorGet', 'cursorSet',
   'taskCreate', 'taskPlan', 'taskClaim', 'taskRenew', 'taskRelease', 'taskComplete', 'taskFail', 'taskBlock',
-  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task',
+  'taskUnblock', 'taskReopen', 'taskCancel', 'taskAssign', 'taskNeeds', 'taskList', 'task', 'taskReport',
   'scheduleCreate', 'scheduleCancel', 'scheduleList', 'scheduleTick', 'schemaAdd', 'schemaList', 'filePut', 'fileGet', 'budgetSet', 'budgets',
 ] as const satisfies readonly (keyof Methods)[]
 

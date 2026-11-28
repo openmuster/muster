@@ -5,13 +5,13 @@ import { ask as askForUpdate, checkPath, readChecked, updateNotice } from './upd
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
 import type { PlanTask, Task, TaskState } from '../core/tasks.ts'
-import { Failure, misuse } from '../failure.ts'
+import { cursorAhead, Failure, misuse } from '../failure.ts'
 import { ROOT, board, type Board } from '../handle.ts'
 import type { Host } from '../watch/host.ts'
 import { processStart } from '../process.ts'
 import { cursor, duration, GLOBAL, id, list, on, pairs, parse, str, type Flags, type Parsed, type Spec } from './args.ts'
 import { dropClaim, heldClaim, keepClaim, type Holder } from './claims.ts'
-import { eventLine, messageLines, span, taskRow, taskState, threadLines, who } from './format.ts'
+import { eventLine, messageLines, reportText, span, taskRow, taskState, threadLines, who } from './format.ts'
 import { FAILING_PAUSE, clashWithWorkflows, daemonWorkflows, runDaemon } from '../daemon/daemon.ts'
 import { leftover, refuseRetired } from '../config/retired.ts'
 import { DAEMON_SPEC, SERVE_SPEC, chooseModule, defaultModule, endLaunch, invokedAs, launchGuard, loadBoard, loadsModule, refusal, self as thisCopy, type ModulePath } from './module.ts'
@@ -41,7 +41,7 @@ import { KEEP_LOGS_MS, runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
-import { boardKey } from '../serve/token.ts'
+import { boardKey, dropRetiredKeys, retiredKeys, rotateKey } from '../serve/token.ts'
 import { loadOidc } from '../serve/oidc.ts'
 import { actorId, profileName } from '../model.ts'
 import { fileURLToPath } from 'node:url'
@@ -232,6 +232,16 @@ const stopCode = (signal: AbortSignal) => (signal.reason === 'SIGTERM' ? 143 : 1
  * With no deadline it waits for as long as the command runs. A stop ends the pause at once, and
  * `failed` returns: the caller checks the stop and exits as stopped.
  */
+/**
+ * Refuses a cursor past the board's last event: one this board never gave out, most likely because it was
+ * restored from a backup since. Read on from it, and everything written until the board caught up would be
+ * skipped without a word.
+ */
+async function notAhead(team: Board, after: number) {
+  const head = await team.head()
+  if (after > head) throw cursorAhead(after, head)
+}
+
 function outages(run: Run, deadline?: number) {
   let failing = 0
   let reached = false
@@ -553,7 +563,7 @@ const commands: Record<string, Command> = {
         return print(run, { workflows }, () =>
           workflows.length === 0
             ? `no workflows in ${workflowsPath()}`
-            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}`).join('\n'),
+            : workflows.map((workflow) => `${workflow.name.padEnd(20)}  ${workflow.description}  who: ${workflow.who.join(', ')}  channels: ${workflow.channels.join(', ')}${workflow.mode === 'suggest' ? '  suggest only' : ''}`).join('\n'),
         )
       }
       if (verb === 'run') {
@@ -624,6 +634,16 @@ const commands: Record<string, Command> = {
       if (amount === undefined && !on(parsed.flags, 'none')) throw misuse('invalid_budget', 'Say how much: mu budget work 25, or --none to lift it.')
       const set = await run.team.budgetSet({ channel, usd: on(parsed.flags, 'none') ? null : Number(amount) })
       print(run, set, () => (set.usd === null ? `no budget  #${set.channel}` : `budget  #${set.channel}  $${set.spent.toFixed(2)} of $${set.usd.toFixed(2)}`))
+    },
+  },
+
+  report: {
+    spec: { value: ['since'] },
+    async run(run, parsed) {
+      const channel = parsed.positionals[0]
+      const since = new Date(Date.now() - duration(str(parsed.flags, 'since') ?? '30d', 'since') * 1000).toISOString()
+      const found = await run.team.taskReport({ ...(channel !== undefined ? { channel } : {}), since })
+      print(run, found, () => reportText(found))
     },
   },
 
@@ -711,10 +731,13 @@ const commands: Record<string, Command> = {
       const outage = outages(run, deadline)
       let after = given !== undefined ? cursor(given, 'after') : await run.team.head()
       if (given === undefined) outage.ok()
+      let checked = false
       let pause = 100
       for (;;) {
         let page: Awaited<ReturnType<Board['events']>>
         try {
+          if (given !== undefined && !checked) await notAhead(run.team, after)
+          checked = true
           page = await run.team.events({ after, filter, limit: 1 })
           outage.ok()
         } catch (error) {
@@ -754,10 +777,13 @@ const commands: Record<string, Command> = {
       // Once following, an outage is waited out for as long as the tail runs.
       const outage = outages(run)
       if (given === undefined) outage.ok()
+      let checked = false
       let pause = 100
       while (!run.io.stop.aborted) {
         let page: Awaited<ReturnType<Board['events']>>
         try {
+          if (given !== undefined && !checked) await notAhead(run.team, after)
+          checked = true
           page = await run.team.events({ after, filter })
           outage.ok()
         } catch (error) {
@@ -807,10 +833,24 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by', 'template'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push', 'estimate'] },
     async run(run, parsed) {
       // Checked here, on what was typed: a cloud worker passes its flags on to each task it runs by ID.
       refuseByWithoutReady(parsed)
+      if (on(parsed.flags, 'estimate')) {
+        if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--estimate says what the ready tasks may cost: pass --ready <channel>.')
+        const found = await estimate(run, parsed)
+        return print(run, found, () => estimateLine(found))
+      }
+      // Before a worker takes one task after another, what they may cost, from what this channel's cost lately. Said once, never with --json.
+      // A board that won't say (a token closed to reports, a server older than the route) costs the worker nothing: it starts as before.
+      if (on(parsed.flags, 'loop') && str(parsed.flags, 'ready') !== undefined && !run.json) {
+        const found = await estimate(run, parsed).catch((error: unknown) => {
+          if (error instanceof Failure && error.exit === 2) throw error
+          return null
+        })
+        if (found) run.io.out(estimateLine(found))
+      }
       if (!on(parsed.flags, 'loop')) return runAgent(run, parsed)
       if (str(parsed.flags, 'ready') === undefined) throw misuse('nothing_to_claim', '--loop takes the next ready task each time: pass --ready <channel>.')
       // A cloud worker keeps its own loop here, a sandbox (on Cloudflare, a container) per task.
@@ -962,7 +1002,18 @@ const commands: Record<string, Command> = {
         print(run, { token: made.token, id: made.record.id, trust: made.trust, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
         return
       }
-      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
+      if (verb === 'rotate-key' || verb === 'drop-old-keys') {
+        // The keys are files on this machine, beside the board: only its owner, here, changes them.
+        const me = await run.team.whoami()
+        if (me.mode !== 'file') throw new Failure('forbidden', `mu token ${verb} changes the keys of a board on this machine.`)
+        if (verb === 'rotate-key') {
+          const done = rotateKey(me.where, new Date(run.now()))
+          return print(run, done, () => `rotated  new tokens are signed with a new key; ${done.retired} old ${done.retired === 1 ? 'key keeps its' : 'keys keep their'} tokens good. Restart mu serve to use it.\nnext: mu token drop-old-keys, to stop every token an old key signed`)
+        }
+        const done = dropRetiredKeys(me.where)
+        return print(run, done, () => `dropped  ${done.dropped} old ${done.dropped === 1 ? 'key' : 'keys'}: every token ${done.dropped === 1 ? 'it' : 'they'} signed stops once mu serve restarts`)
+      }
+      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, mu token exchange, mu token rotate-key, or mu token drop-old-keys.')
       const can: Record<string, string[]> = {}
       for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
       // A token held to no channel reaches every one, as its owner does: that is asked for by name, never had by leaving --can out.
@@ -1056,7 +1107,7 @@ const commands: Record<string, Command> = {
       // The workloads the owner trusts to sign in with their platform's token. A file that is wrong stops the board here.
       const oidc = loadOidc()
       try {
-        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp, allowJoins, oidc, log: (line) => run.io.err(line) })
+        serving = await listen({ backend: run.team.backend, key, retired: retiredKeys(me.where), port, host, hosts: allowed, mcp, allowJoins, oidc, log: (line) => run.io.err(line) })
         self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })
@@ -1654,6 +1705,41 @@ async function filled(run: Run, task: number, owner: string, token: string, team
   }
 }
 
+/** How far back an estimate looks for what a task cost. */
+const ESTIMATE_SINCE = '30d'
+
+type Estimate = { channel: string; ready: number; more: boolean; agent: string | null; perTask: number | null; usd: number | null; since: string }
+
+/**
+ * What a worker would start on, and what that may cost: the tasks ready in its channel that it may take
+ * (its owners, `--by`, `--label`, assigned to it or to nobody), times what a task under that channel
+ * cost this agent on average over the last 30 days. With no cost on record it says so, never a guess.
+ */
+async function estimate(run: Run, parsed: Parsed): Promise<Estimate> {
+  const channel = str(parsed.flags, 'ready')!
+  const me = await run.team.whoami()
+  const owners = new Set([me.principal, ...list(parsed.flags, 'from')])
+  const by = str(parsed.flags, 'by')
+  const labels = list(parsed.flags, 'label')
+  const found = await run.team.taskList({ channel, state: 'ready', limit: 1000, ...(labels.length ? { labels } : {}) })
+  const ready = found.tasks.filter((task) => owners.has(task.owner.principal) && (by === undefined || actorId(task.owner) === by) && (task.for === null || task.for === me.profile)).length
+  const named = str(parsed.flags, 'agent')
+  const agent = named ?? (parsed.rest.length ? generic(parsed.rest[0]!, parsed.rest.slice(1)).name : null)
+  const since = new Date(Date.now() - duration(ESTIMATE_SINCE, 'since') * 1000).toISOString()
+  const history = await run.team.taskReport({ channel: channel.replace(/^#/, '').replace(/\/$/, ''), since })
+  const rows = agent === null ? history.agents : history.agents.filter((row) => row.key === agent)
+  const costed = rows.reduce((sum, row) => sum + row.costed, 0)
+  const perTask = costed ? Math.round((rows.reduce((sum, row) => sum + row.cost, 0) / costed) * 10_000) / 10_000 : null
+  return { channel, ready, more: found.more, agent, perTask, usd: perTask === null ? null : Math.round(perTask * ready * 100) / 100, since }
+}
+
+const estimateLine = (e: Estimate): string => {
+  const ready = `${e.ready}${e.more ? '+' : ''} ready`
+  if (e.ready === 0) return `${ready} in #${e.channel.replace(/^#/, '')}`
+  if (e.perTask === null) return `${ready}, no cost history${e.agent ? ` for ${e.agent}` : ''} in #${e.channel.replace(/^#/, '')}`
+  return `${ready}, about $${e.usd!.toFixed(2)} at $${e.perTask.toFixed(2)} a task`
+}
+
 /** What the board says when it couldn't answer, rather than answering no: a task claimed meanwhile is given back, not failed. */
 const RELEASE_ON = new Set(['network_error', 'busy', 'bad_answer', 'unauthorized', 'internal'])
 
@@ -1666,7 +1752,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   // Checked before the board is asked anything: starting a sandbox needs only where the board is.
   if (where !== 'local') return runInCloud(run, parsed, where, agent)
   // These are about a sandbox: on this machine they would do nothing, so they are refused, not ignored.
-  const cloudOnly = (['repo', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
+  const cloudOnly = (['repo', 'template', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' || flag === 'template' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
   if (cloudOnly) throw misuse(cloudOnly === 'push' ? 'push_unsupported' : 'unknown_flag', `--${cloudOnly} is for a cloud runner, and this run is on this machine.`, 'Add --runner vercel, --runner cloudflare or --runner e2b, or leave it out.')
   const me = await run.team.whoami()
   const cwd = resolvePath(str(parsed.flags, 'cwd') ?? process.cwd())
@@ -1814,6 +1900,12 @@ export function repoUrl(value: string): string {
  * itself, through the board at MUSTER_URL, which the sandbox must be able to reach.
  */
 async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
+  // --template names the E2B template for this run, in place of MUSTER_E2B_TEMPLATE: a workflow's own, say.
+  const template = str(parsed.flags, 'template')
+  if (template !== undefined) {
+    if (where !== 'e2b') throw misuse('unknown_flag', `--template names an E2B template, and this run is on ${where}.`, 'Use it with --runner e2b, or leave it out.')
+    run = { ...run, io: { ...run.io, env: { ...run.io.env, MUSTER_E2B_TEMPLATE: template } } }
+  }
   // --ready --loop is a worker here with a sandbox (on Cloudflare, a container) per task; --ready alone is one sandbox that takes task after task.
   if (str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, where, agent)
   return cloudTask(run, parsed, where, agent)

@@ -316,7 +316,7 @@ describe('the receiver in the docs', () => {
    */
   const documented = (now = () => Date.now()) => {
     const page = readFileSync(new URL('../docs/01-concepts/15-outgoing-webhooks.md', import.meta.url), 'utf8')
-    const code = /## Verify it[\s\S]*?```js\n([\s\S]*?)```/.exec(page)![1]!.replace(/^import .*\n/m, '')
+    const code = /### How a receiver checks the signature[\s\S]*?```js\n([\s\S]*?)```/.exec(page)![1]!.replace(/^import .*\n/m, '')
     return new Function('createHmac', 'timingSafeEqual', 'Date', `${code}\nreturn fromMuster`)(createHmac, timingSafeEqual, { now }) as (headers: Record<string, string>, raw: string, secret: string) => boolean
   }
 
