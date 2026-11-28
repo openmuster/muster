@@ -81,6 +81,9 @@ export const sync = {
 }
 ```
 
+For several repositories on one board, give each its own team and project:
+[Run several repositories on one board](./20-a-feedback-loop.md#run-several-repositories-on-one-board).
+
 **Keep the statuses the loop reads.** A card follows its issue's status:
 
 | Linear status | The card | Who sets it |

@@ -16,8 +16,9 @@ each step.
 
 | File | What it is |
 | --- | --- |
-| `board.ts` | Sync from Slack, Linear, GitHub and Notion, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `stage`, `planned`, `plan-stopped`, `declined`, `round`, `settled`, `resume`, `needs-me` |
+| `board.ts` | Sync from Slack, Linear, GitHub and Notion, each into its own channel under `cards/`, and the watchers that move a card along: `intake`, `promote`, `approve`, `edited`, `stage`, `planned`, `plan-stopped`, `declined`, `round`, `settled`, `resume`, `needs-me`, `next` |
 | `workflows.json` | `triage`, one step that turns a report into a card; `planning`, one step that shapes a report with you over rounds; and `card`, spec, work and review, with `--push` for the work step only |
+| `projects.ts` | For several repositories on one board: writes the 3 workflows again for each project in `loop-projects.json`, with its repository, runner, template and model |
 
 ```bash
 cp workflows.json ~/.config/muster/
@@ -26,6 +27,21 @@ export LOOP_TRUSTED=slack:user:U0123,lin:user:3f2a...   # who may start work wit
 export NOTIFY_CMD=...                                    # optional: a command that gets one line to show you
 mu serve --module "$PWD/board.ts" --allow-host <your host>   # with MUSTER_SANDBOX_URL, not MUSTER_URL
 ```
+
+## Several repositories on one board
+
+Each repository is a project, with its cards under `cards/<project>/`. Name
+each one in `~/.config/muster/loop-projects.json`, map its sources to its
+channel in `board.ts`, write its workflows, and restart `mu serve`:
+
+```bash
+node projects.ts ~/.config/muster/loop-projects.json > ~/.config/muster/workflows.json
+```
+
+A project's `trusted`, `public` and `maxRuns` replace `LOOP_TRUSTED`,
+`LOOP_PUBLIC` and the global cap on its cards. `LOOP_MAX_RUNS` caps all the
+loop's runs at once. The guide has the settings and the steps:
+[Run several repositories on one board](../../packages/muster/docs/03-guides/20-a-feedback-loop.md#run-several-repositories-on-one-board).
 
 ## A card's life
 
