@@ -2,7 +2,7 @@ import { OIDC_LIVE_MAX, verifier, type Trust } from './oidc.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Backend } from '../backend/types.ts'
 import { VERSION } from '../version.ts'
-import { Failure, misuse } from '../failure.ts'
+import { cursorAhead, Failure, misuse } from '../failure.ts'
 import { profileName, WORKFLOWS_PROFILE, type Caller } from '../model.ts'
 import { memoryRegistry, mintToken, type MintRequest, type Registry } from './tokens.ts'
 import { verify, type Claims } from './token.ts'
@@ -56,6 +56,8 @@ async function bodyOf(req: IncomingMessage, max = BODY_MAX): Promise<unknown> {
 export type ServeOptions = {
   backend: Backend
   key: Buffer
+  /** Keys the board signed with before `key`, whose tokens are still good. */
+  retired?: readonly Buffer[]
   now?: () => number
   /** The board's list of tokens it made. Default: the backend's own. */
   tokens?: Registry
@@ -90,7 +92,7 @@ export function createHandler(options: ServeOptions) {
   const tokens = options.tokens ?? options.backend.registry?.() ?? memoryRegistry()
   const claimsOf = (req: IncomingMessage): Claims => {
     const header = req.headers.authorization
-    const claims = verify(options.key, header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())
+    const claims = verify([options.key, ...(options.retired ?? [])], header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())
     // A token the board's owner stopped is refused like one that ran out.
     if (claims.jti && tokens.revoked(claims.jti)) throw new Failure('unauthorized', 'That token was revoked.', { hint: 'Get a new one from whoever runs the board.' })
     return claims
@@ -160,7 +162,7 @@ export function createHandler(options: ServeOptions) {
       if (bearer?.startsWith('Bearer ') && !(SANDBOX.has(route) && req.method === 'POST') && !(route === 'whoami' && req.method === 'GET')) {
         let held: Claims | null = null
         try {
-          held = verify(options.key, bearer.slice(7), now())
+          held = verify([options.key, ...(options.retired ?? [])], bearer.slice(7), now())
         } catch {
           // Not a token of this board's: the route decides what that means.
         }
@@ -273,7 +275,10 @@ export function createHandler(options: ServeOptions) {
         if (url.searchParams.get('root') === 'true') filter.root = true
         if (url.searchParams.getAll('kind').length) filter.kinds = url.searchParams.getAll('kind')
         const resume = req.headers['last-event-id'] ?? url.searchParams.get('after')
-        let after = resume !== null && resume !== undefined && /^\d+$/.test(String(resume)) ? Number(resume) : await options.backend.head(caller)
+        const last = await options.backend.head(caller)
+        let after = resume !== null && resume !== undefined && /^\d+$/.test(String(resume)) ? Number(resume) : last
+        // A reader that comes back with a cursor past the last event would be skipped past whatever is written next.
+        if (after > last) throw cursorAhead(after, last)
         // Checked once before the stream opens, so a bad filter is an error and not an empty feed.
         await options.backend.events(caller, { after, filter, limit: 1 })
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })

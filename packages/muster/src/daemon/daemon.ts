@@ -135,6 +135,7 @@ export async function runDaemon(options: DaemonOptions): Promise<'stopped' | 'he
         for (const id of did.schedules.canceled) options.log(`canceled  schedule ${id}  its token was revoked`)
         if (did.workflows?.started.length) options.log(`started   workflow  ${did.workflows.started.join(' ')}`)
         if (did.workflows?.refused.length) options.log(`refused   workflow  ${did.workflows.refused.join(' ')}`)
+        if (did.workflows?.suggested?.length) options.log(`suggested workflow  ${did.workflows.suggested.join(' ')}`)
         if (did.workflows?.reported?.length) options.log(`reported  workflow  ${did.workflows.reported.join(' ')}`)
         if (did.workflows?.updated?.length) options.log(`updated   workflow  ${did.workflows.updated.join(' ')}`)
         if (did.workflows?.why) options.log(`failed    workflow  ${did.workflows.why}`)

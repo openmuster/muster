@@ -182,10 +182,42 @@ board doesn't remove the files it put in a Slack thread.
 
 A delivery that fails is tried again on the next tick, and the messages after
 it wait their turn. After five tries the board records a `sync.failed` event on
-the thread, with the platform's answer, and the next message goes.
+the thread, with a short code for the platform's answer (`platform_422`), and
+the next message goes.
+
+A platform that is down or busy uses none of those tries. That is a 5xx, a 429,
+or no answer at all. The board stops asking that platform for 1 second, then 2,
+4 and so on, up to 5 minutes, and sends as soon as it answers again. A message
+still waiting after 24 hours gets its `sync.failed` and the next one goes.
+
+A send that gets no answer may have reached the platform all the same: no
+answer in time, a 5xx other than 503, or a connection that broke once made.
+The board doesn't send it again blindly. Each message carries a marker that
+nobody sees:
+
+| Platform | Marker |
+| --- | --- |
+| GitHub | An HTML comment at the end of the issue or comment, `<!-- muster:<marker> -->` |
+| Slack | Message metadata of type `muster_message` |
+| Linear | The comment's or issue's own ID, which the board chooses |
+
+Before the next try, the board looks for the marker on the platform, on posts
+its own bot wrote: set `bot` in the sync (or use a GitHub App) for this to
+work. If it finds the message, it records it as delivered. If it doesn't, it sends the
+message. Notion has nowhere to put a marker, and a sync with no `bot` can't tell its
+own posts from anyone's. There, a message whose send got no answer gets a
+`sync.failed` with `unconfirmed` and is not sent again:
+look at the page, and reply again if it isn't there. A sender that died
+mid-send is treated the same way.
+
+What comes in is held to the same rules. An event the board can't read or
+import after ten tries, or after 24 hours of the platform being down, is given
+up with a `sync.dropped` event on its thread, or in the channel its place
+maps to. An event the filter drops, or one a platform read turns out empty,
+leaves no event: it was never for the board.
 
 ```bash
-mu tail web/ --type sync.failed
+mu tail web/ --type sync.failed --type sync.dropped
 ```
 
 ## A filter for what comes in

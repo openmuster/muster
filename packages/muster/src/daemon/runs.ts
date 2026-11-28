@@ -71,7 +71,8 @@ export function missingSettings(workers: Workflow['workers'], env: Record<string
   const missing: string[] = []
   if (!env.MUSTER_URL && !env.MUSTER_SANDBOX_URL) missing.push('MUSTER_URL or MUSTER_SANDBOX_URL')
   if (workers.runner === 'cloudflare') for (const name of ['MUSTER_CF_WORKER', 'MUSTER_CF_SECRET']) if (!env[name]) missing.push(name)
-  if (workers.runner === 'e2b') for (const name of ['E2B_API_KEY', 'MUSTER_E2B_TEMPLATE']) if (!env[name]) missing.push(name)
+  // A workflow that names its own template needs none from the daemon's environment.
+  if (workers.runner === 'e2b') for (const name of ['E2B_API_KEY', ...(workers.template ? [] : ['MUSTER_E2B_TEMPLATE'])]) if (!env[name]) missing.push(name)
   if (workers.runner === 'vercel') {
     const set = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'].filter((name) => env[name])
     if (set.length === 0 && !env.VERCEL_OIDC_TOKEN) missing.push('VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN')
@@ -83,9 +84,10 @@ export function missingSettings(workers: Workflow['workers'], env: Record<string
 
 /**
  * What a pass did. `reported` is there only when a run was summed up on its thread, and `updated` only when
- * a run summed up before was summed up again, after a task of it was reopened.
+ * a run summed up before was summed up again, after a task of it was reopened, and `suggested` only when a
+ * workflow in suggest mode said what it would start.
  */
-export type Ran = { started: number[]; refused: number[]; reported?: number[]; updated?: number[]; why?: string }
+export type Ran = { started: number[]; refused: number[]; suggested?: number[]; reported?: number[]; updated?: number[]; why?: string }
 
 /** A refusal that says nothing about the request, only that the board couldn't answer just now: it is read again next tick. */
 const TRANSIENT = new Set(['busy', 'network_error', 'bad_answer'])
@@ -120,7 +122,7 @@ const BATCH = 20
 /** How much of a task's result or reason a summary quotes: its first line, cut to this. */
 const QUOTE = 200
 /** A label on a run's first message once its summary is said, for people to see. The daemon never reads it. */
-export const REPORTED = 'workflow.reported'
+const REPORTED = 'workflow.reported'
 /**
  * A label on a run's start reply: `open` while the run works, `done` once it is summed up, and `open` again
  * while a reopened task works. The reply's text says how far the run is, so a thread shows one message that
@@ -163,6 +165,8 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
     // Any task may push: a step that mustn't is labelled so by the daemon, and the worker reads only that.
     ...(pushes(workflow) ? ['--push'] : []),
     ...(workers.timeout ? ['--timeout', workers.timeout] : []),
+    ...(workers.template ? ['--template', workers.template] : []),
+    ...(workers.model ? ['--model', workers.model] : []),
     '--by', `${owner}+${WORKFLOWS_PROFILE}`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
   ]
 }
@@ -275,6 +279,11 @@ export async function runWorkflows(team: Board, workflows: Workflow[], deps: Run
       if (refusal !== null || !workflow) {
         await say(event.seq, thread, refusal!)
         out.refused.push(event.seq)
+      } else if (workflow.mode === 'suggest') {
+        // Said from the config alone, and answered like any request: the cursor moves past it, so nothing
+        // starts it later, whatever the mode is by then. Asking again is a new request.
+        await say(event.seq, thread, `would start ${name}: ${workflow.steps.length} ${workflow.steps.length === 1 ? 'task' : 'tasks'}, ${workflow.workers.count} ${workflow.workers.count === 1 ? 'worker' : 'workers'}; suggest only, nothing started`)
+        ;(out.suggested ??= []).push(event.seq)
       } else {
         const result = await start(team, writer, workflow, { seq: event.seq, at: event.at, channel, thread, on: typeof asked === 'number' ? asked : thread, by: event.by, args: args ?? {}, private: inPrivate !== false }, owner, deps)
         await say(event.seq, thread, result.text, result.failed === undefined)

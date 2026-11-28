@@ -39,3 +39,7 @@ export class Failure extends Error {
 
 /** A request the caller got wrong: exit 2. */
 export const misuse = (reason: string, message: string, hint?: string) => new Failure(reason, message, { exit: 2, ...(hint ? { hint } : {}) })
+
+/** A cursor past a board's last event: see `mu wait --after`, `mu tail --after` and the live feed. */
+export const cursorAhead = (after: number, head: number) =>
+  new Failure('cursor_ahead', `The cursor ${after} is past this board's last event, ${head}.`, { hint: 'Was the board restored from a backup? Read on from its head, or from 0 to read it all again.', data: { head } })

@@ -7,7 +7,7 @@ import type { Message } from '../model.ts'
 
 type MessageType = 'message.posted' | 'message.edited' | 'message.deleted'
 type TaskType = 'task.created' | 'task.ready' | 'task.claimed' | 'task.renewed' | 'task.released' | 'task.expired' | 'task.blocked' | 'task.completed' | 'task.failed' | 'task.canceled' | 'task.reopened' | 'task.assigned' | 'task.needs_changed' | 'task.waiting' | 'task.extended'
-type OtherType = 'channel.created' | 'labels.changed' | 'reaction.added' | 'reaction.removed' | 'schedule.created' | 'schedule.canceled' | 'schedule.skipped' | 'schema.registered' | 'budget.set' | 'sync.delivered'
+type OtherType = 'channel.created' | 'labels.changed' | 'reaction.added' | 'reaction.removed' | 'schedule.created' | 'schedule.canceled' | 'schedule.skipped' | 'schema.registered' | 'budget.set' | 'sync.delivered' | 'sync.failed' | 'sync.dropped'
 
 /**
  * An event as a watcher gets it: exactly what `mu tail --json` prints for it, narrowed by `type`. A

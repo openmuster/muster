@@ -7,7 +7,7 @@ import { channelPath } from '../model.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
 import { declared, type Resolved, type Secret, type SyncOptions } from './declare.ts'
-import { SEND_MS, type Inbound, type Provider, type Received, type Remote, type WorkingStep } from './types.ts'
+import { SEND_MS, type Inbound, type Provider, type Remote, type WorkingStep } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -45,6 +45,12 @@ async function send(fetcher: typeof fetch, url: string, init: RequestInit): Prom
   if (!response.ok) throw new Failure(`platform_${response.status}`, `The platform answered ${response.status}.`)
   return body
 }
+
+/** How a GitHub issue or comment the board posted carries its marker: a comment GitHub doesn't show. */
+const githubMarker = (marker: string) => `<!-- muster:${marker} -->`
+
+/** The metadata type a Slack message the board posted carries its marker under. */
+const SLACK_MARKER = 'muster_message'
 
 /** GitHub catch-up reads at most this many pages of 100 of each list per repo. */
 const GITHUB_CATCHUP_PAGES = 10
@@ -141,6 +147,8 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
     return `Bearer ${token.token}`
   }
   // GitHub has no API that attaches a file to an issue or a comment: each file is named, and stays on the board.
+  const headersFor = async (repo: string, fetcher: typeof fetch) => ({ authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' })
+  const openedIssue = (repo: string, number: unknown) => ({ external: `${repo}#${number}`, thread: `${repo}#${number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${number}` } })
   const named = (message: { text: string; attachments: { name: string; size: number }[] }, text: string) => withLines(text, message.attachments.map((file) => noteOut(`${file.name} (${sizeOf(file.size)})`, 'GitHub takes no uploads, it is on the board')))
   /**
    * An issue's or a pull request's labels and assignees, as GitHub lists them now. Every event about one
@@ -321,23 +329,46 @@ function githubWith(options: Resolved<GitHubOptions>): Provider {
       const { to } = mapping(place)
       return typeof to === 'object' && to.mirror === true && (options.token !== undefined || app !== undefined)
     },
-    async deliver(message, target, fetcher) {
-      const headersFor = async (repo: string) => ({ authorization: await bearer(repo, fetcher), accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'muster' })
+    async deliver(message, target, fetcher, _read, marker) {
+      // The marker is an HTML comment: GitHub shows nothing of it, and a later try finds it in the body.
+      const marked = (text: string) => (marker ? `${text}\n\n${githubMarker(marker)}` : text)
       if (target.threadExternal === null) {
         // A thread started on the board opens an issue: its first line is the title.
         const repo = target.place.split('|')[0]!
-        const headers = await headersFor(repo)
+        const headers = await headersFor(repo, fetcher)
         const [title, ...rest] = message.text.split('\n')
-        const made = await send(fetcher, `${api}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: named(message, rest.join('\n').trim()) }) })
-        return { external: `${repo}#${made.number}`, thread: `${repo}#${made.number}`, labels: { kind: 'issue', state: 'open', ref: `${repo}#${made.number}` } }
+        const made = await send(fetcher, `${api}/repos/${repo}/issues`, { method: 'POST', headers, body: JSON.stringify({ title: title!.slice(0, 250), body: marked(named(message, rest.join('\n').trim())) }) })
+        return openedIssue(repo, made.number)
       }
       const [repo, number] = target.threadExternal.split('#') as [string, string]
       const made = await send(fetcher, `${api}/repos/${repo}/issues/${number}/comments`, {
         method: 'POST',
-        headers: await headersFor(repo),
-        body: JSON.stringify({ body: named(message, message.text) }),
+        headers: await headersFor(repo, fetcher),
+        body: JSON.stringify({ body: marked(named(message, message.text)) }),
       })
       return { external: `comment:${made.id}` }
+    },
+    async find(marker, message, target, fetcher) {
+      // What changed since a little before the message was written: a try is never older than that.
+      const since = new Date(Date.parse(message.at) - 600_000).toISOString()
+      // Only what the board's own identity wrote counts, the earliest first: someone who copied the marker into a
+      // post of theirs can't make the board take it for its own.
+      // With no `bot` and no App, the board can't tell its own posts from anyone's: it looks for nothing, and says
+      // the send is unconfirmed rather than take someone else's post for it.
+      if (options.bot === undefined && app === undefined) throw new Failure('unconfirmed', 'The sync names no bot, so the board cannot tell its own posts on GitHub.')
+      const mine = (item: any) => (options.bot !== undefined && item?.user?.login === options.bot) || (app !== undefined && String(item?.performed_via_github_app?.id ?? '') === app.id)
+      const has = (item: any) => typeof item?.body === 'string' && item.body.includes(githubMarker(marker)) && mine(item)
+      if (target.threadExternal === null) {
+        const repo = target.place.split('|')[0]!
+        // The newest first, so a busy repo can't push it off the page; of those that match, the one made first.
+        const issues = await send(fetcher, `${api}/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100&since=${since}`, { headers: await headersFor(repo, fetcher) })
+        const made = Array.isArray(issues) ? issues.filter(has).sort((a: any, b: any) => Number(a.number) - Number(b.number))[0] : undefined
+        return made ? openedIssue(repo, made.number) : null
+      }
+      const [repo, number] = target.threadExternal.split('#') as [string, string]
+      const comments = await send(fetcher, `${api}/repos/${repo}/issues/${number}/comments?per_page=100&since=${since}`, { headers: await headersFor(repo, fetcher) })
+      const made = Array.isArray(comments) ? comments.find(has) : undefined
+      return made ? { external: `comment:${made.id}` } : null
     },
   }
 }
@@ -469,6 +500,11 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
     const found = [...String(text ?? '').matchAll(/!?\[([^\]\n]*)\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g)].map((match) => ({ url: match[2]!, name: match[1] || match[2]!.split('/').pop()! }))
     const once = found.filter((file, index) => found.findIndex((other) => other.url === file.url) === index)
     return once.length ? once : undefined
+  }
+  /** A new issue's thread, as `deliver` makes it, from what Linear says of it. */
+  const linearIssue = (created: Record<string, any>) => {
+    const labels: Record<string, string> = { kind: 'issue', ...(created.identifier ? { ref: String(created.identifier) } : {}), ...(created.state?.name ? { state: slug(String(created.state.name)) } : {}) }
+    return { external: `issue:${created.id}`, thread: `issue:${created.id}`, labels }
   }
   const postAs = async (query: string, variables: unknown, fetcher: typeof fetch) => {
     const ask = async () => send(fetcher, api, { method: 'POST', headers: { authorization: await authorization(fetcher), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) })
@@ -693,7 +729,7 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
       const cuts = [issues.cut, comments.cut].filter((cut) => cut !== undefined)
       return cuts.length ? { events: out, ...soonest(cuts) } : out
     },
-    async deliver(message, target, fetcher, read) {
+    async deliver(message, target, fetcher, read, marker) {
       const post = (query: string, variables: unknown) => postAs(query, variables, fetcher)
       // Each file is uploaded to Linear's storage first, then linked from the text. The upload URL is signed by
       // Linear and gets only the headers Linear gave for it, never the token.
@@ -724,17 +760,31 @@ function linearWith(options: Resolved<LinearOptions>): Provider {
         const teamId = found?.data?.teams?.nodes?.[0]?.id
         if (!teamId) throw new Failure('platform_refused', `Linear has no team "${target.place}".`)
         const [title, ...rest] = message.text.split('\n')
-        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier state { name } } } }', { input: { teamId, title: title!.slice(0, 250), description: withLines(rest.join('\n').trim(), lines) } })
+        // The marker is the issue's own ID, which Linear lets the caller choose: a later try asks for it by that.
+        const made = await post('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier state { name } } } }', { input: { teamId, title: title!.slice(0, 250), description: withLines(rest.join('\n').trim(), lines), ...(marker ? { id: marker } : {}) } })
         const created = made?.data?.issueCreate?.issue
-        const issue = created?.id
-        if (!issue) throw new Failure('platform_refused', 'Linear did not make the issue.')
-        const labels: Record<string, string> = { kind: 'issue', ...(created.identifier ? { ref: String(created.identifier) } : {}), ...(created.state?.name ? { state: slug(String(created.state.name)) } : {}) }
-        return { external: `issue:${issue}`, thread: `issue:${issue}`, labels }
+        if (!created?.id) throw new Failure('platform_refused', 'Linear did not make the issue.')
+        return linearIssue(created)
       }
-      const made = await post('mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: withLines(message.text, lines) } })
+      const made = await post('mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }', { input: { issueId: target.threadExternal!.replace(/^issue:/, ''), body: withLines(message.text, lines), ...(marker ? { id: marker } : {}) } })
       const id = made?.data?.commentCreate?.comment?.id
       if (!id) throw new Failure('platform_refused', 'Linear did not make the comment.')
       return { external: `comment:${id}` }
+    },
+    async find(marker, _message, target, fetcher) {
+      // With no `bot`, and no app user learned yet, the board can't tell its own posts on Linear from anyone's.
+      if (options.bot === undefined && appUser === undefined) throw new Failure('unconfirmed', 'The sync names no bot, so the board cannot tell its own posts on Linear.')
+      const root = target.threadExternal === null
+      const got = await postAs(root ? 'query($id: String!) { issue(id: $id) { id identifier state { name } creator { id } } }' : 'query($id: String!) { comment(id: $id) { id user { id } } }', { id: marker }, fetcher)
+      const found = root ? got?.data?.issue : got?.data?.comment
+      // An ID is taken once on Linear: one someone else took first is theirs, and this message never went.
+      const author = root ? found?.creator?.id : found?.user?.id
+      if (found?.id && author !== undefined && !own(String(author))) throw new Failure('platform_refused', 'Linear has the ID the board chose, on something it did not write.')
+      if (found?.id) return root ? linearIssue(found) : { external: `comment:${found.id}` }
+      // Linear answers a lookup of an ID it doesn't have with an error, not with null.
+      if (Array.isArray(got?.errors) && got.errors.some((error: any) => /not found/i.test(String(error?.message ?? '')) || error?.extensions?.code === 'ENTITY_NOT_FOUND' || error?.extensions?.type === 'invalid input')) return null
+      if (got?.data && (got.data.issue === null || got.data.comment === null)) return null
+      throw new Failure('platform_refused', 'Linear did not say whether it has the message.')
     },
   }
 }
@@ -1018,7 +1068,7 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
       if (file.size !== undefined && got.bytes.length !== file.size) throw refused(`Slack sent ${sizeOf(got.bytes.length)}, not the ${sizeOf(file.size)} it named`)
       return got
     },
-    async deliver(message, target, fetcher, read) {
+    async deliver(message, target, fetcher, read, marker) {
       const [channel, ts] = (target.threadExternal ?? target.place).split(':')
       const auth = { authorization: `Bearer ${options.token}` }
       // Each file's bytes go up first, so a retry never posts the text twice; they are shared into the thread last.
@@ -1046,7 +1096,8 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
       const made = await send(fetcher, `${base}/chat.postMessage`, {
         method: 'POST',
         headers: { ...auth, 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ channel, thread_ts: ts, text }),
+        // The marker goes in the message's metadata, which Slack shows nobody, and a later try asks for.
+        body: JSON.stringify({ channel, thread_ts: ts, text, ...(marker ? { metadata: { event_type: SLACK_MARKER, event_payload: { marker } } } : {}) }),
       })
       if (made.ok !== true) throw new Failure(`slack_${made.error ?? 'error'}`, `Slack refused the message: ${made.error ?? 'unknown'}.`)
       if (uploaded.length) {
@@ -1060,6 +1111,17 @@ function slackWith(options: Resolved<SlackOptions>): Provider {
         }
       }
       return { external: `${channel}:${made.ts}`, ...(target.threadExternal === null ? { thread: `${channel}:${made.ts}` } : {}), ...(uploaded.length ? { files: uploaded.map((file) => file.id) } : {}) }
+    },
+    async find(marker, message, target, fetcher) {
+      const [channel, ts] = (target.threadExternal ?? target.place).split(':') as [string, string | undefined]
+      const oldest = toTs((Date.parse(message.at) - 600_000) * 1000)
+      const got = ts === undefined ? await api(fetcher, 'conversations.history', { channel, oldest, limit: '200', include_all_metadata: 'true' }) : await api(fetcher, 'conversations.replies', { channel, ts, oldest, limit: '200', include_all_metadata: 'true' })
+      // Only the board's own bot's message counts: anyone can put metadata on a message of theirs. With no `bot`,
+      // the board can't tell which bot is its own.
+      if (options.bot === undefined) throw new Failure('unconfirmed', 'The sync names no bot, so the board cannot tell its own messages on Slack.')
+      const made = (got.messages ?? []).find((each: any) => isSelf(each) && each?.metadata?.event_type === SLACK_MARKER && each.metadata.event_payload?.marker === marker)
+      if (!made) return null
+      return { external: `${channel}:${made.ts}`, ...(ts === undefined ? { thread: `${channel}:${made.ts}` } : {}) }
     },
   }
 }

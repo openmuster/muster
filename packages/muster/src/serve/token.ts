@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from '../cli/claims.ts'
 import { Failure } from '../failure.ts'
@@ -30,9 +30,11 @@ const b64 = (data: Buffer | string) => Buffer.from(data).toString('base64url')
  * The key a board's tokens are signed with. It is made once and kept, so a restart of `mu serve`
  * doesn't strand every client holding a token.
  */
+const keyName = (where: string) => createHash('sha256').update(where).digest('hex').slice(0, 16)
+
 export function boardKey(where: string, dir = configDir()): Buffer {
   const folder = join(dir, 'keys')
-  const path = join(folder, createHash('sha256').update(where).digest('hex').slice(0, 16) + '.key')
+  const path = join(folder, keyName(where) + '.key')
   try {
     return Buffer.from(readFileSync(path, 'utf8').trim(), 'base64url')
   } catch {
@@ -48,6 +50,54 @@ export function boardKey(where: string, dir = configDir()): Buffer {
   }
 }
 
+/**
+ * Keys a board signed with before its current one, kept so the tokens they signed stay good until the owner
+ * drops them (`mu token drop-old-keys`). Read when `mu serve` starts.
+ */
+export function retiredKeys(where: string, dir = configDir()): Buffer[] {
+  const folder = join(dir, 'keys')
+  let names: string[]
+  try {
+    names = readdirSync(folder)
+  } catch {
+    return []
+  }
+  const prefix = `${keyName(where)}.`
+  return names
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.retired'))
+    .sort()
+    .map((name) => Buffer.from(readFileSync(join(folder, name), 'utf8').trim(), 'base64url'))
+}
+
+/**
+ * Puts a new signing key in place of the board's current one, which is kept as retired: tokens it signed still
+ * work, and every token made from now on is signed with the new one. Returns how many keys are retired.
+ */
+export function rotateKey(where: string, now: Date, dir = configDir()): { retired: number } {
+  boardKey(where, dir)
+  const folder = join(dir, 'keys')
+  renameSync(join(folder, `${keyName(where)}.key`), join(folder, `${keyName(where)}.${now.toISOString().replace(/[:.]/g, '-')}.retired`))
+  boardKey(where, dir)
+  return { retired: retiredKeys(where, dir).length }
+}
+
+/** Deletes a board's retired keys, which stops every token they signed. Returns how many there were. */
+export function dropRetiredKeys(where: string, dir = configDir()): { dropped: number } {
+  const folder = join(dir, 'keys')
+  const prefix = `${keyName(where)}.`
+  let dropped = 0
+  try {
+    for (const name of readdirSync(folder)) {
+      if (!name.startsWith(prefix) || !name.endsWith('.retired')) continue
+      rmSync(join(folder, name))
+      dropped++
+    }
+  } catch {
+    // No keys folder: nothing was retired.
+  }
+  return { dropped }
+}
+
 const sign = (key: Buffer, body: string) => createHmac('sha256', key).update(body).digest()
 
 export function mint(key: Buffer, claims: Claims): string {
@@ -58,13 +108,19 @@ export function mint(key: Buffer, claims: Claims): string {
 const unauthorized = (message: string) => new Failure('unauthorized', message, { hint: 'Get a token from whoever runs the board: mu token create.' })
 
 /** The claims of a token this board signed and that hasn't run out. Anything else is refused the same way. */
-export function verify(key: Buffer, token: string | undefined, now: number): Claims {
+export function verify(key: Buffer | readonly Buffer[], token: string | undefined, now: number): Claims {
   if (!token) throw unauthorized('This board needs a token.')
   const parts = token.split('.')
   if (parts.length !== 3 || parts[0] !== 'mu1') throw unauthorized("That isn't a token for this board.")
   const given = Buffer.from(parts[2]!, 'base64url')
-  const expected = sign(key, `${parts[0]}.${parts[1]}`)
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw unauthorized("That isn't a token for this board.")
+  // The current key, then any the board retired and still keeps: every one is checked, so how long this takes
+  // says nothing about which one matched.
+  let signed = false
+  for (const each of Buffer.isBuffer(key) ? [key] : key) {
+    const expected = sign(each, `${parts[0]}.${parts[1]}`)
+    if (given.length === expected.length && timingSafeEqual(given, expected)) signed = true
+  }
+  if (!signed) throw unauthorized("That isn't a token for this board.")
   let claims: Claims
   try {
     claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as Claims

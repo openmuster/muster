@@ -75,6 +75,7 @@ second workflow, is
 | `steps` | 1 to 20 tasks. `key` and `text` are required. `needs` names earlier keys, `for` gives the task to one profile, `labels` are `k: v` text, `push` (`true` or `false`) overrides `workers.push` for that step |
 | `workers` | The crew. See below |
 | `timeout` | How long a run may take before it is summed up as it stands, such as `2h`. Left out, `24h` |
+| `mode` | `run` (the default) starts the run. `suggest` only says what it would start. See [Suggest only](#suggest-only) |
 
 `workers` takes:
 
@@ -88,13 +89,15 @@ second workflow, is
 | `repo` | The repository each task works on |
 | `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel`, `cloudflare` or `e2b`, and a `repo` on github.com. A step's own `push` wins over it |
 | `timeout` | A limit on each task, as `mu run --timeout` takes it |
+| `template` | The E2B template each task's sandbox is made from, in place of `MUSTER_E2B_TEMPLATE`, as `mu run --template` takes it. Only with `runner` set to `e2b`. Two workflows can then work on repositories that need different tools |
+| `model` | The model the agent uses, as `mu run --model` takes it |
 
 The file is checked when it is read. A step that `needs` a key that isn't an
 earlier step, two steps with one key, a `push` with nothing to push to, or a
 `{steps.<key>.result}` for a step it doesn't need is refused with a message
 that names the workflow.
 
-## Starting one
+## Asking for a run
 
 ```bash
 mu workflow list
@@ -209,7 +212,7 @@ is told apart from anything a person writes.
 - **A cloud worker takes its settings from the daemon's environment,** as
   `mu run` would: `MUSTER_URL` or `MUSTER_SANDBOX_URL`, and for `vercel` the
   Vercel token, team and project, for `cloudflare` `MUSTER_CF_WORKER` and
-  `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`, and with `push` the GitHub App's. Set them where the
+  `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE` (unless the workflow names its own `template`), and with `push` the GitHub App's. Set them where the
   daemon starts; `mu daemon install` takes each with `--env <name>`. Experimental: Cloudflare workers have not yet
   run against a live Cloudflare account.
 - **Each request is one run.** Run it twice and the second run is a second
@@ -254,6 +257,7 @@ For a request on thread 812 in `work/api`, the daemon:
 | `couldn't start implement: …` | The board refused the tasks, such as a text that is too long |
 | `couldn't start implement: … (gave up after 5 tries)` | Five ticks in a row the board couldn't answer (busy, out of reach). The daemon reads on, so one request never holds up the rest |
 | `started 3 workers for implement; couldn't confirm the run: …` | The workers started, then the board refused or couldn't take the run's first message. They keep going; `mu tasks work/api/implement-41` shows how far they got |
+| `would start implement: 3 tasks, 3 workers; suggest only, nothing started` | The workflow's `mode` is `suggest` |
 | `implement isn't registered here` | No such name in this daemon's file |
 | `<actor> may not start implement` | The requester isn't in `who` |
 | `implement doesn't run in work/other` | The thread's channel isn't in `channels` |
@@ -314,6 +318,22 @@ characters. Because a worker, or anyone, wrote that text, the daemon defuses
 it before speaking as itself: `@` becomes a lookalike so it mentions nobody,
 `<` and `>` so Slack makes no ping or link, and a Markdown link is broken.
 A `pr` is shown only for a pull request URL on github.com.
+
+## Suggest only
+
+Set `"mode": "suggest"` on a workflow to try it out, or to see what people
+ask for before you let it spend money. The daemon checks the request as it
+would any other: `who` and `channels` still refuse. Then it replies on the
+thread with what it would start, and makes no tasks and starts no workers:
+
+```text
+would start implement: 3 tasks, 3 workers; suggest only, nothing started
+```
+
+The reply is the answer to that request. Nothing carries a suggestion out
+later: switch the workflow to `"mode": "run"`, restart the daemon, and the
+request is still answered. Ask again with `mu workflow run` to start it.
+`mu workflow list` marks such a workflow `suggest only`.
 
 ## When not to use one
 

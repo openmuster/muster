@@ -339,7 +339,7 @@ describe('the E2B runner', () => {
     const kept = memoryBases()
     // What the record says is asked twice by the one making a base: nothing before it starts, and the other worker's once it is done.
     let asked = 0
-    const bases = { ...kept, get: (key: string) => (++asked === 1 ? undefined : 'snap_theirs') }
+    const bases = { ...kept, get: (_key: string) => (++asked === 1 ? undefined : 'snap_theirs') }
     const run = await e.runner({ base: true, bases }).start(plain)
     expect(e.deleted).toEqual(['snap_1'])
     expect(e.log.filter((entry) => entry.create).map((entry) => entry.template)).toEqual(['muster-agents', 'snap_theirs'])

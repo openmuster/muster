@@ -6,6 +6,7 @@ import type * as files from '../core/files.ts'
 import type * as leases from '../core/leases.ts'
 import type * as messages from '../core/messages.ts'
 import type * as reads from '../core/reads.ts'
+import type * as report from '../core/report.ts'
 import type * as schedules from '../core/schedules.ts'
 import type * as tasks from '../core/tasks.ts'
 import type * as workflows from '../core/workflows.ts'
@@ -28,6 +29,8 @@ export type Backend = {
   registry?: () => Registry
   /** The key this board's tokens are signed with, where it keeps one: the one `mu serve` and `team.fetch` check tokens with. */
   signingKey?: () => Buffer
+  /** Keys the board signed with before, whose tokens are still good: see `mu token rotate-key`. */
+  retiredKeys?: () => Buffer[]
   /** The board's tokens: making one, listing them, stopping one. For the owner, or a token as wide as the owner's. */
   tokens: {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>
@@ -101,6 +104,7 @@ export type Backend = {
   taskNeeds: Op<typeof tasks.setNeeds>
   taskList: Read<typeof tasks.list>
   task(caller: Caller, id: number): Promise<tasks.Task | null>
+  taskReport: Op<typeof report.report>
 
   budgetSet: Op<typeof tasks.setBudget>
   budgets(caller: Caller): Promise<ReturnType<typeof tasks.budgets>>

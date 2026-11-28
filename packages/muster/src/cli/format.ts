@@ -1,4 +1,5 @@
 import type { FeedEvent, ThreadSummary } from '../core/reads.ts'
+import type { Report, ReportRow } from '../core/report.ts'
 import type { Task, TaskListing } from '../core/tasks.ts'
 import type { By, Message } from '../model.ts'
 
@@ -97,4 +98,32 @@ export function eventLine(event: FeedEvent, now: number): string {
   else if (event.type === 'task.completed') detail = firstLine(String(data.result ?? ''), 70)
   else if (event.type === 'task.failed' || event.type === 'task.blocked') detail = firstLine([data.kind, data.reason].filter(Boolean).join(': '), 70)
   return detail ? `${head}\n${indent(detail)}` : head
+}
+
+/**
+ * A report as columns: one table by agent and, when any task had one, one by workflow. A cost is shown
+ * only where an agent reported one; a task no agent was recorded for is `(none)`. A long name is never
+ * cut, so two names alike are two rows: its row runs wider instead.
+ */
+export function reportText(report: Report): string {
+  const day = report.since.slice(0, 10)
+  const where = report.channel === null ? '' : ` in #${report.channel}`
+  if (report.agents.length === 0) return `no tasks${where} since ${day}`
+  const usd = (n: number | null) => (n === null ? '-' : `$${n.toFixed(2)}`)
+  const head = (first: string) => `${first.padEnd(10)}  tasks  1st round  rounds  failed  failing  input  cost      per task`
+  const row = (r: ReportRow) =>
+    [
+      (r.key ?? '(none)').padEnd(10),
+      String(r.tasks).padStart(5),
+      `${r.firstRound} ${Math.round((100 * r.firstRound) / r.tasks)}%`.padStart(9),
+      r.rounds.toFixed(2).padStart(6),
+      String(r.failed).padStart(6),
+      String(r.failing).padStart(7),
+      String(r.needsInput).padStart(5),
+      (r.costed ? usd(r.cost) : '-').padEnd(8),
+      r.costed ? usd(r.perTask) : '-',
+    ].join('  ')
+  const lines = [`since ${day}${where}`, head('agent'), ...report.agents.map(row)]
+  if (report.workflows.length) lines.push(head('workflow'), ...report.workflows.map(row))
+  return lines.join('\n')
 }

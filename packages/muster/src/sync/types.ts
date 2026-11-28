@@ -1,3 +1,4 @@
+import { Failure } from '../failure.ts'
 import type { Attachment, Message } from '../model.ts'
 
 /** What a platform sent, as the parts a provider needs to check and read it. */
@@ -86,7 +87,13 @@ export type Provider = ProviderExtras & {
   /** Whether board replies in a synced thread go back to the platform. */
   mirrors(place: string): boolean
   /** Posts a board message on the platform. `threadExternal` is null for a new root. */
-  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch, read: ReadFile): Promise<Delivery>
+  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch, read: ReadFile, marker?: string): Promise<Delivery>
+  /**
+   * Looks on the platform for a message an earlier try may have posted, by the `marker` `deliver` was given, and
+   * says what it is there, or null when it isn't. A platform without this never has a message sent twice: one
+   * whose try went unanswered is recorded as `unconfirmed` instead.
+   */
+  find?(marker: string, message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch): Promise<Delivery | null>
 }
 
 /** What a provider may also do. Each is optional: a platform that can't simply doesn't. */
@@ -135,3 +142,28 @@ export const DELIVERY_ATTEMPTS = 5
 export const SEND_MS = 30_000
 
 export const IMPORT_ATTEMPTS = 10
+
+/**
+ * How long a platform may be down before what waits on it is given up: an outage uses none of an event's tries
+ * (`IMPORT_ATTEMPTS`, `DELIVERY_ATTEMPTS`), since it says nothing about the event, so this is what ends a wait.
+ */
+export const OUTAGE_MS = 24 * 3_600_000
+
+/** The longest a platform that keeps failing as if down is left alone between tries. */
+export const OUTAGE_PAUSE_MS = 300_000
+
+const SLACK_DOWN = new Set(['slack_ratelimited', 'slack_internal_error', 'slack_fatal_error', 'slack_service_unavailable', 'slack_request_timeout'])
+
+/**
+ * Whether an error says the platform is down or busy, rather than anything about what was asked of it: a 5xx, a
+ * 429, Slack's own words for those, no answer at all, or none in time.
+ */
+export function isOutage(error: unknown): boolean {
+  if (error instanceof Failure) {
+    const status = /^platform_(\d+)$/.exec(error.reason)
+    if (status) return Number(status[1]) === 429 || Number(status[1]) >= 500
+    return SLACK_DOWN.has(error.reason)
+  }
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  return error instanceof TypeError && error.message === 'fetch failed'
+}
