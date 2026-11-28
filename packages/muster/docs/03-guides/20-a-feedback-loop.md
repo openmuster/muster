@@ -47,7 +47,8 @@ flowchart LR
   - `declined`: the triage made no card
   - `done`: its run was approved but it couldn't be completed
   - `edited`: its author changed the report
-  - `queued`: its change waits for a run to end, under a cap on runs
+  - `queued`: its change, or its next round, waits for a run to end, under a
+    cap on runs
 - **Each source has its own channel.** The channels are under `cards/`:
   `cards/slack`, `cards/linear`, `cards/github`, `cards/notion`,
   `cards/app`. A card's runs are in channels under the card's own, so the
@@ -320,9 +321,13 @@ mu budget cards/acme 20
 `maxRuns` caps how many of a project's runs go at once, and `LOOP_MAX_RUNS`
 caps all the loop's runs on the board. A run counts from when it is asked for
 until it ends, or until it waits on a person. A card past a cap waits, says so
-once on the card, and starts when a run ends, oldest card first. A change
-that waits is held `queued`. A round, or a task you answered, continues a run
-already going, so it never waits.
+once on the card, and starts when a run ends, oldest card first:
+
+- **A change, or a round, that waits is held `queued`.** Your comments wait
+  with it, and the round takes them when it starts.
+- **A planning round that waits stays in `planning`.**
+- **A task you answered while every place is taken is held `queued` too.** It
+  goes on before any card when a run ends.
 
 ### Give each project's app its own token
 
