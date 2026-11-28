@@ -390,6 +390,7 @@ serves the board without it. Both say why, loudly.
 | `filePut`, `fileGet` | [Files](../01-concepts/12-files-and-data.md): data as base64 |
 | `schemaAdd`, `schemaList` | Typed blocks |
 | `budgetSet`, `budgets` | [Budgets](../01-concepts/13-budgets.md) |
+| `taskReport` | [How work went](../01-concepts/13-budgets.md#see-how-work-went): `{ channel?, since }`, `since` an ISO time |
 
 ## Other exports
 

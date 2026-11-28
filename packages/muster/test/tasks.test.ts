@@ -538,6 +538,55 @@ describe('tasks', () => {
     expect(await reason(team.budgetSet({ channel: 'work', usd: -1 }))).toBe('invalid_budget')
   })
 
+  it('a report sums up how tasks went, by the agent that ran them and by workflow, from what the board recorded', async () => {
+    const { team, time } = memoryBoard()
+    const done = async (id: number, labels: Record<string, string>) => {
+      const held = await team.taskClaim({ id })
+      await team.taskComplete({ id, token: held.token })
+      await team.label({ id, set: labels })
+    }
+    // Before the window: not counted.
+    const old = (await team.taskCreate({ channel: 'work', text: 'old' })).task
+    await done(old.id, { agent: 'claude', cost: '9' })
+    time.advance(40 * 86_400_000)
+    const since = new Date(time.now().getTime() - 30 * 86_400_000).toISOString()
+    const first = (await team.taskCreate({ channel: 'work/api', text: 'first time' })).task
+    await done(first.id, { agent: 'claude', cost: '0.50' })
+    const again = (await team.taskCreate({ channel: 'work/api', text: 'sent back once' })).task
+    await team.taskBlock({ id: again.id, kind: 'needs_input', reason: 'which endpoint?' })
+    await team.taskUnblock({ id: again.id })
+    await done(again.id, { agent: 'claude', cost: '0.70' })
+    await team.taskReopen({ id: again.id, round: true })
+    await done(again.id, { agent: 'claude', cost: '0.30' })
+    const failed = (await team.taskCreate({ channel: 'work', text: 'codex, no cost' })).task
+    const held = await team.taskClaim({ id: failed.id })
+    await team.taskFail({ id: failed.id, token: held.token, reason: 'tests fail' })
+    await team.label({ id: failed.id, set: { agent: 'codex' } })
+    const step = (await team.taskCreate({ channel: 'work', text: 'a step', labels: { workflow: 'implement' } })).task
+    await done(step.id, { agent: 'claude', cost: '0.20' })
+    // Two claims that lapse: the board holds it as failing. No agent recorded.
+    const lapsing = (await team.taskCreate({ channel: 'work', text: 'lapses' })).task
+    for (let i = 0; i < 2; i++) {
+      await team.taskClaim({ id: lapsing.id, lease: 30 })
+      time.advance(31_000)
+    }
+    expect(await reason(team.taskClaim({ ready: 'work/' }))).toBe('nothing_ready')
+    expect((await team.task(lapsing.id))?.hold?.kind).toBe('failing')
+    await team.taskCreate({ channel: 'elsewhere', text: 'not under work' })
+
+    const report = await team.taskReport({ channel: 'work', since })
+    expect(report.agents).toEqual([
+      { key: 'claude', tasks: 3, firstRound: 2, rounds: 1.33, failed: 0, failing: 0, needsInput: 1, cost: 1, costed: 3, perTask: 0.3333 },
+      { key: 'codex', tasks: 1, firstRound: 0, rounds: 1, failed: 1, failing: 0, needsInput: 0, cost: 0, costed: 0, perTask: null },
+      { key: null, tasks: 1, firstRound: 0, rounds: 1, failed: 0, failing: 1, needsInput: 0, cost: 0, costed: 0, perTask: null },
+    ])
+    expect(report.workflows).toEqual([{ key: 'implement', tasks: 1, firstRound: 1, rounds: 1, failed: 0, failing: 0, needsInput: 0, cost: 0.2, costed: 1, perTask: 0.2 }])
+    expect((await team.taskReport({ channel: 'work/api', since })).agents.map((row) => [row.key, row.tasks])).toEqual([['claude', 2]])
+    expect((await team.taskReport({ since })).agents.reduce((sum, row) => sum + row.tasks, 0)).toBe(6)
+    // A run's cost label is its latest run's: a task sent back counts what its last round cost.
+    expect(await reason(team.taskReport({ since: 'yesterday' }))).toBe('invalid_since')
+  })
+
   it("another profile of the owner's principal editing a task's brief holds it too: ownership is the principal and the profile", async () => {
     const { team } = memoryBoard()
     const { task } = await team.as('lead').taskCreate({ channel: 'work', text: 'fix /login' })

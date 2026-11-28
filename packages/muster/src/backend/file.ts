@@ -9,6 +9,7 @@ import * as files from '../core/files.ts'
 import * as leases from '../core/leases.ts'
 import * as messages from '../core/messages.ts'
 import * as reads from '../core/reads.ts'
+import * as report from '../core/report.ts'
 import * as schedules from '../core/schedules.ts'
 import * as tasks from '../core/tasks.ts'
 import * as workflows from '../core/workflows.ts'
@@ -201,6 +202,10 @@ export function file(options: FileOptions = {}): Backend {
       const c = ctx()
       messageFor(c, narrowed(c, caller), id)
       return tasks.findTask(c, id)
+    },
+    taskReport: async (caller, request) => {
+      const c = ctx()
+      return report.report(c, narrowed(c, caller), request)
     },
     budgetSet: op(tasks.setBudget),
     budgets: async (caller) => {

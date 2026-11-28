@@ -89,6 +89,7 @@ claimed answers `task_ready`, with the claim to run first.
 | `plan_too_large` | Over 100 tasks |
 | `over_budget` | The channel's budget is spent. `data` has the amounts |
 | `invalid_budget` | A budget is more than 0 |
+| `invalid_since` | `taskReport` takes `since` as an ISO time |
 | `missing_reason` | `tasks fail` needs a reason |
 | `missing_assignee` | `tasks assign` needs `--for` or `--pool` |
 | `missing_command` | `tasks run` needs a command after `--` |
