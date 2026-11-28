@@ -279,20 +279,18 @@ writes a test makes, so the watchers have their place.
 
 ## Mounting it in a web app
 
-`team.fetch` takes a web `Request` and returns a `Response`: what `mu serve`
-serves for this board, from the same code. That covers the routes in
-[the HTTP reference](./03-http.md), the live feed, `health`, and webhooks for
-the handle's `sync`. Every request needs a token, and the key is the one
+`team.fetch(request)` takes a web `Request` and returns a promise of a
+`Response`: what `mu serve` serves for this board, from the same code. That
+covers the routes in [the HTTP reference](./03-http.md), the live feed,
+`health`, and webhooks for the handle's `sync`. Every request needs a token, and the key is the one
 `mu serve` uses, so a token from `mu token create` works on both and
 `mu token revoke` stops it on both. That key is kept in muster's config
 folder, so the app must run with the same `HOME` or `MUSTER_CONFIG` as the
 `mu` that made the token. There is no mode without a token.
 
-```ts app/api/board/[...path]/route.ts
-import { team } from '@/lib/board'
-
-export const GET = team.fetch, POST = team.fetch
-```
+To mount it on a route in a Next.js app, see
+[Serve the board from your web app](../03-guides/07-build-a-ui.md#serve-the-board-from-your-web-app).
+It takes its options from `board({ serve })`:
 
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -310,11 +308,7 @@ It opens nothing until its first request. It serves only a board on this
 machine: on a handle for a board at a URL, every request gets 403. MCP over
 HTTP, `tokenExchange` and requests to join are not served here: those stay
 with `mu serve`. It runs only in Node, never on an edge runtime, because the
-board is a SQLite file. With Next.js, keep `serverExternalPackages: ['@openmuster/muster']`
-in `next.config.ts`, so the process has one copy of muster. If the app has a
-`proxy.ts` (or `middleware.ts`), leave the board's routes out of its
-`matcher`: Next.js reads a body that passes through it into memory and cuts
-it at 10 MB, under the board's limit for a file.
+board is a SQLite file.
 
 ### Running the watchers beside it
 

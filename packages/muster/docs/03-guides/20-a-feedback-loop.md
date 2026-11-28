@@ -47,6 +47,7 @@ flowchart LR
   - `declined`: the triage made no card
   - `done`: its run was approved but it couldn't be completed
   - `edited`: its author changed the report
+  - `queued`: its change waits for a run to end, under a cap on runs
 - **Each source has its own channel.** The channels are under `cards/`:
   `cards/slack`, `cards/linear`, `cards/github`, `cards/notion`,
   `cards/app`. A card's runs are in channels under the card's own, so the
@@ -78,6 +79,10 @@ repository, and `workflows.json` for your repository. Put the settings in the
 environment `mu serve` starts with, as for
 [a card queue](./19-a-card-queue.md#set-it-up), with the secrets `board.ts`
 names in `env()`.
+
+For more than one repository, set this up once and add each repository as a
+project:
+[Run several repositories on one board](#run-several-repositories-on-one-board).
 
 ## Who may start work
 
@@ -222,6 +227,111 @@ A round's reply on the card says which comments it took; comments too long
 for one round wait for the next. A card that is done comes back the same
 way: a trusted reply reopens it, and its status is In progress again.
 
+## Run several repositories on one board
+
+Each repository is a project. A project's cards are in its own channel,
+`cards/<project>/<source>`, such as `cards/acme/linear`, and its runs work on
+its own repository. Everything else is shared: one board, one `mu serve`,
+one set of prompts. The cards right under `cards/` keep running on
+`workflows.json` as before, so you can add projects to a loop that already
+runs. Keep work on a separate board only when it must stay apart, such as a
+client's under an NDA: see
+[Several repositories, several boards](./15-several-boards.md).
+
+### Name each project and its repository
+
+Write `loop-projects.json` beside `workflows.json`, in `~/.config/muster/`:
+
+```json loop-projects.json
+{
+  "projects": {
+    "acme": { "repo": "https://github.com/acme/web", "runner": "vercel", "maxRuns": 2 },
+    "globex": {
+      "repo": "https://github.com/globex/site",
+      "runner": "e2b",
+      "template": "globex-go",
+      "trusted": ["lin:user:9b1d4e7a-2c3f-4a8b-b6e0-5f1a2d3c4e5f"]
+    }
+  }
+}
+```
+
+A project's name is a channel segment: lowercase letters, numbers, `_` and
+`-`, and not the name of a source (`slack`, `linear`, `github`, `notion`,
+`app`). Each project takes these settings:
+
+| Setting | Meaning |
+| --- | --- |
+| `repo` | The repository its runs work on, as an HTTPS clone address. Required |
+| `runner` | `vercel`, `cloudflare` or `e2b`. Left out, the one in `workflows.json` |
+| `template` | The E2B template its sandboxes are made from, with `runner` set to `e2b`. Give a Go repository and a pnpm repository each the tools it needs |
+| `model` | The model its agents use |
+| `trusted` | Who may start work on its cards, in place of `LOOP_TRUSTED` |
+| `public` | Its sources that anyone can read, by name (`["github"]`), in place of the ones `LOOP_PUBLIC` names |
+| `maxRuns` | The most runs of it going at once |
+
+### Map each project's sources to its channel
+
+In `board.ts`, map each tracker team, Slack channel or repository to its
+project's channel. Give each repository one team of its own, so a card's
+project is never in doubt:
+
+```ts board.ts
+import { env, linear } from '@openmuster/muster'
+
+export const sync = {
+  lin: linear({
+    secret: env('LINEAR_WEBHOOK_SECRET'),
+    clientId: env('LINEAR_CLIENT_ID'),
+    clientSecret: env('LINEAR_CLIENT_SECRET'),
+    teams: { ACME: 'cards/acme/linear', GLOBEX: 'cards/globex/linear' },
+  }),
+}
+```
+
+A card's runs then go to its own project's workflows. Its triage is shown
+only its own project's cards, so a public repository's triage never sees a
+private project's words.
+
+### Write each project's workflows
+
+Write the template's three workflows again for each project, then restart
+`mu serve`, which reads them when it starts:
+
+```bash
+node templates/loop/projects.ts ~/.config/muster/loop-projects.json > ~/.config/muster/workflows.json
+```
+
+Each project gets `triage.<project>`, `planning.<project>` and
+`card.<project>`. They have the template's prompts and your project's
+repository, runner, template and model. The daemon refuses to run one on
+another project's cards. Write them again whenever you change
+`loop-projects.json`.
+
+### Limit what each project spends and runs
+
+A [budget](../01-concepts/13-budgets.md) on a project's channel covers all
+its runs:
+
+```bash
+mu budget cards/acme 20
+```
+
+`maxRuns` caps how many of a project's runs go at once, and `LOOP_MAX_RUNS`
+caps all the loop's runs on the board. A run counts from when it is asked for
+until it ends, or until it waits on a person. A card past a cap waits, says so
+once on the card, and starts when a run ends, oldest card first. A change
+that waits is held `queued`. A round, or a task you answered, continues a run
+already going, so it never waits.
+
+### Give each project's app its own token
+
+An app that posts reports needs a token for its own project's channel only:
+
+```bash
+mu token create --as acme-app --can 'cards/acme/=read,post'
+```
+
 ## What you see
 
 What shows up as a card runs:
@@ -235,7 +345,9 @@ What shows up as a card runs:
   the card when the round ends. A project whose spec asks for none gets
   none.
 - **A line from `NOTIFY_CMD`:** when it is set, for a card that needs your
-  approval, a task blocked on a decision, or a round that is done.
+  approval, a task blocked on a decision, or a round that is done. A line
+  about a project's card starts with the project's name:
+  `acme: card #12 needs your approval`.
 - **The pull request:** one per card, with a commit per round.
 
 ## When not to use the loop
