@@ -5,7 +5,7 @@ import { ask as askForUpdate, checkPath, readChecked, updateNotice } from './upd
 import { readFileSync } from 'node:fs'
 import type { Filter } from '../core/reads.ts'
 import { TASK_STATES, type PlanTask, type Task, type TaskState } from '../core/tasks.ts'
-import { Failure, misuse } from '../failure.ts'
+import { cursorAhead, Failure, misuse } from '../failure.ts'
 import { ROOT, board, type Board } from '../handle.ts'
 import type { Host } from '../watch/host.ts'
 import { processStart } from '../process.ts'
@@ -231,6 +231,16 @@ const stopCode = (signal: AbortSignal) => (signal.reason === 'SIGTERM' ? 143 : 1
  * With no deadline it waits for as long as the command runs. A stop ends the pause at once, and
  * `failed` returns: the caller checks the stop and exits as stopped.
  */
+/**
+ * Refuses a cursor past the board's last event: one this board never gave out, most likely because it was
+ * restored from a backup since. Read on from it, and everything written until the board caught up would be
+ * skipped without a word.
+ */
+async function notAhead(team: Board, after: number) {
+  const head = await team.head()
+  if (after > head) throw cursorAhead(after, head)
+}
+
 function outages(run: Run, deadline?: number) {
   let failing = 0
   let reached = false
@@ -710,10 +720,13 @@ const commands: Record<string, Command> = {
       const outage = outages(run, deadline)
       let after = given !== undefined ? cursor(given, 'after') : await run.team.head()
       if (given === undefined) outage.ok()
+      let checked = false
       let pause = 100
       for (;;) {
         let page: Awaited<ReturnType<Board['events']>>
         try {
+          if (given !== undefined && !checked) await notAhead(run.team, after)
+          checked = true
           page = await run.team.events({ after, filter, limit: 1 })
           outage.ok()
         } catch (error) {
@@ -753,10 +766,13 @@ const commands: Record<string, Command> = {
       // Once following, an outage is waited out for as long as the tail runs.
       const outage = outages(run)
       if (given === undefined) outage.ok()
+      let checked = false
       let pause = 100
       while (!run.io.stop.aborted) {
         let page: Awaited<ReturnType<Board['events']>>
         try {
+          if (given !== undefined && !checked) await notAhead(run.team, after)
+          checked = true
           page = await run.team.events({ after, filter })
           outage.ok()
         } catch (error) {
