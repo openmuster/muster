@@ -393,7 +393,7 @@ describe('templates/loop', () => {
       await made.tick()
       const run = (await made.run(report.id, 'card'))!
       for (const key of ['spec', 'work']) await made.complete(run[key]!.id, `${key} done`)
-      return { ...made, report, run, spawned }
+      return { ...made, report, run, spawned, find: made.run }
     }
     const spawnedArgs = async (file: string) => (await waitFor(() => existsSync(file) && readFileSync(file, 'utf8').includes('\n')), existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [])
 
@@ -529,6 +529,55 @@ describe('templates/loop', () => {
       expect((await team.readThread({ id: run.work!.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
       expect((await spawnedArgs(spawned))).toHaveLength(1)
       void team
+    })
+
+    it('a round past the cap waits, held queued, says so once, and starts when a run ends', async () => {
+      process.env.LOOP_MAX_RUNS = '1'
+      const { team, as, tick, complete, find, run: first, report, spawned, card } = await worked()
+      await complete(first.review!.id, 'approve')
+      await tick()
+      // Another card's triage takes the one place: from someone not trusted, so no change follows it.
+      const other = await as('slack:user:U9').post({ channel: 'cards/slack', text: 'other' })
+      await tick()
+      expect(await find(other.id, 'triage')).not.toBeNull()
+      const comment = await as('slack:user:U1').reply({ to: report.id, text: 'grey, please' })
+      await tick()
+      expect((await team.readThread({ id: first.work!.id })).task).toMatchObject({ state: 'completed', rounds: 0 })
+      expect(await card(report.id)).toMatchObject({ state: 'blocked', hold: { kind: 'queued' } })
+      const waits = async () => (await team.readThread({ id: report.id })).replies.filter((reply) => reply.text.startsWith('waiting:'))
+      expect((await waits()).map((reply) => reply.text)).toEqual(['waiting: 1 run is going on the board, so round 2 starts when one ends'])
+      expect(existsSync(spawned)).toBe(false)
+      // The triage ends, at an approval: the place is free, and the round starts with the comment.
+      await complete((await find(other.id, 'triage'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect((await team.readThread({ id: first.work!.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
+      expect(await card(report.id)).toMatchObject({ hold: { kind: 'working' } })
+      expect((await team.readThread({ id: report.id })).replies.at(-1)!.text).toBe(`round 2: taking #${comment.id}`)
+      expect(await waits()).toHaveLength(1)
+      expect((await spawnedArgs(spawned))[0]).toContain(`run --ready ${first.work!.channel} --loop`)
+    })
+
+    it('a task answered past the cap waits, held queued, and gets its worker when a run ends', async () => {
+      process.env.LOOP_MAX_RUNS = '1'
+      const { team, as, tick, complete, find, run: first, spawned } = await worked()
+      const held = await team.as('agent-1').taskClaim({ id: first.review!.id })
+      await team.as('agent-1').taskBlock({ id: first.review!.id, token: held.token, kind: 'needs_input', reason: 'keep the old heading?' })
+      await tick()
+      // Waiting on a person, the run takes no place: another card's triage has it.
+      const other = await as('slack:user:U9').post({ channel: 'cards/slack', text: 'other' })
+      await tick()
+      expect(await find(other.id, 'triage')).not.toBeNull()
+      await team.reply({ to: first.review!.id, text: 'Keep it.' })
+      await team.taskUnblock({ id: first.review!.id })
+      await tick()
+      expect((await team.readThread({ id: first.review!.id })).task).toMatchObject({ state: 'blocked', hold: { kind: 'queued' } })
+      expect(existsSync(spawned)).toBe(false)
+      await complete((await find(other.id, 'triage'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect((await team.readThread({ id: first.review!.id })).task).toMatchObject({ state: 'ready' })
+      expect((await spawnedArgs(spawned))[0]).toContain(`run --ready ${first.review!.channel} --loop`)
     })
   })
 
@@ -1087,6 +1136,25 @@ describe('templates/loop', () => {
         // The worker is started detached: wait for what it wrote, not only for the file it opens first.
         await waitFor(() => existsSync(made.spawned) && readFileSync(made.spawned, 'utf8').includes('\n'))
         expect(readFileSync(made.spawned, 'utf8')).toContain('--label workflow=planning')
+      })
+
+      it("a planner's round past the cap waits, with the card still in planning, and starts when a run ends", async () => {
+        process.env.LOOP_MAX_RUNS = '1'
+        const made = await planned()
+        // Another card's triage takes the one place: from someone not trusted, so no change follows it.
+        const other = await made.as('lin:user:u-mallory').post({ channel: 'cards/app', text: 'other' })
+        await made.tick()
+        expect(await made.run(other.id, 'triage')).not.toBeNull()
+        const comment = await made.as('lin:user:u-ada').reply({ to: made.cardId, text: 'grey, please' })
+        await made.tick()
+        expect((await made.team.readThread({ id: made.plan.id })).task).toMatchObject({ state: 'completed', rounds: 0 })
+        expect(await made.card(made.cardId)).toMatchObject({ state: 'blocked', hold: { kind: 'planning' } })
+        expect((await made.team.readThread({ id: made.cardId })).replies.at(-1)!.text).toBe('waiting: 1 run is going on the board, so planning round 2 starts when one ends')
+        await made.complete((await made.run(other.id, 'triage'))!.triage!.id, SPEC)
+        await made.tick()
+        await made.tick()
+        expect((await made.team.readThread({ id: made.plan.id })).task).toMatchObject({ state: 'ready', rounds: 1 })
+        expect((await made.team.readThread({ id: made.cardId })).replies.at(-1)!.text).toBe(`planning round 2: taking #${comment.id}`)
       })
 
       it('moved to Todo, it is triaged from the plan, and comments made in planning start no round of the work', async () => {

@@ -55,6 +55,7 @@ loop's runs at once. The guide has the settings and the steps:
 | `duplicate` | The triage found the same request on another card, and named it. Its spec is on the card: someone trusted labels it `approved=yes` to work it anyway |
 | `declined` | The triage made no card: nothing to change here, or its agent stopped, as its summary on the card says. Edit the report, or move it to ready again, to try again |
 | `edited` | The report's author changed it. It is triaged again, from the new text, or parked again if it was parked |
+| `queued` | A cap on runs (`maxRuns`, `LOOP_MAX_RUNS`) is reached: the card's change, or its next round with the comments that asked for it, starts when a run ends, oldest card first. The card says once why it waits |
 
 The loop writes In progress back to Notion or Linear when the work starts,
 and Done when the review approves it; then the card is completed. The stages

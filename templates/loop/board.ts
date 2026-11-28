@@ -252,9 +252,19 @@ async function nextPlanRound(team: Board, cardId: number): Promise<boolean> {
   const round = run.plan.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
   const last = asked.at(-1)!.id
-  await team.as('intake').reply({ to: run.plan.id, text: `Round ${round}: what was said on card #${card.id} since your last answer. Answer it, and give the card as it stands now.\n\n${quoted}`, idempotencyKey: `loop-ask-${run.plan.id}-${last}` })
-  const now = (await team.readThread({ id: run.plan.id })).task
-  if (now?.state === 'completed' || now?.state === 'failed') await asOwner(team).taskReopen({ id: run.plan.id, round: true }).catch(() => {})
+  // Past a cap the round waits, with the card still held for planning: a run that ends starts it.
+  const full = await serial(async () => {
+    const full = await busy(team, owner, project)
+    if (full !== null) return full
+    await team.as('intake').reply({ to: run.plan!.id, text: `Round ${round}: what was said on card #${card.id} since your last answer. Answer it, and give the card as it stands now.\n\n${quoted}`, idempotencyKey: `loop-ask-${run.plan!.id}-${last}` })
+    const now = (await team.readThread({ id: run.plan!.id })).task
+    if (now?.state === 'completed' || now?.state === 'failed') await asOwner(team).taskReopen({ id: run.plan!.id, round: true }).catch(() => {})
+    return null
+  })
+  if (full !== null) {
+    await note(team, card.id, `waiting: ${full}, so planning round ${round} starts when one ends`, `wait-plan-round-${last}`)
+    return true
+  }
   startWorker(run, owner, flow('planning', project))
   await team.as('intake').reply({ to: card.id, text: `planning round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-plan-round-${card.id}-${last}` })
   return true
@@ -354,6 +364,10 @@ const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').re
 
 /** The holds a card's stage moves it out of. Not `working`, nor a hold a person or an agent put it in. */
 const MOVABLE = new Set(['backlog', 'planning', 'triage', 'approval', 'edited', 'declined', 'duplicate', 'queued'])
+
+/** A card held `queued` for its next round, not for its first change: the reason tells the two apart. */
+const ROUND_WAITS = 'the next round waits for a run to end'
+const waitsForRound = (hold: { kind: string; reason: string | null } | null | undefined) => hold?.kind === 'queued' && hold.reason === ROUND_WAITS
 const PARKED: Record<string, string> = {
   backlog: 'in the backlog: move it to ready to start it',
   planning: 'in planning: an agent shapes it with you, and it is built once it is moved to ready',
@@ -597,11 +611,11 @@ function caps(): { all: number | null; of: Record<string, number> } | null {
  * daemon (after its place among requests), or with a task ready or being worked. A run waiting on a person, or
  * ended, takes no place.
  */
-async function runsGoing(team: Board, owner: string): Promise<Map<string, number>> {
+async function runsGoing(team: Board, owner: string, except?: string): Promise<Map<string, number>> {
   const going = new Map<string, string>()
   for (const state of ['ready', 'claimed'] as const) {
     for (const task of (await team.taskList({ channel: 'cards/', state, limit: 1000 })).tasks) {
-      if (task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null) going.set(task.channel, projectOf(task.channel) ?? '')
+      if (task.channel !== except && task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null) going.set(task.channel, projectOf(task.channel) ?? '')
     }
   }
   for (let after = (await asOwner(team).cursorGet('workflow:requests')) ?? 0; ; ) {
@@ -615,11 +629,14 @@ async function runsGoing(team: Board, owner: string): Promise<Map<string, number
   return counts
 }
 
-/** Why a new run of a project (null: the cards right under `cards/`) would wait now, or null when it may start. */
-async function busy(team: Board, owner: string, project: string | null): Promise<string | null> {
+/**
+ * Why a run of a project (null: the cards right under `cards/`) would wait now, or null when it may go on.
+ * `except` is a run's own channel, for a run going on again, which mustn't count itself.
+ */
+async function busy(team: Board, owner: string, project: string | null, except?: string): Promise<string | null> {
   const set = caps()
   if (set === null) return null
-  const going = await runsGoing(team, owner)
+  const going = await runsGoing(team, owner, except)
   const runs = (n: number, of = '') => `${n} run${n === 1 ? '' : 's'}${of} ${n === 1 ? 'is' : 'are'} going`
   const mine = going.get(project ?? '') ?? 0
   if (project !== null && set.of[project] !== undefined && mine >= set.of[project]) return runs(mine, ` of ${project}`)
@@ -627,8 +644,13 @@ async function busy(team: Board, owner: string, project: string | null): Promise
   return set.all !== null && all >= set.all ? `${runs(all)} on the board` : null
 }
 
-/** Checking for a place and asking, one at a time here: two watchers at once can't both take the last place. */
+/** Checking for a place and taking it, one at a time here: two watchers at once can't both take the last place. */
 let asking: Promise<unknown> = Promise.resolve()
+function serial<T>(take: () => Promise<T>): Promise<T> {
+  const next = asking.then(take, take)
+  asking = next.catch(() => {})
+  return next
+}
 
 /**
  * Asks for the `name` workflow on the message `on()` gives, unless a cap is reached: then the card says once why
@@ -644,9 +666,7 @@ function request(team: Board, card: number, owner: string, name: string, what: s
     await team.as('intake').workflowRequest({ name, on: await on() })
     return null
   }
-  const next = asking.then(ask, ask)
-  asking = next.catch(() => {})
-  return next
+  return serial(ask)
 }
 
 const ENDED = new Set(['completed', 'failed', 'canceled'])
@@ -755,6 +775,9 @@ async function workersFailure(team: Board, event: { by: By; task?: { id: number 
 /** Runs going on from here, so one card's round never gets two workers from this process. */
 const going = new Set<string>()
 
+/** Whether a worker on the run's channel is going: started from here, or one of the run's own still waiting for work. */
+const hasWorker = (channel: string) => going.has(channel) || spawnSync('pgrep', ['-f', `run --ready ${channel} --loop`], { stdio: 'ignore' }).status === 0
+
 /**
  * A worker on a run's ready tasks, as the card workflow's own workers are: its runner, agent, repository and
  * `--push` from workflows.json, taking only that run's tasks. They stop after ten idle minutes, so a round
@@ -762,7 +785,7 @@ const going = new Set<string>()
  */
 function startWorker(run: { channel: string; request: number }, owner: string, name = 'card'): void {
   // One of the run's own workers may still be waiting for work: it takes the round, and a second would race it.
-  if (going.has(run.channel) || spawnSync('pgrep', ['-f', `run --ready ${run.channel} --loop`], { stdio: 'ignore' }).status === 0) return
+  if (hasWorker(run.channel)) return
   const workflow = loadWorkflows(workflowsPath()).find((each) => each.name === name)
   if (!workflow) throw new Error(`no ${name} workflow in workflows.json`)
   const k = workflow.workers
@@ -785,7 +808,7 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
   const { message: card, replies, task } = await team.readThread({ id: cardId })
   // A card that is done (completed, or held `done`) comes back for a round as one still working does.
   // So does one left ready: reopened for a round by a watcher that stopped before it held it again.
-  const done = task?.state === 'completed' || task?.state === 'ready' || (task?.state === 'blocked' && task.hold?.kind === 'done')
+  const done = task?.state === 'completed' || task?.state === 'ready' || (task?.state === 'blocked' && (task.hold?.kind === 'done' || waitsForRound(task.hold)))
   if (!isCardChannel(card.channel) || !(done || (task?.state === 'blocked' && task.hold?.kind === 'working'))) return false
   const run = await latestRun(team, card, owner)
   if (!run?.ended || !run.work || !run.review) return false
@@ -798,25 +821,43 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
   const round = run.work.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
   const last = asked.at(-1)!.id
-  await team.as('intake').reply({ to: run.work.id, text: `Round ${round}: what was asked on card #${card.id} since the last round. Do this on top of the work on your branch.\n\n${quoted}`.slice(0, 10_000), idempotencyKey: `loop-ask-${run.work.id}-${last}` })
-  // The work first: a review reopened first would be ready before the work it reviews. Each only while it is
-  // still ended, so two watchers here at once, or a retry, send it back once.
   const owned = asOwner(team)
-  if (done) {
-    if (task!.state === 'blocked') await rehold(team, card.id, 'working', 'the card workflow is making the change')
-    else {
-      if (task!.state === 'completed') await owned.taskReopen({ id: card.id, round: true }).catch(() => {})
-      await owned.taskBlock({ id: card.id, kind: 'working', reason: 'the card workflow is making the change' })
-    }
-    await setStatus(team, card.id, 'working', last)
-  }
   const again = async (id: number) => {
     const now = (await team.readThread({ id })).task
     if (now?.state === 'completed' || now?.state === 'failed') await owned.taskReopen({ id, round: true }).catch(() => {})
     else if (now?.state === 'blocked' && (now.hold?.kind ?? '').startsWith('push_')) await owned.taskUnblock({ id }).catch(() => {})
   }
-  await again(run.work.id)
-  await again(run.review.id)
+  // Checked and sent back in one go: past a cap the round waits, and a run that ends starts it.
+  const full = await serial(async () => {
+    const full = await busy(team, owner, project)
+    if (full !== null) return full
+    await team.as('intake').reply({ to: run.work!.id, text: `Round ${round}: what was asked on card #${card.id} since the last round. Do this on top of the work on your branch.\n\n${quoted}`.slice(0, 10_000), idempotencyKey: `loop-ask-${run.work!.id}-${last}` })
+    // The work first: a review reopened first would be ready before the work it reviews. Each only while it is
+    // still ended, so two watchers here at once, or a retry, send it back once.
+    if (done) {
+      if (task!.state === 'blocked') await rehold(team, card.id, 'working', 'the card workflow is making the change')
+      else {
+        if (task!.state === 'completed') await owned.taskReopen({ id: card.id, round: true }).catch(() => {})
+        await owned.taskBlock({ id: card.id, kind: 'working', reason: 'the card workflow is making the change' })
+      }
+      await setStatus(team, card.id, 'working', last)
+    }
+    await again(run.work!.id)
+    await again(run.review!.id)
+    return null
+  })
+  if (full !== null) {
+    // Held `queued` until then, out of done: a card isn't done while there is more asked of it.
+    if (!waitsForRound(task!.hold)) {
+      if (task!.state === 'blocked') await rehold(team, card.id, 'queued', ROUND_WAITS)
+      else {
+        if (task!.state === 'completed') await owned.taskReopen({ id: card.id, round: true }).catch(() => {})
+        await owned.taskBlock({ id: card.id, kind: 'queued', reason: ROUND_WAITS })
+      }
+    }
+    await note(team, card.id, `waiting: ${full}, so round ${round} starts when one ends`, `wait-round-${last}`)
+    return true
+  }
   startWorker(run, owner, flow('card', project))
   // Last: the marker says these comments were taken, so a retry before it takes them again rather than losing them.
   await team.as('intake').reply({ to: card.id, text: `round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-round-${card.id}-${last}` })
@@ -824,24 +865,36 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
 }
 
 /**
- * Starts what waited for a place, oldest card first: a change held `queued`, and a triage or a planning not yet
- * asked for. Each checks for a place itself, so one that still has none waits for the next run to end.
+ * Starts what waited for a place: first a run's task answered while every place was taken, then the cards,
+ * oldest first: a change or a round held `queued`, a triage not yet asked for, and a planning not yet asked
+ * for or with a round waiting. Each checks for a place itself, so one that still has none waits for the next
+ * run to end.
  */
 async function startWaiting(team: Board): Promise<void> {
   const owner = await ownerOf(team)
-  const waiting: { id: number; channel: string; hold: string }[] = []
+  const resumed = (await team.taskList({ channel: 'cards/', state: 'blocked', limit: 1000 })).tasks
+    .filter((task) => task.hold?.kind === 'queued' && task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null)
+  for (const task of resumed.sort((a, b) => a.id - b.id)) {
+    // Unblocked, it is ready again, and the resume watcher gives it a worker.
+    await serial(async () => {
+      if ((await busy(team, owner, projectOf(task.channel))) === null) await asOwner(team).taskUnblock({ id: task.id }).catch(() => {})
+    })
+  }
+  const waiting: { id: number; channel: string; hold: string; round: boolean }[] = []
   for (const path of (await team.channels()).channels.map((each) => each.path).filter(isCardChannel)) {
     for (const task of (await team.taskList({ channel: path, state: 'blocked', limit: 1000 })).tasks) {
       const hold = task.hold?.kind ?? ''
-      if (task.channel === path && task.owner.principal === owner && task.owner.profile === 'intake' && ['queued', 'triage', 'planning'].includes(hold)) waiting.push({ id: task.id, channel: path, hold })
+      if (task.channel === path && task.owner.principal === owner && task.owner.profile === 'intake' && ['queued', 'triage', 'planning'].includes(hold)) waiting.push({ id: task.id, channel: path, hold, round: waitsForRound(task.hold) })
     }
   }
   for (const card of waiting.sort((a, b) => a.id - b.id)) {
-    if (card.hold === 'queued') {
+    if (card.round) await nextRound(team, card.id)
+    else if (card.hold === 'queued') {
       const spec = await latestSpec(team, card.id, owner)
       if (spec !== null) await startWork(team, card.id, spec.id, owner)
     } else if (card.hold === 'triage') await askTriage(team, card.id, owner, await heldSince(team, card.id, 'triage'))
     else if ((await requestsOn(team, card.id, owner, flow('planning', projectOf(card.channel)))).length === 0) await askPlan(team, card.id, owner, 0)
+    else await nextPlanRound(team, card.id)
   }
 }
 
@@ -1089,7 +1142,16 @@ export const watch = {
       const owner = await ownerOf(team)
       const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
       if (asked?.seq !== request || asked.channel !== run.card || (asked.data as { name?: unknown }).name !== run.name || asked.by.principal !== owner || asked.by.profile !== 'intake') return
-      startWorker({ channel: task.channel, request }, owner, run.name)
+      // One of the run's own workers takes it: the run never stopped going.
+      if (hasWorker(task.channel)) return
+      // Past a cap it waits, held `queued` (the run itself left out, as it isn't going while it waits on a
+      // person). A run that ends unblocks it, and this gives it its worker then.
+      const full = await serial(async () => {
+        const full = await busy(team, owner, projectOf(run.card), task.channel)
+        if (full !== null) await asOwner(team).taskBlock({ id: task.id, kind: 'queued', reason: `waiting: ${full}` }).catch(() => {})
+        return full
+      })
+      if (full === null) startWorker({ channel: task.channel, request }, owner, run.name)
     },
   },
 
