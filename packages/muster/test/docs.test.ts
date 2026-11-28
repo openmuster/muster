@@ -118,6 +118,19 @@ describe('docs and skills', () => {
     expect([...reasons].filter((reason) => !page.includes('`' + reason + '`')).sort()).toEqual([])
   })
 
+  it('every file the code keeps in the config folder is on the files page', () => {
+    const page = readFileSync(join(root, 'packages/muster/docs/04-reference/08-files.md'), 'utf8')
+    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? sources(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []))
+    const names = new Set<string>()
+    for (const file of sources(join(root, 'packages/muster/src'))) {
+      const text = readFileSync(file, 'utf8')
+      for (const match of text.matchAll(/join\((?:configDir\(\)|folder|dir), '([a-z0-9][a-z0-9_.-]*)'/g)) if (!/^(main\.db|mu\.bundle|package\.json|node_modules)$/.test(match[1]!)) names.add(match[1]!)
+      for (const match of text.matchAll(/'muster'\), '([a-z0-9][a-z0-9_.-]*\.json)'\)/g)) names.add(match[1]!)
+    }
+    expect(names.size).toBeGreaterThan(8)
+    expect([...names].filter((name) => !page.includes('`' + name) ).sort()).toEqual([])
+  })
+
   it('every kind of event the board writes is on the events page', () => {
     const page = readFileSync(join(root, 'packages/muster/docs/04-reference/04-events.md'), 'utf8')
     const log = readFileSync(join(root, 'packages/muster/src/store/log.ts'), 'utf8')

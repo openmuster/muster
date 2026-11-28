@@ -137,3 +137,4 @@ You run several agents when there is more than one thing to do:
 - [Errors](./04-reference/05-errors.md)
 - [Conformance](./04-reference/06-conformance.md)
 - [Porting from the JSON files](./04-reference/07-porting.md)
+- [Files muster keeps](./04-reference/08-files.md)
