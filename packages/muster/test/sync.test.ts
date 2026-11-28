@@ -365,6 +365,23 @@ describe('sync: a send nobody heard back from', () => {
     expect(posts).toHaveLength(1)
   })
 
+  it('an unsure send whose message is deleted before it is looked for holds the platform\'s imports no longer', async () => {
+    const { team, backend, time, posts, root, lose } = lossy('github')
+    const thread = await root()
+    await backend.syncTick()
+    lose(1)
+    const reply = await team.reply({ to: thread, text: 'on it' })
+    await backend.syncTick()
+    expect(posts).toHaveLength(1)
+    // Deleted before the next try: the outbox moves past it without looking for it.
+    await team.remove({ id: reply.id })
+    time.advance(60_000)
+    await backend.syncTick()
+    const body = JSON.stringify({ action: 'created', issue: issue(7), comment: { id: 77, body: 'from a person' }, repository: repo, sender: { login: 'nico' } })
+    await backend.syncReceive('s', { headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': 'd-9', 'x-hub-signature-256': `sha256=${sign(SECRET, body)}` }, body })
+    expect((await team.readThread({ id: thread })).replies.map((each) => each.text)).toContain('from a person')
+  })
+
   for (const kind of ['github', 'slack', 'linear'] as const) {
     it(`${kind}: a reply the platform took, though its answer never came, is found there by its marker and not posted again`, async () => {
       const { team, backend, time, posts, root, lose } = lossy(kind)

@@ -100,7 +100,8 @@ function isSending(ctx: Context, key: string) {
   const after = new Date(ctx.now().getTime() - SENDING_STALE_MS).toISOString()
   // A send whose outcome is unknown (`since` set to the epoch) holds them too, until it is looked for: its echo
   // would otherwise come in as new before the board knows that the post there is its own.
-  return ctx.db.raw.prepare('select 1 from sending where key = ? and (since > ? or since = ?)').get(key, after, new Date(0).toISOString()) !== undefined
+  // Only one the outbox hasn't moved past: a message deleted meanwhile is never looked for, and its claim holds nothing.
+  return ctx.db.raw.prepare("select 1 from sending where key = ? and (since > ? or (since = ? and seq > coalesce((select seq from cursors where name = 'sync:' || ? and profile = ''), 0)))").get(key, after, new Date(0).toISOString(), key) !== undefined
 }
 
 /**
@@ -423,7 +424,11 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       const data = event.data as Record<string, any>
       const advance = () => {
         cursor = event.seq
-        ctx.db.write(() => ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(cursor, name))
+        ctx.db.write(() => {
+          ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(cursor, name)
+          // A claim left by a try nobody heard back from, for a message that no longer goes: nothing waits on it.
+          ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
+        })
       }
       if (event.type !== 'message.posted') {
         // A change to something this platform has a copy of follows it there, once, with no retry.
