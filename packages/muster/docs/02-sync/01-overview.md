@@ -212,8 +212,9 @@ mid-send is treated the same way.
 
 What comes in is held to the same rules. An event the board can't read or
 import after ten tries, or after 24 hours of the platform being down, is given
-up with a `sync.dropped` event on its thread, so nothing a platform sent goes
-missing without a record.
+up with a `sync.dropped` event on its thread, or in the channel its place
+maps to. An event the filter drops, or one a platform read turns out empty,
+leaves no event: it was never for the board.
 
 ```bash
 mu tail web/ --type sync.failed --type sync.dropped

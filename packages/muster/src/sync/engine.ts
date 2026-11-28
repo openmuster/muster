@@ -36,7 +36,7 @@ function taken(labels: Record<string, string>): Record<string, string> {
  * Platforms that answered as if down, and when each may be asked again: kept for the process, since an outage
  * outlives no restart worth remembering. Each outage in a row doubles the pause, up to OUTAGE_PAUSE_MS.
  */
-const down = new WeakMap<Sync, Map<string, { times: number; until: number }>>()
+const down = new WeakMap<Sync, Map<string, { times: number; until: number; since: number }>>()
 
 function isDown(ctx: Context, sync: Sync, key: string) {
   const state = down.get(sync)?.get(key)
@@ -51,12 +51,19 @@ function answered(ctx: Context, sync: Sync, key: string, error?: unknown) {
     return
   }
   if (!states) down.set(sync, (states = new Map()))
-  const times = (states.get(key)?.times ?? 0) + 1
-  states.set(key, { times, until: ctx.now().getTime() + Math.min(OUTAGE_PAUSE_MS, 1000 * 2 ** (times - 1)) })
+  const was = states.get(key)
+  const times = (was?.times ?? 0) + 1
+  states.set(key, { times, until: ctx.now().getTime() + Math.min(OUTAGE_PAUSE_MS, 1000 * 2 ** (times - 1)), since: was?.since ?? ctx.now().getTime() })
 }
 
-/** Whether an outage has gone on so long past `since` that what waits on it is given up. */
-const tooLong = (ctx: Context, since: string) => ctx.now().getTime() - Date.parse(since) > OUTAGE_MS
+/**
+ * Whether a platform has been down so long that what waits on it is given up: counted from its first failure in a
+ * row, never from how old the message is, which may have waited for other reasons. A restart counts afresh.
+ */
+const tooLong = (ctx: Context, sync: Sync, key: string) => {
+  const state = down.get(sync)?.get(key)
+  return state !== undefined && ctx.now().getTime() - state.since > OUTAGE_MS
+}
 
 /** A short, fixed word for why something failed: never the platform's own text, which the log would keep for good. */
 export const failureOf = (error: unknown): string => (error instanceof Failure ? error.reason : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError') ? 'timeout' : error instanceof TypeError && error.message === 'fetch failed' ? 'unreachable' : 'error')
@@ -93,7 +100,8 @@ function isSending(ctx: Context, key: string) {
   const after = new Date(ctx.now().getTime() - SENDING_STALE_MS).toISOString()
   // A send whose outcome is unknown (`since` set to the epoch) holds them too, until it is looked for: its echo
   // would otherwise come in as new before the board knows that the post there is its own.
-  return ctx.db.raw.prepare('select 1 from sending where key = ? and (since > ? or since = ?)').get(key, after, new Date(0).toISOString()) !== undefined
+  // Only one the outbox hasn't moved past: a message deleted meanwhile is never looked for, and its claim holds nothing.
+  return ctx.db.raw.prepare("select 1 from sending where key = ? and (since > ? or (since = ? and seq > coalesce((select seq from cursors where name = 'sync:' || ? and profile = ''), 0)))").get(key, after, new Date(0).toISOString(), key) !== undefined
 }
 
 /**
@@ -210,7 +218,7 @@ export async function readPending(ctx: Context, sync: Sync, fetcher: typeof fetc
       // A platform that is down says nothing about this event: it waits, without using a try, unless it has waited too long.
       const outage = isOutage(error)
       const attempts = outage ? row.attempts : row.attempts + 1
-      if (attempts >= IMPORT_ATTEMPTS || (outage && tooLong(ctx, row.received))) drop(ctx, sync, row, error)
+      if (attempts >= IMPORT_ATTEMPTS || (outage && tooLong(ctx, sync, row.key))) drop(ctx, sync, row, error)
       else if (!outage) ctx.db.write(() => ctx.db.raw.prepare('update inbox set attempts = ? where key = ? and id = ? and done = 0').get(attempts, row.key, row.id))
       continue
     }
@@ -416,7 +424,11 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
       const data = event.data as Record<string, any>
       const advance = () => {
         cursor = event.seq
-        ctx.db.write(() => ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(cursor, name))
+        ctx.db.write(() => {
+          ctx.db.raw.prepare("update cursors set seq = ? where name = ? and profile = ''").get(cursor, name)
+          // A claim left by a try nobody heard back from, for a message that no longer goes: nothing waits on it.
+          ctx.db.raw.prepare('delete from sending where key = ? and seq = ?').get(key, event.seq)
+        })
       }
       if (event.type !== 'message.posted') {
         // A change to something this platform has a copy of follows it there, once, with no retry.
@@ -510,7 +522,7 @@ export async function deliverPending(ctx: Context, sync: Sync, fetcher: typeof f
         failed++
         answered(ctx, sync, key, error)
         // A platform that is down says nothing about this message: it waits its turn, without using a try, for a day.
-        if (isOutage(error) && !tooLong(ctx, event.at)) break
+        if (isOutage(error) && !tooLong(ctx, sync, key)) break
         const attempts = isOutage(error) || unconfirmed ? DELIVERY_ATTEMPTS : ((ctx.db.raw.prepare('select attempts from outbox_attempts where key = ? and seq = ?').get(key, event.seq) as { attempts: number } | undefined)?.attempts ?? 0) + 1
         if (attempts < DELIVERY_ATTEMPTS) {
           ctx.db.write(() => ctx.db.raw.prepare('insert into outbox_attempts (key, seq, attempts) values (?, ?, ?) on conflict (key, seq) do update set attempts = excluded.attempts').get(key, event.seq, attempts))
