@@ -94,7 +94,7 @@ earlier step, two steps with one key, a `push` with nothing to push to, or a
 `{steps.<key>.result}` for a step it doesn't need is refused with a message
 that names the workflow.
 
-## Starting one
+## Asking for a run
 
 ```bash
 mu workflow list

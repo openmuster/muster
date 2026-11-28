@@ -5,7 +5,15 @@ description: Map a Notion database to a channel, so each page becomes a thread w
 
 Guides that use it: [A feedback loop](../03-guides/20-a-feedback-loop.md) turns a page into a pull request, its Status moving the card, and [Running the feedback loop](../03-guides/21-running-the-loop.md) covers the day-to-day.
 
-## Map databases
+## Set it up
+
+### 1. Create the integration
+
+Create a Notion integration. `token` is the integration's secret
+(`ntn_…`). Share each mapped database with the integration, and give it the
+capabilities to read content, read comments and insert comments.
+
+### 2. Map the databases
 
 ```ts board.ts
 import { board, env, notion } from '@openmuster/muster'
@@ -25,38 +33,50 @@ A database maps to a channel, by its data source ID: on a workspace that
 predates data sources, by the database's own ID. Either is taken with or
 without dashes. Sync is two-way unless a database sets `mirror: false`.
 
-`token` is the integration's secret (`ntn_…`). Share each mapped database
-with the integration, and give it the capabilities to read content, read
-comments and insert comments.
-
 `secret` is the webhook subscription's verification token, which Notion
 signs every delivery with. `bot` is optional: the integration's own user ID,
 whose pages and comments are never imported.
 
-## Set up the webhook
+### 3. Start the board with a pending secret
 
 Notion sends its verification token once, to the webhook's URL, signed with
 that same token, and it has to be pasted back into Notion before anything
-else is sent:
+else is sent.
 
-1. Start the board with the sync in its module and `NOTION_WEBHOOK_SECRET`
-   set to `pending`. Only then does the board take Notion's one unsigned
-   request.
-2. In the integration's settings, under Webhooks, subscribe
-   `https://<your host>/api/board/webhooks/nt` to page and comment events.
-3. The board writes the token Notion sent to `notion-verification-token`
-   in muster's config folder (`~/.config/muster`, or `MUSTER_CONFIG`),
-   readable by you alone. It is never logged or answered, and never
-   written over: the first one stays.
-4. Paste it into Notion's Verify. Anyone can send the board a token, so
-   this is the check: one Notion didn't send fails there. If it fails,
-   delete the file and have Notion send its token again. Then set
-   `NOTION_WEBHOOK_SECRET` to it and start the board again.
+Start the board with the sync in its module and `NOTION_WEBHOOK_SECRET`
+set to `pending`. Only then does the board take Notion's one unsigned
+request.
+
+### 4. Subscribe the webhook
+
+In the integration's settings, under Webhooks, subscribe
+`https://<your host>/api/board/webhooks/nt` to page and comment events.
+
+### 5. Verify the token
+
+The board writes the token Notion sent to `notion-verification-token`
+in muster's config folder (`~/.config/muster`, or `MUSTER_CONFIG`),
+readable by you alone. It is never logged or answered, and never
+written over: the first one stays.
+
+Paste it into Notion's Verify. Anyone can send the board a token, so
+this is the check: one Notion didn't send fails there. If it fails,
+delete the file and have Notion send its token again. Then set
+`NOTION_WEBHOOK_SECRET` to it and start the board again.
 
 From then on a delivery without Notion's signature for that token is
 refused.
 
-## What comes in
+### 6. Check it
+
+Make a page in the mapped database: on the board's next tick it arrives as a
+thread in the mapped channel, labelled `kind=page` and `source=nt`.
+
+## Reference
+
+What the sync brings in, sends back and catches up on.
+
+### What comes in
 
 | In Notion | On the board |
 | --- | --- |
@@ -76,7 +96,7 @@ with a link to the rest.
 
 A page in a database the sync doesn't map is not brought in.
 
-## What goes back
+### What goes back
 
 - **A reply** in a synced thread is a comment on the page, in pieces of
   2,000 characters, as Notion takes them. Editing or deleting it does the
@@ -86,7 +106,7 @@ A page in a database the sync doesn't map is not brought in.
 - **Files** aren't sent yet: each is named in the comment, and stays on the
   board.
 
-## Catching up
+### Catching up
 
 A board that was down asks Notion, when it starts, for the pages changed in
 each mapped database since it last heard, oldest first, up to 1,000 a
