@@ -254,6 +254,10 @@ on `claim_lost` stops the command: SIGTERM to the group, SIGKILL after a grace.
   again after a pause from 500 ms doubling to 30 s. One whose next try would
   come after the deadline ends with that error, not a timeout. A board out of
   reach from the first request, and any refusal, ends the command at once.
+- A cursor past the board's last event, given to `wait --after`,
+  `tail --after` or the live feed (`after`, `Last-Event-ID`), is refused with
+  `cursor_ahead` and the board's head: the board was most likely restored
+  from a backup, and reading on from it would skip what is written next.
 - Search (`read --text`, `mu search`) uses SQLite FTS5.
 - A reader may store its place: `--cursor <name>` keeps the last `seq` it was
   shown under that name, per profile.
@@ -300,13 +304,23 @@ Specified as they are built: see `docs/`. Their rules in brief:
   and sent under one lease, `hooks`: one signed POST per event, in order, a
   pointer unless the hook asks for the event, a cursor that moves only past a
   2xx, and no redirect followed.
-- **Serve**: tokens signed with a key that persists across restarts. A
+- **Serve**: tokens signed with a key that persists across restarts.
+  `mu token rotate-key` signs new tokens with a new key and keeps the old one
+  as retired, still accepted; `mu token drop-old-keys` deletes the retired
+  keys, which stops their tokens. A token is checked against every key held. A
   workload the owner names in config may trade its platform's OIDC token for
   one: the issuer is matched before anything is fetched, the audience comes
   from config and never from a request, every trust names a `sub`, one
   algorithm is taken, and what it gets is held to a profile and channels,
   lives an hour at most, and makes no tokens.
 - **Sync**: platform webhooks land in an inbox before they are answered.
+  An answer that says the platform is down (5xx, 429, no answer) uses none of
+  an event's tries: the platform is paused, from 1 s doubling to 5 minutes,
+  and what waits on it is given up only after 24 hours of failures in a row,
+  as `sync.failed` (out) or `sync.dropped` (in). A send that may have reached
+  the platform carries a marker and is looked for, among posts by the sync's
+  own bot, before it is sent again; where there is no way to look, it is
+  recorded as `unconfirmed` and never sent twice.
 - **Runners**: start an agent for a task locally or in a cloud sandbox. A
   cloud runner reaches the board only through `mu serve`.
 
