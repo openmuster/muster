@@ -98,6 +98,8 @@ describe('serve', () => {
       taskAssign: [{ id: task.id, for: 'fixer' }],
       taskNeeds: [{ id: task.id, needs: [] }],
       taskList: [{ channel: 'security' }],
+      // Over everything the token reaches: the owner's task must not be counted.
+      taskReport: [{ since: '2020-01-01T00:00:00Z' }],
       task: [task.id],
       scheduleCreate: [{ channel: 'security', text: 'x', first: time.now().toISOString() }],
       scheduleCancel: [{ id: 1 }],
@@ -129,6 +131,8 @@ describe('serve', () => {
     }
     expect(leaked).toEqual([])
     expect(refusedOtherwise).toEqual([])
+    const counted = (await backend.taskReport!(me, { since: '2020-01-01T00:00:00Z' })) as { agents: { tasks: number }[] }
+    expect(counted.agents.reduce((sum, row) => sum + row.tasks, 0)).toBe(0)
     // And nothing it called changed the channel: whatever the board wrote since is not about it.
     const since = (await owner.events({ after: before })).events.filter((event) => event.channel === 'security' || String(event.channel).startsWith('security/'))
     expect(since).toEqual([])
