@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { board, boardKey, file, http, listen, mint, verify } from '../src/index.ts'
 import { processStart } from '../src/process.ts'
 import { TOKENS_MAX } from '../src/serve/tokens.ts'
+import { ROUTES } from '../src/serve/routes.ts'
 import { cli, cliStart, clock, reason, tempDir } from './helpers.ts'
 
 async function served() {
@@ -48,6 +49,100 @@ describe('serve', () => {
     const fixer = as({ profile: 'fixer' })
     const message = await fixer.as('admin').post({ channel: 'work', text: 'hi', by: { principal: 'local:user:root', profile: null } } as never)
     expect(message.by).toEqual({ principal: 'local:user:ada', profile: 'fixer' })
+    await server.close()
+  })
+
+  it('every route, called by a token held to other channels, neither shows nor changes anything in a channel it cannot reach', async () => {
+    const { as, owner, server, time } = await served()
+    // The owner's: a private channel with a thread, a task in it, a file on a message, a schedule.
+    const secret = await owner.post({ channel: 'security', text: 'unfixed CVE' })
+    const task = (await owner.taskCreate({ channel: 'security', text: 'patch it' })).task
+    const dump = await owner.filePut({ name: 'dump.txt', data: Buffer.from('secret bytes').toString('base64') })
+    const filed = await owner.post({ channel: 'security', text: 'the dump', attachments: [dump] })
+    const before = await owner.head()
+    // Everything a token may be given, on another channel: never this one.
+    const agent = as({ profile: 'fixer', can: { 'factory/': ['read', 'post', 'react', 'label', 'manage'] } })
+    const backend = agent.backend as unknown as Record<string, (caller: unknown, ...args: unknown[]) => Promise<unknown>>
+    const me = { principal: 'local:user:ada', profile: 'fixer' }
+    const fileId = dump.id
+    /** What each route is called with, aimed at the channel the token can't reach. A new route fails here until it has a case. */
+    const cases: Record<(typeof ROUTES)[number], unknown[]> = {
+      post: [{ channel: 'security', text: 'x' }],
+      reply: [{ to: secret.id, text: 'x' }],
+      edit: [{ id: secret.id, text: 'x' }],
+      remove: [{ id: secret.id }],
+      label: [{ id: secret.id, set: { a: 'b' } }],
+      react: [{ id: secret.id, emoji: 'eyes' }],
+      createChannel: [{ path: 'security/sub' }],
+      workflowRequest: [{ name: 'fix', on: secret.id }],
+      readChannel: [{ channel: 'security' }],
+      readThread: [{ id: secret.id }],
+      events: [{ after: 0, filter: { channel: 'security' } }],
+      channels: [{}],
+      search: [{ text: 'CVE' }],
+      actors: [],
+      head: [],
+      cursorGet: ['watch:security'],
+      cursorSet: ['watch:security', 0],
+      taskCreate: [{ channel: 'security', text: 'x' }],
+      taskPlan: [{ channel: 'security', tasks: [{ key: 'a', text: 'x' }] }],
+      taskClaim: [{ id: task.id }],
+      taskRenew: [{ id: task.id }],
+      taskRelease: [{ id: task.id }],
+      taskComplete: [{ id: task.id }],
+      taskFail: [{ id: task.id }],
+      taskBlock: [{ id: task.id }],
+      taskUnblock: [{ id: task.id }],
+      taskReopen: [{ id: task.id }],
+      taskCancel: [{ id: task.id }],
+      taskAssign: [{ id: task.id, for: 'fixer' }],
+      taskNeeds: [{ id: task.id, needs: [] }],
+      taskList: [{ channel: 'security' }],
+      task: [task.id],
+      scheduleCreate: [{ channel: 'security', text: 'x', first: time.now().toISOString() }],
+      scheduleCancel: [{ id: 1 }],
+      scheduleList: [],
+      schemaAdd: [{ name: 'x@1', schema: {} }],
+      schemaList: [],
+      filePut: [{ name: 'x.txt', data: 'eA==' }],
+      fileGet: [{ message: filed.id, id: fileId }],
+      budgetSet: [{ channel: 'security', usd: 1 }],
+      budgets: [],
+    }
+    expect(Object.keys(cases).sort()).toEqual([...ROUTES].sort())
+    const leaked: string[] = []
+    const refusedOtherwise: string[] = []
+    const secretText = ['security', 'CVE', 'patch it', 'secret bytes', Buffer.from('secret bytes').toString('base64')]
+    for (const route of ROUTES) {
+      let answer: unknown
+      try {
+        answer = await backend[route]!(me, ...cases[route])
+      } catch (error) {
+        // Refused because of where it was aimed, not because the case was malformed: that would prove nothing.
+        const reason = (error as { reason?: string }).reason
+        if (reason !== 'not_found' && reason !== 'forbidden') refusedOtherwise.push(`${route}: ${reason}`)
+        continue
+      }
+      // An answer is fine only when it shows nothing of the channel: no text, no file's bytes.
+      const shown = JSON.stringify(answer ?? null)
+      if (secretText.some((text) => shown.includes(text))) leaked.push(route)
+    }
+    expect(leaked).toEqual([])
+    expect(refusedOtherwise).toEqual([])
+    // And nothing it called changed the channel: whatever the board wrote since is not about it.
+    const since = (await owner.events({ after: before })).events.filter((event) => event.channel === 'security' || String(event.channel).startsWith('security/'))
+    expect(since).toEqual([])
+    // The same cases are well-formed: as the board's owner, none is refused as a bad request.
+    const ownerBackend = as({}).backend as unknown as Record<string, (caller: unknown, ...args: unknown[]) => Promise<unknown>>
+    const malformed: string[] = []
+    for (const route of ROUTES) {
+      try {
+        await ownerBackend[route]!({ principal: 'local:user:ada', profile: null }, ...cases[route])
+      } catch (error) {
+        if ((error as { exit?: number }).exit === 2) malformed.push(`${route}: ${(error as { reason?: string }).reason}`)
+      }
+    }
+    expect(malformed).toEqual([])
     await server.close()
   })
 
