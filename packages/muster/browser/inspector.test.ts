@@ -32,6 +32,7 @@ async function open(path = '/', options: { context?: BrowserContextOptions; chan
   for (const channel of options.channels ?? []) await team.as('lead').post({ channel, text: `first in ${channel}` })
   const serving = await inspect({ backend })
   const context = await browser.newContext(options.context)
+  await context.addInitScript(SHIFTS)
   const page = await context.newPage()
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -47,11 +48,53 @@ async function open(path = '/', options: { context?: BrowserContextOptions; chan
 }
 
 const rows = (page: Page) => page.locator('.rows .row .text')
+/** The text of the row the keyboard is on. */
+const focused = (page: Page) => page.evaluate(() => document.activeElement?.querySelector('.text')?.textContent ?? null)
 /** Enough channels that the sidebar's list is longer than any screen here. */
 const MANY = Array.from({ length: 40 }, (_, n) => `team/room-${String(n).padStart(2, '0')}`)
 const LONG = 'cards/app/planning-1179-with-a-name-far-longer-than-the-sidebar'
 const box = async (page: Page, selector: string) => (await page.locator(selector).first().boundingBox())!
 const PHONE = { viewport: { width: 390, height: 844 } }
+const DESKTOP = { viewport: { width: 1280, height: 800 } }
+
+/**
+ * Records every layout shift Chromium reports from the first paint on, with what moved. Every one counts,
+ * even one right after a key or a click: something that appears because of a press still mustn't push
+ * what is already on the screen.
+ */
+const SHIFTS = () => {
+  type Shift = { value: number; moved: string[] }
+  const shifts: Shift[] = []
+  ;(window as unknown as { shifts: Shift[] }).shifts = shifts
+  const name = (node: Node | null) => (node instanceof Element ? `${node.tagName.toLowerCase()}${node.className ? `.${String(node.className).trim().split(/\s+/).join('.')}` : ''}` : String(node?.nodeName))
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries() as unknown as { value: number; sources: { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[] }[]) {
+      shifts.push({ value: entry.value, moved: entry.sources.map((source) => `${name(source.node)} y ${source.previousRect.y} -> ${source.currentRect.y}, x ${source.previousRect.x} -> ${source.currentRect.x}`) })
+    }
+  }).observe({ type: 'layout-shift', buffered: true })
+}
+/**
+ * Whether `text` is on the screen whole, under `within`: in an element that is drawn and that nothing
+ * cuts short. A `title` alone is never that, since a phone has no pointer to rest on it.
+ */
+const whole = (page: Page, within: string, text: string) =>
+  page.evaluate(
+    ([within, text]) => {
+      const root = document.querySelector(within)
+      if (!root) return false
+      const cut = (el: Element) => {
+        for (let at: Element | null = el; at && at !== document.documentElement; at = at.parentElement) {
+          const overflow = getComputedStyle(at).overflowX
+          if ((overflow === 'hidden' || overflow === 'clip') && at.scrollWidth > at.clientWidth + 1) return true
+        }
+        return false
+      }
+      const holds = (el: Element) => (el.textContent ?? '').includes(text)
+      return [root, ...Array.from(root.querySelectorAll('*'))].some((el) => el.checkVisibility() && holds(el) && !Array.from(el.children).some(holds) && !cut(el))
+    },
+    [within, text] as const,
+  )
+const shifts = (page: Page) => page.evaluate(() => (window as unknown as { shifts: { value: number; moved: string[] }[] }).shifts)
 const TABLET = { viewport: { width: 768, height: 1024 } }
 
 /**
@@ -236,6 +279,164 @@ describe('the inspector, in a browser', () => {
     expect(errors).toEqual([])
   })
 
+  it('works through a list from the keyboard: J and K, or the arrows, move down and up the rows, in tasks and in activity', async () => {
+    const { page, errors } = await open()
+    await expect.poll(() => rows(page).count()).toBe(2)
+    // Nothing has the focus yet: the first key goes to the first row.
+    for (const [key, text] of [['j', 'Follow only same-origin paths'], ['j', 'Add a test for the redirect'], ['j', 'Add a test for the redirect'], ['k', 'Follow only same-origin paths'], ['ArrowDown', 'Add a test for the redirect'], ['ArrowUp', 'Follow only same-origin paths']] as const) {
+      await page.keyboard.press(key)
+      expect(await focused(page), key).toBe(text)
+    }
+    // On a tab of its own too.
+    await page.locator('.tabs a', { hasText: /^claimed$/ }).click()
+    await expect.poll(() => rows(page).count()).toBe(1)
+    await page.keyboard.press('k')
+    expect(await focused(page)).toBe('Add a test for the redirect')
+    await page.goto(`${new URL(page.url()).origin}/activity`)
+    await expect.poll(() => page.locator('.rows .row[data-row]').count()).toBeGreaterThan(2)
+    await page.keyboard.press('j')
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(await page.locator('.rows .row[data-row]').nth(1).getAttribute('data-row'))
+    expect(errors).toEqual([])
+  })
+
+  it('opens the row the keys are on with Enter, and Escape closes the thread and puts you back on that row', async () => {
+    const { page, taken, errors } = await open('/activity')
+    // Two events in one thread: the task made, then claimed. The second is the one to come back to.
+    const claimed = page.locator('.rows .row[data-row]', { hasText: 'task.claimed' })
+    await claimed.waitFor()
+    const all = await page.locator('.rows .row[data-row]').evaluateAll((els) => els.map((el) => el.getAttribute('data-row')))
+    const row = await claimed.getAttribute('data-row')
+    for (let n = 0; n <= all.indexOf(row); n++) await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(row)
+    await page.keyboard.press('Enter')
+    await page.locator('.pane').waitFor()
+    expect(new URL(page.url()).searchParams.get('thread')).toBe(String(taken.id))
+    expect(await page.locator('.pane article .text').first().textContent()).toBe('Add a test for the redirect')
+    await page.keyboard.press('Escape')
+    await expect.poll(() => page.locator('.pane').count()).toBe(0)
+    expect(new URL(page.url()).searchParams.get('thread')).toBeNull()
+    await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(row)
+    // And the keys carry on from there.
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-row'))).toBe(all[all.indexOf(row) + 1] ?? row)
+    expect(errors).toEqual([])
+  })
+
+  it('shows every key on ?, over the page, and Escape takes it away before it closes anything else', async () => {
+    const { page, errors } = await open()
+    await rows(page).first().click()
+    await page.locator('.pane').waitFor()
+    await page.locator('main header b').click()
+    await page.keyboard.press('?')
+    const keys = page.getByRole('dialog', { name: 'keys' })
+    await keys.waitFor()
+    expect(await keys.locator('kbd').allTextContents()).toEqual(['j ↓', 'k ↑', 'enter', 'esc', '?'])
+    // While it is open the list under it hears nothing.
+    const before = await page.evaluate(() => document.activeElement?.className)
+    await page.keyboard.press('j')
+    expect(await page.evaluate(() => document.activeElement?.className)).toBe(before)
+    await page.keyboard.press('Escape')
+    await expect.poll(() => keys.count()).toBe(0)
+    expect(await page.locator('.pane').count()).toBe(1)
+    await page.keyboard.press('?')
+    await keys.waitFor()
+    await page.keyboard.press('?')
+    await expect.poll(() => keys.count()).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('never takes a key you are typing: J, K, ? and Escape in a text box are text', async () => {
+    const { page, team, errors } = await open()
+    await rows(page).first().waitFor()
+    await page.locator('.composer input').fill('#work/web')
+    await page.locator('.composer textarea').click()
+    await page.keyboard.type('jk? ok')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Escape')
+    expect(await page.locator('.composer textarea').inputValue()).toBe('jk? ok')
+    expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('TEXTAREA')
+    expect(await page.getByRole('dialog', { name: 'keys' }).count()).toBe(0)
+    await page.keyboard.press('Enter')
+    await expect.poll(async () => (await team.taskList({ state: 'all' })).tasks.map((task) => task.text)).toContain('jk? ok')
+    await page.locator('label.as input').pressSequentially('jk?')
+    expect(await page.locator('label.as input').inputValue()).toBe('jk?')
+    expect(errors).toEqual([])
+  })
+
+  it('moves nothing once it is drawn: not while the board loads, nor when an error appears, on a desktop or a phone', async () => {
+    for (const context of [DESKTOP, PHONE]) {
+      const { page, errors } = await open('/', { context })
+      await expect.poll(() => rows(page).count()).toBe(2)
+      // A beat for the next read of the board, which redraws what is on the screen.
+      await page.waitForTimeout(1500)
+      expect(await shifts(page), `loading, ${context.viewport.width}px`).toEqual([])
+      // An error that comes with nothing pressed: the address now names a thread the board doesn't have.
+      await page.evaluate(() => {
+        window.history.pushState(null, '', '/?thread=999999')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await page.locator('.error').waitFor()
+      await page.waitForTimeout(500)
+      expect(await shifts(page), `an error, ${context.viewport.width}px`).toEqual([])
+      // What it says is in sight, right under the header, and a click takes it away.
+      expect(await page.locator('.error').isVisible()).toBe(true)
+      expect((await box(page, '.error')).y).toBe((await box(page, 'main header')).height)
+      await page.locator('.error').click()
+      await expect.poll(() => page.locator('.error').count()).toBe(0)
+      expect(await shifts(page), `the error gone, ${context.viewport.width}px`).toEqual([])
+      // The board's answer for the missing thread is the one failed request.
+      expect(errors.filter((error) => !error.includes('status of 404'))).toEqual([])
+    }
+  })
+
+  it('keeps nothing a phone needs in a tooltip: what a title says is shown whole where a tap reaches it', async () => {
+    const { page, team, errors } = await open('/?state=all', { context: { ...PHONE, hasTouch: true, isMobile: true }, channels: [LONG] })
+    const value = `https://example.com/${'a'.repeat(200)}`
+    await team.as('lead').taskCreate({ channel: 'work/api', text: 'Labelled', labels: { source: value, kind: 'bug' } })
+    const found: string[] = []
+    const hidden: string[] = []
+    const check = async (within: string, titles: string[]) => {
+      for (const title of titles) (await whole(page, within, title) ? found : hidden).push(title)
+    }
+    const titles = (selector: string) => page.locator(selector).evaluateAll((els) => els.map((el) => el.getAttribute('title')!))
+    // A row's titles are shown in the pane the row opens, and the pane's own in the pane.
+    for (const view of ['/?state=all', '/c/general', '/activity']) {
+      await page.goto(`${new URL(page.url()).origin}${view}`)
+      await expect.poll(() => page.locator('.rows [data-row]').count()).toBeGreaterThan(0)
+      for (const key of await page.locator('.rows [data-row]').evaluateAll((els) => els.map((el) => el.getAttribute('data-row')!))) {
+        const row = page.locator(`[data-row="${key}"]`)
+        const said = await titles(`[data-row="${key}"] [title], [data-row="${key}"][title]`)
+        await row.tap()
+        await page.locator('.pane article').first().waitFor()
+        await check('.pane', [...said, ...(await titles('.pane [title]'))])
+        await page.locator('.pane header a[aria-label="close"]').tap()
+        await expect.poll(() => page.locator('.pane').count()).toBe(0)
+      }
+    }
+    // A channel's name in the sidebar is shown whole in the view it opens.
+    for (const path of await titles('nav a[title]')) {
+      await page.locator('button[aria-label="menu"]').tap()
+      await page.locator(`nav a[title="${path}"]`).tap()
+      await expect.poll(() => page.locator('main header b').textContent()).toBe(`#${path}`)
+      await check('main header', [path])
+    }
+    expect(hidden).toEqual([])
+    // It looked at each kind: a time, who holds a task, a label, a channel's name.
+    const at = (await team.readThread({ id: 1 })).message.at
+    expect(found).toEqual(expect.arrayContaining([await page.evaluate((at) => new Date(at).toLocaleString(), at), 'claude via ada', `source=${value}`, LONG]))
+    // Activity says who and when on the row itself, with no tooltip: whole, even with a whole date, two
+    // days on, and a long profile name.
+    await team.as('a-profile-with-a-long-name').post({ channel: 'general', text: 'late' })
+    await page.clock.setFixedTime(Date.now() + 2 * 86_400_000)
+    await page.goto(`${new URL(page.url()).origin}/activity`)
+    await expect.poll(() => page.locator('.rows .row .meta').allTextContents()).toContainEqual(expect.stringContaining('a-profile-with-a-long-name'))
+    const metas = await page.locator('.rows .row .meta').allTextContents()
+    expect(metas.every((meta) => /\d{4}/.test(meta)), 'a whole date').toBe(true)
+    for (const meta of metas) expect(await whole(page, '.rows', meta), meta).toBe(true)
+    expect(errors).toEqual([])
+  })
+
   it('marks the row whose thread is open, and says so when a channel has nothing in it', async () => {
     const { page, team, errors } = await open()
     await page.locator('.rows .row', { hasText: 'Add a test for the redirect' }).click()
@@ -260,7 +461,7 @@ describe('the inspector, in a browser', () => {
     expect([...moving.errors, ...still.errors]).toEqual([])
   })
 
-  it("cuts a long label short on one line, whole in its tooltip, and the thread never scrolls sideways", async () => {
+  it('shows a long label whole in the thread, wrapped, and the thread never scrolls sideways', async () => {
     const { page, team, errors } = await open('/', { context: PHONE })
     const value = `https://example.com/${'a'.repeat(200)}`
     const message = await team.as('lead').post({ channel: 'general', text: 'labelled', labels: { source: value, kind: 'bug' } })
@@ -268,10 +469,9 @@ describe('the inspector, in a browser', () => {
     await page.locator('.pane').waitFor()
     const long = page.locator('.pane .labels code', { hasText: 'source=' })
     const short = page.locator('.pane .labels code', { hasText: 'kind=bug' })
-    expect(await long.getAttribute('title')).toBe(`source=${value}`)
-    expect(await short.getAttribute('title')).toBe('kind=bug')
-    expect((await long.boundingBox())!.height).toBe((await short.boundingBox())!.height)
-    expect(await long.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+    expect(await whole(page, '.pane', `source=${value}`)).toBe(true)
+    expect((await long.boundingBox())!.height).toBeGreaterThan((await short.boundingBox())!.height)
+    expect(await long.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
     expect(await page.locator('.pane .messages').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
     expect(errors).toEqual([])
   })

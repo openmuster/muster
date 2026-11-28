@@ -1,8 +1,10 @@
 /**
  * The page's look. Every size, colour and time is named once, in `:root` or in the constants below, and
  * the rules use the names: spacing is a multiple of one step, the way Tailwind's scale is. The rules are
- * written for a phone first; wider screens add columns.
+ * written for a phone first; wider screens add columns. The colours, corners and motion the docs site
+ * shares are in `../tokens.ts`, the one place either page writes them.
  */
+import { COLOURS, declarations, SHAPE } from '../tokens.ts'
 
 /** Where the layout changes, in px. A media query can't read a CSS variable, so these live here. */
 export const BP = { sm: 640, lg: 1024 } as const
@@ -20,20 +22,20 @@ const lg = `@media (min-width: ${BP.lg}px)`
 
 export const STYLE = `
 :root {
-  --bg: #000; --fg: #ededed; --dim: #8a8a8a; --line: #2a2a2a; --panel: #0a0a0a; --hover: #151515;
-  --thumb: #2a2a2a; --thumb-hover: #3a3a3a; --ring: #8a8a8a; --scrim: rgb(0 0 0 / 0.6); --shade: rgb(0 0 0 / 0.5);
+  ${declarations(COLOURS.dark)} ${declarations(SHAPE)}
+  --scrim: rgb(0 0 0 / 0.6); --shade: rgb(0 0 0 / 0.5);
   --spacing: 4px; --hairline: 1px;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --text-xs: 12px; --text-sm: 13px; --text-base: 16px; --leading: 1.5; --weight-strong: 600;
-  --radius-sm: 3px; --radius: 4px; --radius-full: 999px;
+  --radius-full: 999px;
   --header-h: 48px; --sidebar-w: 240px; --drawer-w: min(280px, 85vw); --pane-w: 420px;
   --scrollbar: 6px; --tap: 40px; --col-state: 84px; --col-event: 124px; --col-id: 44px; --text-min: 180px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --duration-fast: 120ms; --duration: 180ms; --duration-pulse: 1.6s;
+  --duration-pulse: 1.6s;
   --press: 0.97; --faded: 0.5; --disabled: 0.4;
-  --z-pane: 10; --z-scrim: 20; --z-drawer: 30;
+  --z-banner: 5; --z-pane: 10; --z-scrim: 20; --z-drawer: 30; --z-keys: 40; --keys-w: 360px;
   color-scheme: dark;
 }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #fff; --fg: #111; --dim: #666; --line: #e3e3e3; --panel: #fafafa; --hover: #f0f0f0; --thumb: #d4d4d4; --thumb-hover: #b8b8b8; --ring: #666; --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { ${declarations(COLOURS.light)} --scrim: rgb(0 0 0 / 0.3); --shade: rgb(0 0 0 / 0.1); color-scheme: light; } }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: var(--text-sm)/var(--leading) var(--font-mono); cursor: default; -webkit-font-smoothing: antialiased; }
@@ -75,11 +77,16 @@ nav h6 { margin: ${s(3.5)} ${s(2)} ${s(1)}; font-size: var(--text-xs); font-weig
 .as input { flex: 1; min-width: 0; }
 
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-header { display: flex; align-items: center; gap: ${s(3)}; flex: none; height: var(--header-h); padding: 0 ${s(4)}; border-bottom: var(--hairline) solid var(--line); user-select: none; }
-header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-strong); }
-header span { flex: none; color: var(--dim); }
-header em { flex: none; margin-left: auto; font-style: normal; color: var(--dim); }
-header em.live::before { content: "● "; color: var(--fg); }
+header { position: relative; display: flex; align-items: center; gap: ${s(3)}; flex: none; min-height: var(--header-h); padding: 0 ${s(4)}; border-bottom: var(--hairline) solid var(--line); user-select: none; }
+/* A view's name is shown whole, on a second line if it must: the sidebar cuts a long channel short. */
+header b { min-width: 0; padding-block: ${s(1)}; overflow-wrap: anywhere; font-weight: var(--weight-strong); }
+header span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+/* Wider than "● reconnecting" (14 characters) from the first paint, with room for a font a little
+   wider than the ch, and the word after the dot always starts in one place: the word changing moves
+   nothing. */
+header em { flex: none; margin-left: auto; min-width: 16ch; font-style: normal; color: var(--dim); }
+header em::before { content: "● "; }
+header em.live::before { color: var(--fg); }
 header em.down { animation: pulse var(--duration-pulse) ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: var(--faded); } }
 .icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: ${s(6)}; height: ${s(6)}; margin: 0; padding: 0; border: none; border-radius: var(--radius); background: none; color: var(--dim); transition: transform var(--duration-fast) var(--ease-out), background-color var(--duration-fast); }
@@ -91,7 +98,7 @@ header a.icon { margin-left: auto; }
 .rows { flex: 1; overflow: auto; container-type: inline-size; }
 .row { display: flex; align-items: center; gap: ${s(2.5)}; padding: ${s(2)} ${s(4)}; white-space: nowrap; overflow: hidden; }
 .row, .thread { transition: background-color var(--duration-fast); }
-.row.on, .thread.on { background: var(--hover); }
+.row.on, .thread.on, .row:focus-visible, .thread:focus-visible { background: var(--hover); }
 .row code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row .meta { flex: none; }
 .row .state { width: var(--col-state); flex: none; color: var(--dim); }
@@ -100,7 +107,12 @@ header a.icon { margin-left: auto; }
 .row .id { color: var(--dim); width: var(--col-id); flex: none; }
 .row .text { overflow: hidden; text-overflow: ellipsis; flex: 0 1000 auto; min-width: var(--text-min); }
 @container (max-width: ${ROWS.labels}px) { .row code { display: none; } }
-@container (max-width: ${ROWS.where}px) { .row .meta.where, .row .id { display: none; } .row .text { min-width: 0; } }
+@container (max-width: ${ROWS.where}px) {
+  .row .meta.where, .row .id { display: none; } .row .text { min-width: 0; }
+  /* An event says who and when on a line of its own, whole: Activity has no tooltip to fall back on. */
+  .row.event { flex-wrap: wrap; } .row.event .text { flex: 1 1 0; } .row.event .grow { display: none; }
+  .row.event .meta { flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+}
 .grow { flex: 1; }
 .meta { color: var(--dim); font-size: var(--text-xs); }
 code { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm); padding: 0 ${s(1)}; font: inherit; font-size: var(--text-xs); color: var(--dim); }
@@ -111,6 +123,9 @@ code { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm
 .pending { opacity: var(--faded); }
 .empty { color: var(--dim); padding: ${s(4)}; margin: 0; }
 .error { margin: 0; padding: ${s(2)} ${s(4)}; border-bottom: var(--hairline) solid var(--line); transition: opacity var(--duration) var(--ease-out), transform var(--duration) var(--ease-out); }
+/* What went wrong with a read or a write lies over the top of the list, hung under the header, rather
+   than pushing the list down: nothing moves after it is drawn. A click takes it away. */
+.error.banner { position: absolute; top: 100%; inset-inline: 0; z-index: var(--z-banner); margin-top: var(--hairline); background: var(--bg); user-select: text; }
 @starting-style { .error { opacity: 0; transform: translateY(calc(var(--spacing) * -1)); } }
 .composer { border-top: var(--hairline) dashed var(--line); padding: ${s(2.5)} ${s(4)}; display: flex; flex-direction: column; gap: ${s(1.5)}; }
 .composer:focus-within { border-top-style: solid; }
@@ -129,10 +144,20 @@ button:disabled { opacity: var(--disabled); }
 .pane { position: fixed; inset: 0; z-index: var(--z-pane); background: var(--bg); display: flex; flex-direction: column; transition: opacity var(--duration) var(--ease-out), transform var(--duration) var(--ease-out); }
 @starting-style { .pane { opacity: 0; transform: translateX(${s(3)}); } }
 .messages { flex: 1; overflow: auto; }
+/* The list of every key, from ?: over everything, the page dimmed under it. */
+.veil { position: fixed; inset: 0; z-index: var(--z-keys); background: var(--scrim); }
+.keys { position: fixed; z-index: var(--z-keys); top: ${s(16)}; left: 50%; translate: -50% 0; width: min(var(--keys-w), calc(100% - ${s(8)})); background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--radius); outline: none; transition: opacity var(--duration) var(--ease-out); }
+@starting-style { .keys { opacity: 0; } }
+.keys header { padding: ${s(1)} ${s(4)}; }
+.keys header .icon { margin-left: auto; }
+.keys dl { display: grid; grid-template-columns: max-content 1fr; gap: ${s(2)} ${s(4)}; margin: 0; padding: ${s(3)} ${s(4)} ${s(4)}; }
+.keys dl div { display: contents; }
+.keys dd { margin: 0; color: var(--dim); }
+kbd { border: var(--hairline) solid var(--line); border-radius: var(--radius-sm); padding: 0 ${s(1)}; font: inherit; }
 article { padding: ${s(2.5)} ${s(4)}; }
 .labels { display: flex; gap: ${s(1.5)}; align-items: center; margin-top: ${s(1)}; color: var(--dim); flex-wrap: wrap; }
-/* A label is one line: a long value is cut short, whole in its tooltip. */
-.labels code { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* In the pane a label is shown whole: a long value wraps. A row cuts it short, whole in its tooltip. */
+.labels code { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 
 ${hover} { nav a:hover, nav button.ask:hover, .row:hover, .thread:hover, .icon:hover { background: var(--hover); transition-duration: 0s; } .tabs a:hover { color: var(--fg); } }
 @media (pointer: coarse) { nav a, nav button.ask, .tabs a, .row { min-height: var(--tap); } .icon { width: var(--tap); height: var(--tap); } input, textarea, select { font-size: var(--text-base); } }

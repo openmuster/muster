@@ -2,7 +2,10 @@
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
 
-/* One look for the product and its docs: the inspector's black, its greys, its hairlines. */
+/* One look for the product and its docs: the inspector's black, its greys, its hairlines. The values the
+   two share (colours, corners, the curve and the durations) are declared once, in
+   packages/muster/src/inspect/tokens.ts, and put in the page's head by app/layout.tsx as --muster-<name>.
+   This file only uses them, and declares what the site alone has. */
 @theme {
   /* Geist, served from this site: the files ship with it, so no font is fetched from anywhere else. */
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
@@ -10,40 +13,31 @@
   /* Code set a step under the prose around it. */
   --text-code: 13px;
   --color-muster-knob: var(--muster-thumb-hover);
-  --ease-muster-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-muster-out: var(--muster-ease-out);
 }
 
 :root,
 .dark {
-  --muster-bg: #000000;
-  --muster-fg: #ededed;
-  --muster-dim: #8a8a8a;
-  --muster-line: #2a2a2a;
-  --muster-raise: #0a0a0a;
-  --muster-hover: #141414;
   /* The sidebar's current page, and the top-level list's rows: a step above hover, and a step under the text. */
   --muster-current: #1f1f1f;
   --muster-soft: #a1a1a1;
-  --muster-thumb: #2a2a2a;
-  --muster-thumb-hover: #3a3a3a;
-  --muster-ring: #9a9a9a;
-  --muster-radius: 6px;
   --muster-scrollbar: 6px;
   --muster-focus: 2px;
   --muster-enter: 320ms;
+  --muster-blink: 1s;
 
   --color-fd-background: var(--muster-bg);
   --color-fd-foreground: var(--muster-fg);
-  --color-fd-muted: var(--muster-raise);
+  --color-fd-muted: var(--muster-panel);
   --color-fd-muted-foreground: var(--muster-dim);
-  --color-fd-popover: var(--muster-raise);
+  --color-fd-popover: var(--muster-panel);
   --color-fd-popover-foreground: var(--muster-fg);
-  --color-fd-card: var(--muster-raise);
+  --color-fd-card: var(--muster-panel);
   --color-fd-card-foreground: var(--muster-fg);
   --color-fd-border: var(--muster-line);
   --color-fd-primary: var(--muster-fg);
   --color-fd-primary-foreground: var(--muster-bg);
-  --color-fd-secondary: var(--muster-raise);
+  --color-fd-secondary: var(--muster-panel);
   --color-fd-secondary-foreground: var(--muster-fg);
   --color-fd-accent: var(--muster-hover);
   --color-fd-accent-foreground: var(--muster-fg);
@@ -113,7 +107,7 @@ h4 {
   text-decoration-color: var(--muster-thumb-hover);
   text-decoration-thickness: 1px;
   text-underline-offset: 0.25em;
-  transition: text-decoration-color 120ms var(--ease-muster-out);
+  transition: text-decoration-color var(--muster-duration-fast) var(--ease-muster-out);
 }
 
 .prose :where(a):not(:where(.not-prose *)):hover {
@@ -208,7 +202,7 @@ h4 {
   margin-left: 1px;
   vertical-align: text-bottom;
   background: var(--muster-fg);
-  animation: story-blink 1s steps(1) infinite;
+  animation: story-blink var(--muster-blink) steps(1) infinite;
 }
 
 .story-in {

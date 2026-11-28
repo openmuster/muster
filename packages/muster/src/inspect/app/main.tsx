@@ -7,6 +7,7 @@ import type { By, Message } from '../../model.ts'
 import type { JoinRecord } from '../../serve/joins.ts'
 import { initial, openCount, reduce, TABS, tasksFor, type Tab } from './store.ts'
 import { MARK_PATH } from '../mark.ts'
+import { useKeys, type Binding } from './keys.ts'
 import { notices, permission, show, type Permission } from './notify.ts'
 import { ICON, ICON_SMALL, STYLE } from './style.ts'
 
@@ -55,8 +56,10 @@ const ago = (at: string) => {
   const s = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 1000))
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86_400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86_400)}d`
 }
-/** The whole date, for the tooltip on a time said as "3m". */
+/** The whole date: in the thread pane, and in the tooltip on a time said as "3m". */
 const when = (at: string) => new Date(at).toLocaleString()
+/** A time in a log: the clock today, the whole date before. */
+const clock = (at: string) => (new Date(at).toDateString() === new Date().toDateString() ? new Date(at).toLocaleTimeString() : when(at))
 const left = (until: string) => {
   const s = Math.max(0, Math.round((Date.parse(until) - Date.now()) / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`
@@ -80,9 +83,13 @@ function Link(props: { href: string; go: (href: string) => void; on?: boolean; c
   )
 }
 
-/** What makes a row something to open: a click, or Enter once the keyboard has reached it. */
-const opens = (open: () => void) => ({
+/**
+ * What makes a row something to open: a click, or Enter once the keyboard has reached it (by Tab, or by
+ * J and K). `key` names the row, so the keyboard can come back to it when its thread is closed.
+ */
+const opens = (key: string, open: () => void) => ({
   tabIndex: 0,
+  'data-row': key,
   onClick: open,
   onKeyDown: (event: KeyboardEvent) => {
     if (event.key === 'Enter' && event.target === event.currentTarget) open()
@@ -128,12 +135,6 @@ function App() {
     setRoute(viewOf(window.location))
     setMenu(false)
   }
-  useEffect(() => {
-    if (!menu) return
-    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && setMenu(false)
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [menu])
   useEffect(() => {
     const onPop = () => setRoute(viewOf(window.location))
     window.addEventListener('popstate', onPop)
@@ -210,6 +211,67 @@ function App() {
 
   const here = (extra: string) => `${window.location.pathname}${extra}`
   const openThread = (id: number) => go(here(`?${new URLSearchParams({ ...(view.kind === 'tasks' ? { state: view.tab } : {}), thread: String(id) })}`))
+  // The row a thread was opened from, by its `data-row`: Escape closes the thread and comes back to it.
+  const from = useRef<string | null>(null)
+  const back = useRef(false)
+  const openRow = (key: string, id: number) => () => {
+    from.current = key
+    openThread(id)
+  }
+  const closeHref = here(view.kind === 'tasks' ? `?state=${view.tab}` : '')
+  useEffect(() => {
+    if (thread !== null || !back.current) return
+    back.current = false
+    if (from.current) document.querySelector<HTMLElement>(`[data-row="${CSS.escape(from.current)}"]`)?.focus()
+  }, [thread])
+
+  // The list of every key, over the page while it is open. What had the focus gets it back.
+  const [keys, setKeys] = useState(false)
+  const before = useRef<HTMLElement | null>(null)
+  // The list takes the focus once, as it opens, so Enter presses nothing under it and Tab stays in it.
+  const keysBox = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (keys) keysBox.current?.focus()
+  }, [keys])
+  const showKeys = (show: boolean) => {
+    if (show) before.current = document.activeElement as HTMLElement | null
+    else before.current?.focus()
+    setKeys(show)
+  }
+  /** J and K move down and up the rows that open, in the views that are lists to work through. */
+  const move = (by: 1 | -1) => () => {
+    if (keys || (view.kind !== 'tasks' && view.kind !== 'activity')) return false
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('main .rows [data-row]'))
+    if (rows.length === 0) return false
+    const at = rows.indexOf(document.activeElement as HTMLElement)
+    const on = at >= 0 ? at : rows.findIndex((row) => row.classList.contains('on'))
+    rows[on < 0 ? (by > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, on + by))]!.focus()
+    return true
+  }
+  const bindings: Binding[] = [
+    { keys: ['j', 'ArrowDown'], shown: 'j ↓', does: 'next task or event', run: move(1) },
+    { keys: ['k', 'ArrowUp'], shown: 'k ↑', does: 'previous task or event', run: move(-1) },
+    { keys: [], shown: 'enter', does: 'open its thread' },
+    {
+      keys: ['Escape'],
+      shown: 'esc',
+      does: 'close this list, the menu, or the thread, back on its row',
+      run: () => {
+        if (keys) showKeys(false)
+        else if (menu) setMenu(false)
+        else if (thread !== null) {
+          back.current = true
+          go(closeHref)
+        } else return false
+        return true
+      },
+    },
+    { keys: ['?'], shown: '?', does: 'show every key', run: () => (showKeys(!keys), true) },
+  ]
+  useKeys(bindings)
+
+  // The task the open thread is, if it is one: the pane says who holds it.
+  const task = state.open ? state.tasks.find((each) => each.id === state.open!.message.id) : undefined
   const title = view.kind === 'tasks' ? 'tasks' : view.kind === 'activity' ? 'activity' : view.kind === 'joins' ? 'requests to join' : `#${view.path}`
 
   return (
@@ -270,12 +332,12 @@ function App() {
           <b>{title}</b>
           {view.kind === 'tasks' && <span>oldest first</span>}
           <em className={state.connected ? 'live' : 'down'}>{state.connected ? 'live' : 'reconnecting'}</em>
+          {state.error && (
+            <p className="error banner" role="alert" onClick={() => dispatch({ type: 'error', error: null })}>
+              {state.error}
+            </p>
+          )}
         </header>
-        {state.error && (
-          <p className="error" onClick={() => dispatch({ type: 'error', error: null })}>
-            {state.error}
-          </p>
-        )}
         {view.kind === 'tasks' && (
           <>
             <div className="tabs">
@@ -287,7 +349,7 @@ function App() {
             </div>
             <div className="rows">
               {tasksFor(state, view.tab).map((task) => (
-                <div key={task.id} className={`row ${task.state}${thread === task.id ? ' on' : ''}`} {...opens(() => openThread(task.id))}>
+                <div key={task.id} className={`row ${task.state}${thread === task.id ? ' on' : ''}`} {...opens(`task-${task.id}`, openRow(`task-${task.id}`, task.id))}>
                   <span className="state">{task.state}</span>
                   <span className="id">#{task.id}</span>
                   <span className="text">{task.text.split('\n')[0]}</span>
@@ -309,7 +371,7 @@ function App() {
         {view.kind === 'channel' && (
           <div className="rows">
             {(state.threads[view.path] ?? []).map((item) => (
-              <div key={item.message.id} className={thread === item.message.id ? 'thread on' : 'thread'} {...opens(() => openThread(item.message.id))}>
+              <div key={item.message.id} className={thread === item.message.id ? 'thread on' : 'thread'} {...opens(`thread-${item.message.id}`, openRow(`thread-${item.message.id}`, item.message.id))}>
                 <div className="by" title={when(item.message.at)}>#{item.message.id} {who(item.message.by)} · {ago(item.message.at)} {item.task && <code>{item.task.state}</code>}</div>
                 <div className="text">{item.message.text}</div>
                 {item.replies > 0 && <div className="meta">{item.replies} {item.replies === 1 ? 'reply' : 'replies'}</div>}
@@ -324,12 +386,12 @@ function App() {
         {view.kind === 'activity' && (
           <div className="rows">
             {state.activity.map((event) => (
-              <div key={event.seq} className={event.thread && thread === event.thread ? 'row event on' : 'row event'} {...(event.thread ? opens(() => openThread(event.thread!)) : {})}>
+              <div key={event.seq} className={event.thread && thread === event.thread ? 'row event on' : 'row event'} {...(event.thread ? opens(`event-${event.seq}`, openRow(`event-${event.seq}`, event.thread)) : {})}>
                 <span className="id">{event.seq}</span>
                 <span className="state">{event.type}</span>
                 <span className="text">{String((event.data as { text?: string; result?: string; reason?: string }).text ?? (event.data as { result?: string }).result ?? (event.data as { reason?: string }).reason ?? '').split('\n')[0]}</span>
                 <span className="grow" />
-                <span className="meta" title={when(event.at)}>{who(event.by)} · {ago(event.at)}</span>
+                <span className="meta">{who(event.by)} · {clock(event.at)}</span>
               </div>
             ))}
             {state.connected && state.activity.length === 0 && <p className="empty">nothing has happened on this board yet</p>}
@@ -350,18 +412,21 @@ function App() {
       </main>
       {state.open && (
         <section className="pane">
+          {/* What a row's tooltips say is here, whole: who holds the task, until when. */}
           <header>
             <b>#{state.open.message.id}</b>
             <span>#{state.open.message.channel}</span>
-            <Link href={here(view.kind === 'tasks' ? `?state=${view.tab}` : '')} go={go} className="icon" label="close"><X size={ICON} /></Link>
+            <Link href={closeHref} go={go} className="icon" label="close"><X size={ICON} /></Link>
           </header>
           <div className="messages">
             {[state.open.message, ...state.open.replies].map((message) => (
               <article key={message.id}>
-                <div className="by" title={when(message.at)}>{who(message.by)} · {ago(message.at)}</div>
+                <div className="by">{who(message.by)} · {when(message.at)}</div>
+                {/* A task's line is there from the first paint, so a claim arriving fills it rather than pushing the text. */}
+                {message.id === task?.id && <div className="by">{task.claim ? `held by ${who(task.claim.by)} until ${when(task.claim.until)}` : 'not held'}</div>}
                 <div className="text">{message.deleted ? '(deleted)' : message.text}</div>
                 {Object.keys(message.labels).length > 0 && (
-                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key} title={`${key}=${value}`}>{key}={value}</code>)}</div>
+                  <div className="labels"><Tag size={ICON_SMALL} /> {Object.entries(message.labels).map(([key, value]) => <code key={key}>{key}={value}</code>)}</div>
                 )}
                 {message.attachments.length > 0 && <div className="labels"><Paperclip size={ICON_SMALL} /> {message.attachments.map((file) => file.name).join(' ')}</div>}
               </article>
@@ -372,6 +437,25 @@ function App() {
           </div>
           <Composer placeholder="reply…" button="reply" onSend={(text) => write(`${Date.now()}`, { thread: state.open!.message.id, channel: state.open!.message.channel, text }, () => call('reply', [{ to: state.open!.message.id, text }], me))} />
         </section>
+      )}
+      {keys && (
+        <>
+          <div className="veil" onClick={() => showKeys(false)} />
+          <section className="keys" role="dialog" aria-label="keys" tabIndex={-1} ref={keysBox}>
+            <header>
+              <b>keys</b>
+              <button className="icon" aria-label="close" onClick={() => showKeys(false)}><X size={ICON} /></button>
+            </header>
+            <dl>
+              {bindings.map((binding) => (
+                <div key={binding.shown}>
+                  <dt><kbd>{binding.shown}</kbd></dt>
+                  <dd>{binding.does}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </>
       )}
       <style>{STYLE}</style>
     </div>

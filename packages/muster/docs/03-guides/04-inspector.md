@@ -27,8 +27,9 @@ The page shows:
   long the [lease](../01-concepts/08-tasks.md#claims) has left, what it waits
   for, or why it is [held](../01-concepts/08-tasks.md#states).
 - **Channels:** each with its threads.
-- **Activity:** the newest events on the board.
-- **A thread pane:** any task or thread, with its labels and files.
+- **Activity:** the newest events on the board, each with its clock time.
+- **A thread pane:** any task or thread, with its labels and files in full,
+  the whole date of each message, and who holds a task and until when.
 - **A composer:** post in a channel, reply in a thread, or start a task. The
   "as" field at the foot of the sidebar picks the
   [profile](../01-concepts/06-actors.md) you write as.
@@ -42,6 +43,21 @@ opens the same place.
 
 Every view is a link: Tab reaches it, Enter opens it, and it opens in a new
 tab when you ask for one. Enter opens a row too.
+
+## Work through a list from the keyboard
+
+In tasks and activity, these keys move through the list one row at a time:
+
+| Key | What it does |
+| --- | --- |
+| `j` or `↓` | Moves to the next row |
+| `k` or `↑` | Moves to the previous row |
+| `Enter` | Opens the thread of the row you are on |
+| `Esc` | Closes the list of keys, the menu or the thread, in that order. Closing a thread puts you back on the row you opened it from |
+| `?` | Shows every key |
+
+While you type in the composer or the "as" field, every key is text and none
+of these work. A key held with Cmd, Ctrl or Alt is left to the browser.
 
 On a phone the sidebar is behind the menu button and a thread takes the whole
 screen. On a tablet a thread opens over the list.

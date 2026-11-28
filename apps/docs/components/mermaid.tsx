@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useState } from 'react'
+import { DARK } from '../lib/tokens'
 
 /** A diagram written as text in the markdown. Drawn in the browser, in the site's own colours. */
 export function Mermaid({ chart }: { chart: string }) {
@@ -14,7 +15,7 @@ export function Mermaid({ chart }: { chart: string }) {
         securityLevel: 'strict',
         fontFamily: 'inherit',
         theme: 'base',
-        themeVariables: { background: '#000000', primaryColor: '#0a0a0a', primaryTextColor: '#ededed', primaryBorderColor: '#3a3a3a', lineColor: '#8a8a8a', secondaryColor: '#0a0a0a', tertiaryColor: '#0a0a0a', noteBkgColor: '#111111', noteTextColor: '#ededed', actorBkg: '#0a0a0a', actorBorder: '#3a3a3a', actorTextColor: '#ededed', signalColor: '#8a8a8a', signalTextColor: '#ededed', labelBoxBkgColor: '#0a0a0a', labelTextColor: '#ededed', loopTextColor: '#8a8a8a' },
+        themeVariables: { background: DARK.bg, primaryColor: DARK.panel, primaryTextColor: DARK.fg, primaryBorderColor: DARK['thumb-hover'], lineColor: DARK.dim, secondaryColor: DARK.panel, tertiaryColor: DARK.panel, noteBkgColor: '#111111', noteTextColor: DARK.fg, actorBkg: DARK.panel, actorBorder: DARK['thumb-hover'], actorTextColor: DARK.fg, signalColor: DARK.dim, signalTextColor: DARK.fg, labelBoxBkgColor: DARK.panel, labelTextColor: DARK.fg, loopTextColor: DARK.dim },
       })
       try {
         const drawn = await mermaid.render(`m${id}`, chart)
