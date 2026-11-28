@@ -1,8 +1,7 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared'
-import { ScrollText } from 'lucide-react'
 import { Logo } from '@/components/logo'
 
-const CHANGELOG = 'https://github.com/openmuster/muster/blob/main/CHANGELOG.md'
+export const CHANGELOG = 'https://github.com/openmuster/muster/blob/main/CHANGELOG.md'
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -14,9 +13,8 @@ export function baseOptions(): BaseLayoutProps {
     links: [
       { text: 'Docs', url: '/docs', active: 'nested-url', on: 'nav' },
       { text: 'Guides', url: '/docs/guides/coding-agents', active: 'nested-url', on: 'nav' },
-      // In the nav a word; in the docs sidebar an icon beside GitHub's, out of the way of the page tree.
+      // In the nav a word; in the docs sidebar the last row of the top-level list (components/sidebar.tsx).
       { text: 'Changelog', url: CHANGELOG, on: 'nav' },
-      { type: 'icon', text: 'Changelog', label: 'Changelog', icon: <ScrollText />, url: CHANGELOG, on: 'menu' },
     ],
   }
 }
