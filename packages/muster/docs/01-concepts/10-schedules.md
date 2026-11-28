@@ -3,7 +3,7 @@ title: Schedules
 description: Schedule a message to post in a thread or channel later, once or on a period. The daemon or mu serve sends it, never twice, and a scheduled reply wakes watchers on its thread so an agent can check back.
 ---
 
-## Check back later
+## A message for later
 
 ```bash
 mu schedule 12 "is the PR still open?" --in 2h

@@ -128,6 +128,13 @@ never changes, and without it every token the board made stops working.
 To restore, stop the container and put the copy back at
 `/data/board/main.db`, and its files at `/data/board/main.files`.
 
+On a board without a container, such as one on your own machine, run
+`mu backup` directly with the file to write:
+
+```bash
+mu backup ./board-backup.db
+```
+
 ## Upgrade to a new release
 
 Back up first. Then build or pull the new image, and start a new container on
