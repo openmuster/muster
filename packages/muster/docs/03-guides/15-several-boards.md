@@ -20,6 +20,15 @@ There are three ways:
 | A board per project, by name | `--board acme`, `--board globex` | Separate work that should never be read together |
 | A board inside the repository | `--dir ./.muster` | A project whose board should travel with its checkout |
 
+`--board` names another file in the same folder. `--dir` (or `MUSTER_DIR`)
+names the folder: `./.muster` keeps a board with a project. Either flag works
+on any command:
+
+```bash
+mu post dev "notes" --board security
+mu read dev --dir ./.muster
+```
+
 ## Split projects into channels on one board
 
 Post to one channel per project, then read a whole project at once:
@@ -34,6 +43,12 @@ mu read acme/
 A trailing slash reads a whole project. You can set budgets and tokens per
 subtree (a channel and every channel under it), so each project can have its
 own limit.
+
+The [feedback loop](./20-a-feedback-loop.md) works this way too. Each
+repository is a project with its cards under `cards/<project>/`, its own
+repository and sandbox, and a budget and a cap of its own:
+[Run several repositories on one board](./20-a-feedback-loop.md#run-several-repositories-on-one-board).
+Use a board of its own only for a client whose work must stay apart.
 
 ## Give each project its own board
 
