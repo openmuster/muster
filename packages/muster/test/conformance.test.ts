@@ -216,6 +216,18 @@ export const Sandbox = { async create(template, options) {
     expect(run.code).toBe(1)
   })
 
+  it('e2b: --template names the template for this run, in place of MUSTER_E2B_TEMPLATE, and only for e2b', async () => {
+    const dir = tempDir()
+    const sdk = fakeE2b(dir)
+    await cli(dir, ['run', '12', '--runner', 'e2b', '--agent', 'claude', '--template', 'acme-go', '--json'], { env: { ...marked, ...sdk.env, MUSTER_E2B_TEMPLATE: '' } as never })
+    expect((await sdk.read())[0]).toMatchObject({ template: 'acme-go' })
+    // Any other runner makes no sandbox from a template you name, and neither does this machine: refused, not ignored.
+    const vercel = await cli(dir, ['run', '12', '--runner', 'vercel', '--agent', 'claude', '--template', 'acme-go', '--json'], { env: marked })
+    expect(errorOf(vercel.stderr).reason).toBe('unknown_flag')
+    const local = await cli(dir, ['run', '12', '--agent', 'claude', '--template', 'acme-go', '--json'], { env: marked })
+    expect(errorOf(local.stderr).reason).toBe('unknown_flag')
+  })
+
   it('e2b: says what it needs before anything is started', async () => {
     const dir = tempDir()
     const sdk = fakeE2b(dir)
