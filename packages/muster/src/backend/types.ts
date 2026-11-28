@@ -28,6 +28,8 @@ export type Backend = {
   registry?: () => Registry
   /** The key this board's tokens are signed with, where it keeps one: the one `mu serve` and `team.fetch` check tokens with. */
   signingKey?: () => Buffer
+  /** Keys the board signed with before, whose tokens are still good: see `mu token rotate-key`. */
+  retiredKeys?: () => Buffer[]
   /** The board's tokens: making one, listing them, stopping one. For the owner, or a token as wide as the owner's. */
   tokens: {
     create(request: MintRequest): Promise<{ token: string; record: TokenRecord }>

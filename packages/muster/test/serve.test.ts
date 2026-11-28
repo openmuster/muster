@@ -309,6 +309,33 @@ describe('serve', () => {
     expect(boardKey('/boards/other.db', dir).equals(first)).toBe(false)
     const token = mint(first, { sub: 'local:user:ada', profile: null, exp: 2_000_000_000 })
     expect(verify(boardKey('/boards/main.db', dir), token, 1_000_000_000_000).sub).toBe('local:user:ada')
+    // Checked against every key the board still holds, and refused by one that isn't among them.
+    expect(verify([randomBytes(32), first], token, 1_000_000_000_000).sub).toBe('local:user:ada')
+    expect(() => verify([randomBytes(32)], token, 1_000_000_000_000)).toThrow("That isn't a token for this board.")
+  })
+
+  it('a new signing key signs from now on; the old one keeps its tokens good until it is dropped, which stops them all', async () => {
+    const dir = tempDir()
+    await cli(dir, ['post', 'general', 'before the new key'])
+    const start = async () => {
+      const serving = cliStart(dir, ['serve', '--port', '0', '--print-token'])
+      for (let i = 0; i < 100 && !serving.output().includes('MUSTER_TOKEN='); i++) await new Promise((resolve) => setTimeout(resolve, 50))
+      return { serving, url: /MUSTER_URL=(\S+)/.exec(serving.output())![1]! }
+    }
+    const old = (await cli(dir, ['token', 'create', '--all'])).stdout.trim()
+    const rotated = await cli(dir, ['token', 'rotate-key', '--json'])
+    expect(JSON.parse(rotated.stdout)).toMatchObject({ retired: 1 })
+    const fresh = (await cli(dir, ['token', 'create', '--all'])).stdout.trim()
+    const reads = async (url: string, token: string) => (await cli(dir, ['read', 'general', '--json'], { env: { MUSTER_URL: url, MUSTER_TOKEN: token } })).code
+    const first = await start()
+    expect([await reads(first.url, old), await reads(first.url, fresh)]).toEqual([0, 0])
+    first.serving.child.kill('SIGTERM')
+    await first.serving.done
+    expect(JSON.parse((await cli(dir, ['token', 'drop-old-keys', '--json'])).stdout)).toMatchObject({ dropped: 1 })
+    const second = await start()
+    expect([await reads(second.url, old), await reads(second.url, fresh)]).toEqual([1, 0])
+    second.serving.child.kill('SIGTERM')
+    await second.serving.done
   })
 
   it('mu serve prints a URL and a token; another process uses the board with them, and a restart keeps the token good', async () => {

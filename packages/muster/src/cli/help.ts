@@ -123,6 +123,9 @@ serve
   token list | token revoke <id>
   token exchange [-]             a CI job's own OIDC token for a board token:
                                  on stdin with -, or in MUSTER_OIDC_TOKEN
+  token rotate-key               sign new tokens with a new key; tokens the
+                                 old one signed still work
+  token drop-old-keys            stop every token an old key signed
   join <board url> --as <name>   ask a served board for a token, and wait
        [--note <text>] [--timeout 10m]
   join list | join deny <code>

@@ -41,7 +41,7 @@ import { KEEP_LOGS_MS, runLocal } from '../runner/local.ts'
 import { resolve as resolvePath } from 'node:path'
 import { http } from '../backend/http.ts'
 import { isLoopback, listen } from '../serve/server.ts'
-import { boardKey } from '../serve/token.ts'
+import { boardKey, dropRetiredKeys, retiredKeys, rotateKey } from '../serve/token.ts'
 import { loadOidc } from '../serve/oidc.ts'
 import { actorId, profileName, type Permission } from '../model.ts'
 import { fileURLToPath } from 'node:url'
@@ -977,7 +977,18 @@ const commands: Record<string, Command> = {
         print(run, { token: made.token, id: made.record.id, trust: made.trust, claims: { profile: made.record.profile, can: made.record.can, exp: made.record.exp } }, () => made.token)
         return
       }
-      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, or mu token exchange.')
+      if (verb === 'rotate-key' || verb === 'drop-old-keys') {
+        // The keys are files on this machine, beside the board: only its owner, here, changes them.
+        const me = await run.team.whoami()
+        if (me.mode !== 'file') throw new Failure('forbidden', `mu token ${verb} changes the keys of a board on this machine.`)
+        if (verb === 'rotate-key') {
+          const done = rotateKey(me.where, new Date(run.now()))
+          return print(run, done, () => `rotated  new tokens are signed with a new key; ${done.retired} old ${done.retired === 1 ? 'key keeps its' : 'keys keep their'} tokens good. Restart mu serve to use it.\nnext: mu token drop-old-keys, to stop every token an old key signed`)
+        }
+        const done = dropRetiredKeys(me.where)
+        return print(run, done, () => `dropped  ${done.dropped} old ${done.dropped === 1 ? 'key' : 'keys'}: every token ${done.dropped === 1 ? 'it' : 'they'} signed stops once mu serve restarts`)
+      }
+      if (verb !== 'create') throw misuse('unknown_command', 'Use: mu token create [--as <profile>] --can <channel>=<permissions>... | --all [--ttl 30d], mu token list, mu token revoke <id>, mu token exchange, mu token rotate-key, or mu token drop-old-keys.')
       const can: Record<string, string[]> = {}
       for (const [pattern, permissions] of Object.entries(pairs(list(parsed.flags, 'can'), 'can'))) can[pattern] = permissions.split(',').filter(Boolean)
       // A token held to no channel reaches every one, as its owner does: that is asked for by name, never had by leaving --can out.
@@ -1071,7 +1082,7 @@ const commands: Record<string, Command> = {
       // The workloads the owner trusts to sign in with their platform's token. A file that is wrong stops the board here.
       const oidc = loadOidc()
       try {
-        serving = await listen({ backend: run.team.backend, key, port, host, hosts: allowed, mcp, allowJoins, oidc, log: (line) => run.io.err(line) })
+        serving = await listen({ backend: run.team.backend, key, retired: retiredKeys(me.where), port, host, hosts: allowed, mcp, allowJoins, oidc, log: (line) => run.io.err(line) })
         self = serving.url
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') throw new Failure('port_in_use', `Port ${port} is taken.`, { hint: 'Pass --port, or stop what holds it.' })

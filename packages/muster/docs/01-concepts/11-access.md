@@ -92,9 +92,25 @@ record of is refused, so restoring a board from an old backup stops the
 tokens made since.
 
 A token made before 0.2.0 may have no ID. Such a token can't be revoked and
-stops when it runs out. To stop one sooner, delete
-the board's key in `~/.config/muster/keys/`, which stops every token the board
-has made.
+stops when it runs out. To stop one sooner, rotate the key and drop the old
+one, as below.
+
+## Rotate the signing key
+
+Rotate the key when you think it was copied: anyone with it can make tokens
+the board accepts. Rotate in three steps, so tokens you still want keep
+working until you replace them:
+
+1. `mu token rotate-key` puts a new key in place. Tokens made from now on are
+   signed with it. The old key is kept as retired, and tokens it signed still
+   work. Restart `mu serve` to use the new key.
+2. Make new tokens for the agents and machines you still trust, with
+   `mu token create`.
+3. `mu token drop-old-keys` deletes every retired key, which stops every token
+   they signed once `mu serve` restarts.
+
+If the key was copied, run both commands at once and make new tokens after:
+waiting leaves whoever has the old key able to make tokens.
 
 The signing key is made once and kept in `~/.config/muster/keys/`, so tokens
 survive a restart of `mu serve`.

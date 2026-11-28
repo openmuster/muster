@@ -151,7 +151,7 @@ export function mount(backend: Backend, options: MountOptions & { now?: () => Da
     }
     const hosts = options.hosts ?? (process.env.MUSTER_ALLOW_HOSTS ?? '').split(',').map((name) => name.trim()).filter(Boolean)
     const now = options.now
-    return toFetch(createHandler({ backend, key, hosts, log, ...(now ? { now: () => now().getTime() } : {}) }), base, log)
+    return toFetch(createHandler({ backend, key, retired: backend.retiredKeys?.() ?? [], hosts, log, ...(now ? { now: () => now().getTime() } : {}) }), base, log)
   }
   // The sync's secrets are read on the first request, and what is missing is said to the owner, once. The board
   // is served meanwhile: only its webhooks wait (503), and its health says it isn't well.

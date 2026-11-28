@@ -56,6 +56,8 @@ async function bodyOf(req: IncomingMessage, max = BODY_MAX): Promise<unknown> {
 export type ServeOptions = {
   backend: Backend
   key: Buffer
+  /** Keys the board signed with before `key`, whose tokens are still good. */
+  retired?: readonly Buffer[]
   now?: () => number
   /** The board's list of tokens it made. Default: the backend's own. */
   tokens?: Registry
@@ -90,7 +92,7 @@ export function createHandler(options: ServeOptions) {
   const tokens = options.tokens ?? options.backend.registry?.() ?? memoryRegistry()
   const claimsOf = (req: IncomingMessage): Claims => {
     const header = req.headers.authorization
-    const claims = verify(options.key, header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())
+    const claims = verify([options.key, ...(options.retired ?? [])], header?.startsWith('Bearer ') ? header.slice(7) : undefined, now())
     // A token the board's owner stopped is refused like one that ran out.
     if (claims.jti && tokens.revoked(claims.jti)) throw new Failure('unauthorized', 'That token was revoked.', { hint: 'Get a new one from whoever runs the board.' })
     return claims
@@ -160,7 +162,7 @@ export function createHandler(options: ServeOptions) {
       if (bearer?.startsWith('Bearer ') && !(SANDBOX.has(route) && req.method === 'POST') && !(route === 'whoami' && req.method === 'GET')) {
         let held: Claims | null = null
         try {
-          held = verify(options.key, bearer.slice(7), now())
+          held = verify([options.key, ...(options.retired ?? [])], bearer.slice(7), now())
         } catch {
           // Not a token of this board's: the route decides what that means.
         }
