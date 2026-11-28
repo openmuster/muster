@@ -26,7 +26,10 @@
 // Nothing here reads what a message means. The triage agent decides what the change is; people decide who
 // is trusted and what is approved; the board says who wrote what.
 import { spawn, spawnSync } from 'node:child_process'
+import { readFileSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { board, env, fenced, github, linear, LINEAR_SCOPES, loadWorkflows, notion, slack, workflowResult, workflowsPath, type Board, type By, type Message, type Watch } from '@openmuster/muster'
+import { readProjects, type Project } from './projects.ts'
 
 /** The sync keys below whose authors are named by a login someone else could take later: `gh`, GitHub's. */
 const LOGIN_KEYED = new Set(['gh'])
@@ -37,23 +40,71 @@ const OURS = new Set(['intake', 'triage', 'shots', 'workflows', 'loop', 'cards',
 /** An actor as the board names it: `slack:user:U123`, `local:user:ada+pino-app`. */
 const actorId = (by: By) => (by.profile ? `${by.principal}+${by.profile}` : by.principal)
 
+/** loop-projects.json as last read, by where it is and when it last changed. */
+let read: { key: string; projects: Record<string, Project> } | undefined
+
+/**
+ * The projects in loop-projects.json, beside workflows.json, read again when it changes. None without the file:
+ * every card is then right under `cards/`, as before projects. A file that is wrong throws, rather than run a
+ * project's cards on the template's repository.
+ */
+function projects(): Record<string, Project> {
+  const path = join(dirname(workflowsPath()), 'loop-projects.json')
+  let key: string
+  try {
+    const stat = statSync(path)
+    key = `${path}:${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return {}
+  }
+  if (read?.key !== key) read = { key, projects: readProjects(JSON.parse(readFileSync(path, 'utf8'))) }
+  return read.projects
+}
+
+/** The project a channel is under (`cards/acme/linear` is acme's), or null for a card right under `cards/`. */
+function projectOf(channel: string): string | null {
+  const name = /^cards\/([a-z0-9][a-z0-9_-]*)\//.exec(channel)?.[1]
+  return name !== undefined && Object.hasOwn(projects(), name) ? name : null
+}
+
+/** A workflow's name for a project's cards: `triage.acme`. Right under `cards/`, the template's own. */
+const flow = (name: string, project: string | null) => (project === null ? name : `${name}.${project}`)
+
 /**
  * Whether an actor may start work without an approval, and approve a card: the board's owner, as yourself
- * with no profile, and the actor IDs in LOOP_TRUSTED (comma separated), read each time. A Slack, Linear or
- * GitHub author is `<sync key>:user:<their ID>`; an app posting with a token you made is `<your principal>+<its
- * profile>`, trusted only if everyone who can use that app is. An author sync couldn't name is never trusted.
+ * with no profile, and the actor IDs in LOOP_TRUSTED (comma separated), read each time, or on a project's cards
+ * its own `trusted` list when it has one. A Slack, Linear or GitHub author is `<sync key>:user:<their ID>`; an
+ * app posting with a token you made is `<your principal>+<its profile>`, trusted only if everyone who can use
+ * that app is. An author sync couldn't name is never trusted.
  */
-export function trusted(by: By, owner: string): boolean {
+export function trusted(by: By, owner: string, project: string | null): boolean {
   if (by.principal === owner && by.profile === null) return true
   if (/:user:unknown$/.test(by.principal) || !by.principal.includes(':')) return false
   // GitHub's sync names an author by login, which can be renamed and taken by someone else: never trusted by it.
   if (LOGIN_KEYED.has(by.principal.slice(0, by.principal.indexOf(':')))) return false
-  const list = (process.env.LOOP_TRUSTED ?? '').split(',').map((each) => each.trim()).filter(Boolean)
+  const own = project === null ? undefined : projects()[project]?.trusted
+  const list = own ?? (process.env.LOOP_TRUSTED ?? '').split(',').map((each) => each.trim()).filter(Boolean)
   return list.includes(actorId(by))
 }
 
-/** A card's channel: one source's, right under `cards/`. A run's channel is a level below, and holds no cards. */
-const isCardChannel = (channel: string) => /^cards\/[a-z0-9][a-z0-9_.-]*$/.test(channel)
+/**
+ * A card's channel: one source's, right under `cards/`, or right under a project's `cards/<project>/`. A run's
+ * channel is a level below a card's, and holds no cards.
+ */
+function isCardChannel(channel: string): boolean {
+  const project = projectOf(channel)
+  if (project !== null) return new RegExp(`^cards/${project}/[a-z0-9][a-z0-9_.-]*$`).test(channel)
+  // `cards/acme` is a project's subtree, never a source's channel.
+  const segment = /^cards\/([a-z0-9][a-z0-9_.-]*)$/.exec(channel)?.[1]
+  return segment !== undefined && !Object.hasOwn(projects(), segment)
+}
+
+/** A run's channel as the daemon names it, under its card's (`cards/acme/linear/card.acme-41`), or null. */
+function runOf(channel: string): { card: string; base: string; name: string; request: number } | null {
+  const run = /^(.+)\/(triage|planning|card)(?:\.([a-z0-9][a-z0-9_-]*))?-(\d+)$/.exec(channel)
+  if (!run || !isCardChannel(run[1]!) || (run[3] ?? null) !== projectOf(run[1]!)) return null
+  return { card: run[1]!, base: run[2]!, name: flow(run[2]!, run[3] ?? null), request: Number(run[4]) }
+}
 
 /** Whether something was written by this module itself, or by the daemon for a run. */
 const ours = (by: By, owner: string) => by.principal === owner && by.profile !== null && OURS.has(by.profile)
@@ -115,9 +166,9 @@ async function requestsOn(team: Board, card: number, owner: string, name: string
  * the triage quotes with `{on.text}`, so it can say which are related, or the same request.
  */
 async function askTriage(team: Board, card: number, owner: string, since: number): Promise<void> {
-  if ((await requestsOn(team, card, owner, 'triage')).some((request) => request.seq > since)) return
-  const list = await team.as('cards').reply({ to: card, text: await triageContext(team, card, owner), noSync: true, idempotencyKey: `loop-cards-${card}-${since}` })
-  await team.as('intake').workflowRequest({ name: 'triage', on: list.id })
+  const name = flow('triage', projectOf((await team.readThread({ id: card })).message.channel))
+  if ((await requestsOn(team, card, owner, name)).some((request) => request.seq > since)) return
+  await request(team, card, owner, name, 'its triage', `${since}`, async () => (await team.as('cards').reply({ to: card, text: await triageContext(team, card, owner), noSync: true, idempotencyKey: `loop-cards-${card}-${since}` })).id)
 }
 
 /** How much a triage is shown besides the report: a run quotes a message up to 2,000 characters. */
@@ -134,7 +185,7 @@ async function triageContext(team: Board, card: number, owner: string): Promise<
   const changed = message.editedAt === null ? 0 : ((await team.events({ after: card, filter: { re: card, types: ['message.edited'] }, limit: 1000 })).events.filter((event) => (event.data as { id?: unknown }).id === card).at(-1)?.seq ?? 0)
   const fresh = plan !== undefined && plan.id > changed
   // What the people who asked said after the planner's last answer: an answer it didn't get to see goes to the triage.
-  const since = fresh ? replies.filter((reply) => reply.id > plan.id && !reply.deleted && !ours(reply.by, owner) && trusted(reply.by, owner)).map((reply) => `${actorId(reply.by)}: ${reply.text.slice(0, 300)}`).join('\n').slice(0, 600) : ''
+  const since = fresh ? replies.filter((reply) => reply.id > plan.id && !reply.deleted && !ours(reply.by, owner) && trusted(reply.by, owner, projectOf(message.channel))).map((reply) => `${actorId(reply.by)}: ${reply.text.slice(0, 300)}`).join('\n').slice(0, 600) : ''
   const planned = fresh ? `The card as planned with the people who asked, in #${plan.id}:\n${plan.text.slice(0, 1_000)}\n\n${since ? `Said on the card since:\n${since}\n\n` : ''}` : ''
   const [heading, ...lines] = await otherCards(team, card, owner)
   let out = planned + heading!
@@ -146,17 +197,24 @@ async function triageContext(team: Board, card: number, owner: string): Promise<
 }
 
 /**
- * The card channels anyone can read where they come from (a public repository's issues): a triage of a card
- * from one is shown only cards from these, since what it writes is mirrored there and could repeat another
- * card's words. LOOP_PUBLIC (comma separated) replaces the list.
+ * Whether anyone can read a card channel where its cards come from (a public repository's issues): a triage of
+ * a card from one is shown only cards from these, since what it writes is mirrored there and could repeat another
+ * card's words. `cards/github` by default; LOOP_PUBLIC (comma separated) replaces the list. On a project's cards,
+ * its own sources by name (`public`), or the same sources LOOP_PUBLIC names.
  */
-const publicChannels = () => new Set((process.env.LOOP_PUBLIC ?? 'cards/github').split(',').map((each) => each.trim()).filter(Boolean))
+function isPublic(channel: string): boolean {
+  const project = projectOf(channel)
+  const open = (process.env.LOOP_PUBLIC ?? 'cards/github').split(',').map((each) => each.trim())
+  if (project === null) return open.includes(channel)
+  // A project's sources by name, or the ones LOOP_PUBLIC names under `cards/`: `cards/github` is `cards/acme/github`.
+  const sources = projects()[project]?.public ?? open.map((each) => each.replace(/^cards\//, ''))
+  return sources.some((source) => channel === `cards/${project}/${source}`)
+}
 
-/** The other cards, newest first, after a heading: `#id  stage  first line`. Canceled ones aren't. */
+/** The other cards of the same project, newest first, after a heading: `#id  stage  first line`. Canceled ones aren't. */
 async function otherCards(team: Board, card: number, owner: string): Promise<string[]> {
-  const open = publicChannels()
   const mine = (await team.readThread({ id: card })).message.channel
-  const channels = (await team.channels()).channels.map((each) => each.path).filter((path) => isCardChannel(path) && (!open.has(mine) || open.has(path)))
+  const channels = (await team.channels()).channels.map((each) => each.path).filter((path) => isCardChannel(path) && projectOf(path) === projectOf(mine) && (!isPublic(mine) || isPublic(path)))
   const found: { id: number; line: string }[] = []
   for (const channel of channels) {
     const { tasks } = await team.taskList({ channel, state: 'all', latest: true, limit: 1000 })
@@ -172,8 +230,9 @@ async function otherCards(team: Board, card: number, owner: string): Promise<str
 
 /** Asks for the card's planning run, unless one was asked for after `since`. */
 async function askPlan(team: Board, card: number, owner: string, since: number): Promise<void> {
-  if ((await requestsOn(team, card, owner, 'planning')).some((request) => request.seq > since)) return
-  await team.as('intake').workflowRequest({ name: 'planning', on: card })
+  const name = flow('planning', projectOf((await team.readThread({ id: card })).message.channel))
+  if ((await requestsOn(team, card, owner, name)).some((request) => request.seq > since)) return
+  await request(team, card, owner, name, 'its planning', `${since}`, async () => card)
 }
 
 /**
@@ -187,7 +246,8 @@ async function nextPlanRound(team: Board, cardId: number): Promise<boolean> {
   if (!isCardChannel(card.channel) || task?.state !== 'blocked' || task.hold?.kind !== 'planning') return false
   const run = await latestRun(team, card, owner, 'planning')
   if (!run?.ended || !run.plan) return false
-  const waiting = takenSince(replies, owner, run.request)
+  const project = projectOf(card.channel)
+  const waiting = takenSince(replies, owner, run.request, project)
   if (waiting.length === 0) return false
   const round = run.plan.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
@@ -195,7 +255,7 @@ async function nextPlanRound(team: Board, cardId: number): Promise<boolean> {
   await team.as('intake').reply({ to: run.plan.id, text: `Round ${round}: what was said on card #${card.id} since your last answer. Answer it, and give the card as it stands now.\n\n${quoted}`, idempotencyKey: `loop-ask-${run.plan.id}-${last}` })
   const now = (await team.readThread({ id: run.plan.id })).task
   if (now?.state === 'completed' || now?.state === 'failed') await asOwner(team).taskReopen({ id: run.plan.id, round: true }).catch(() => {})
-  startWorker(run, owner, 'planning')
+  startWorker(run, owner, flow('planning', project))
   await team.as('intake').reply({ to: card.id, text: `planning round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-plan-round-${card.id}-${last}` })
   return true
 }
@@ -208,10 +268,11 @@ async function linksIn(team: Board, result: string, card: number, owner: string)
   const lines = result.split('\n')
   const related: Message[] = []
   let duplicate: Message | null = null
+  const project = projectOf((await team.readThread({ id: card })).message.channel)
   const cardOf = async (id: number) => {
     if (id === card || !Number.isSafeInteger(id)) return null
     const read = await team.readThread({ id }).catch(() => null)
-    if (!read || read.message.re !== null || !isCardChannel(read.message.channel) || read.task?.owner.principal !== owner || read.task.owner.profile !== 'intake') return null
+    if (!read || read.message.re !== null || !isCardChannel(read.message.channel) || projectOf(read.message.channel) !== project || read.task?.owner.principal !== owner || read.task.owner.profile !== 'intake') return null
     return read.message
   }
   while (lines.length > 0) {
@@ -249,7 +310,15 @@ async function relateInLinear(team: Board, card: number, others: Message[]): Pro
  * per spec, then the card held as working, so a watcher tried again half way finishes what it began.
  */
 async function startWork(team: Board, card: number, spec: number, owner: string): Promise<void> {
-  if (!(await requestsOn(team, card, owner, 'card')).some((request) => request.on === spec)) await team.as('intake').workflowRequest({ name: 'card', on: spec })
+  const { message, task } = await team.readThread({ id: card })
+  const name = flow('card', projectOf(message.channel))
+  if (!(await requestsOn(team, card, owner, name)).some((request) => request.on === spec)) {
+    const waiting = await request(team, card, owner, name, 'the change', `${spec}`, async () => spec)
+    if (waiting !== null) {
+      if (task?.hold?.kind !== 'queued') await rehold(team, card, 'queued', `waiting: ${waiting}`)
+      return
+    }
+  }
   await rehold(team, card, 'working', 'the card workflow is making the change')
   await setStatus(team, card, 'working', spec)
 }
@@ -284,7 +353,7 @@ const sources = (): Record<string, Source> => {
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
 
 /** The holds a card's stage moves it out of. Not `working`, nor a hold a person or an agent put it in. */
-const MOVABLE = new Set(['backlog', 'planning', 'triage', 'approval', 'edited', 'declined', 'duplicate'])
+const MOVABLE = new Set(['backlog', 'planning', 'triage', 'approval', 'edited', 'declined', 'duplicate', 'queued'])
 const PARKED: Record<string, string> = {
   backlog: 'in the backlog: move it to ready to start it',
   planning: 'in planning: an agent shapes it with you, and it is built once it is moved to ready',
@@ -310,18 +379,19 @@ async function madeOf(team: Board, card: number): Promise<{ by: By; labels: Reco
 async function stageOf(team: Board, card: number, owner: string): Promise<Stage> {
   const made = await madeOf(team, card)
   if (made === null) return 'ready'
+  const project = projectOf((await team.readThread({ id: card })).message.channel)
   const source = made.key === null ? undefined : sources()[made.key]
   const bySync = (by: By) => made.key !== null && by.profile === null && (by.principal === made.key || by.principal.startsWith(`${made.key}:user:`))
   // Its first labels count: `madeOf` names no source unless sync itself wrote the card.
   let state = made.labels.state
-  let stage = trusted(made.by, owner) ? made.labels.stage : undefined
+  let stage = trusted(made.by, owner, project) ? made.labels.stage : undefined
   for (let after = card; ; ) {
     const page = await team.events({ after, filter: { re: card, types: ['labels.changed'] }, limit: 200 })
     for (const event of page.events) {
       const data = event.data as { id?: unknown; set?: Record<string, string>; unset?: string[] }
       if (data.id !== card) continue
       if (bySync(event.by) && ('state' in (data.set ?? {}) || data.unset?.includes('state'))) state = data.set?.state
-      if (trusted(event.by, owner) && ('stage' in (data.set ?? {}) || data.unset?.includes('stage'))) stage = data.set?.stage
+      if (trusted(event.by, owner, project) && ('stage' in (data.set ?? {}) || data.unset?.includes('stage'))) stage = data.set?.stage
     }
     if (page.events.length < 200 || page.cursor <= after) break
     after = page.cursor
@@ -355,7 +425,7 @@ async function reconcile(team: Board, card: number, since: number): Promise<void
     if (hold !== wanted && !MOVABLE.has(hold)) return
     if (hold !== wanted) await rehold(team, card, wanted, PARKED[wanted]!)
     // Planning starts once per card: moved back to it later, its planner goes on when someone replies.
-    if (wanted === 'planning' && (await requestsOn(team, card, owner, 'planning')).length === 0) await askPlan(team, card, owner, 0)
+    if (wanted === 'planning' && (await requestsOn(team, card, owner, flow('planning', projectOf(message.channel)))).length === 0) await askPlan(team, card, owner, 0)
     return
   }
   if (wanted !== 'ready' || !['backlog', 'planning', 'triage', 'declined', 'duplicate'].includes(hold)) return
@@ -503,12 +573,80 @@ async function finish(team: Board, card: number, since: number, review: { id: nu
   }
 }
 
-/** A line to you, by NOTIFY_CMD when the daemon has it (a command, given one line), and nothing else. */
-function notify(line: string): void {
+/**
+ * A line to you, by NOTIFY_CMD when the daemon has it (a command, given one line), and nothing else. A line
+ * about a project's card starts with its name: `acme: card #12 needs your approval`.
+ */
+function notify(line: string, channel: string): void {
   const command = process.env.NOTIFY_CMD
   if (!command) return
+  const project = projectOf(channel)
   const [bin, ...args] = command.split(' ').filter(Boolean)
-  spawn(bin!, [...args, line], { stdio: 'ignore', detached: true }).unref()
+  spawn(bin!, [...args, project === null ? line : `${project}: ${line}`], { stdio: 'ignore', detached: true }).unref()
+}
+
+/** The caps set: each project's `maxRuns`, and LOOP_MAX_RUNS for every run of the loop. Null with neither. */
+function caps(): { all: number | null; of: Record<string, number> } | null {
+  const all = Number.parseInt(process.env.LOOP_MAX_RUNS ?? '', 10)
+  const of = Object.fromEntries(Object.entries(projects()).flatMap(([name, project]) => (project.maxRuns === undefined ? [] : [[name, project.maxRuns]])))
+  return all >= 1 || Object.keys(of).length > 0 ? { all: all >= 1 ? all : null, of } : null
+}
+
+/**
+ * The loop's runs going, by project (`''` for the cards right under `cards/`): asked for and not yet made by the
+ * daemon (after its place among requests), or with a task ready or being worked. A run waiting on a person, or
+ * ended, takes no place.
+ */
+async function runsGoing(team: Board, owner: string): Promise<Map<string, number>> {
+  const going = new Map<string, string>()
+  for (const state of ['ready', 'claimed'] as const) {
+    for (const task of (await team.taskList({ channel: 'cards/', state, limit: 1000 })).tasks) {
+      if (task.by.principal === owner && task.by.profile === 'workflows' && runOf(task.channel) !== null) going.set(task.channel, projectOf(task.channel) ?? '')
+    }
+  }
+  for (let after = (await asOwner(team).cursorGet('workflow:requests')) ?? 0; ; ) {
+    const page = await team.events({ after, filter: { types: ['workflow.requested'] }, limit: 200 })
+    for (const event of page.events) if (event.by.principal === owner && event.by.profile === 'intake' && event.channel !== null) going.set(`#${event.seq}`, projectOf(event.channel) ?? '')
+    if (page.events.length < 200 || page.cursor <= after) break
+    after = page.cursor
+  }
+  const counts = new Map<string, number>()
+  for (const project of going.values()) counts.set(project, (counts.get(project) ?? 0) + 1)
+  return counts
+}
+
+/** Why a new run of a project (null: the cards right under `cards/`) would wait now, or null when it may start. */
+async function busy(team: Board, owner: string, project: string | null): Promise<string | null> {
+  const set = caps()
+  if (set === null) return null
+  const going = await runsGoing(team, owner)
+  const runs = (n: number, of = '') => `${n} run${n === 1 ? '' : 's'}${of} ${n === 1 ? 'is' : 'are'} going`
+  const mine = going.get(project ?? '') ?? 0
+  if (project !== null && set.of[project] !== undefined && mine >= set.of[project]) return runs(mine, ` of ${project}`)
+  const all = [...going.values()].reduce((sum, each) => sum + each, 0)
+  return set.all !== null && all >= set.all ? `${runs(all)} on the board` : null
+}
+
+/** Checking for a place and asking, one at a time here: two watchers at once can't both take the last place. */
+let asking: Promise<unknown> = Promise.resolve()
+
+/**
+ * Asks for the `name` workflow on the message `on()` gives, unless a cap is reached: then the card says once why
+ * `what` waits (`key` tells the times apart), and this returns that reason. A run that ends starts it.
+ */
+function request(team: Board, card: number, owner: string, name: string, what: string, key: string, on: () => Promise<number>): Promise<string | null> {
+  const ask = async () => {
+    const waiting = await busy(team, owner, projectOf((await team.readThread({ id: card })).message.channel))
+    if (waiting !== null) {
+      await note(team, card, `waiting: ${waiting}, so ${what} starts when one ends`, `wait-${name}-${key}`)
+      return waiting
+    }
+    await team.as('intake').workflowRequest({ name, on: await on() })
+    return null
+  }
+  const next = asking.then(ask, ask)
+  asking = next.catch(() => {})
+  return next
 }
 
 const ENDED = new Set(['completed', 'failed', 'canceled'])
@@ -517,7 +655,8 @@ const ENDED = new Set(['completed', 'failed', 'canceled'])
  * A card's newest `card` run, from the board's record of the request: its channel, request and tasks by step.
  * Found by the request on the card's thread, never by a label, which anyone who may label could change.
  */
-async function latestRun(team: Board, card: Message, owner: string, name = 'card') {
+async function latestRun(team: Board, card: Message, owner: string, base = 'card') {
+  const name = flow(base, projectOf(card.channel))
   const found = (await requestsOn(team, card.id, owner, name)).at(-1)
   if (found === undefined) return null
   const channel = `${card.channel}/${name}-${found.seq}`
@@ -562,7 +701,7 @@ const isImage = (bytes: Buffer) =>
  */
 async function shareScreenshots(team: Board, card: Message, work: number | undefined, owner: string): Promise<void> {
   if (work === undefined) return
-  const workers = loadWorkflows(workflowsPath()).find((each) => each.name === 'card')?.workers.as
+  const workers = loadWorkflows(workflowsPath()).find((each) => each.name === flow('card', projectOf(card.channel)))?.workers.as
   if (!workers) return
   const { replies, task } = await team.readThread({ id: work })
   const since = replies.findLastIndex((reply) => reply.by.principal === owner && reply.by.profile === 'intake')
@@ -584,10 +723,10 @@ async function shareScreenshots(team: Board, card: Message, work: number | undef
  * The trusted comments on a card not yet taken: made after `from`, the request of the run they would go to,
  * and named by no round's marker (a reply by `intake`, `round 2: taking #31, #32`). Never this module's own.
  */
-function takenSince(replies: Message[], owner: string, from: number): Message[] {
+function takenSince(replies: Message[], owner: string, from: number, project: string | null): Message[] {
   const taken = new Set<number>()
   for (const reply of replies) if (reply.by.principal === owner && reply.by.profile === 'intake') for (const [, id] of reply.text.matchAll(/#(\d+)/g)) taken.add(Number(id))
-  return replies.filter((reply) => reply.id > from && !taken.has(reply.id) && !reply.deleted && !ours(reply.by, owner) && trusted(reply.by, owner))
+  return replies.filter((reply) => reply.id > from && !taken.has(reply.id) && !reply.deleted && !ours(reply.by, owner) && trusted(reply.by, owner, project))
 }
 
 /**
@@ -627,7 +766,7 @@ function startWorker(run: { channel: string; request: number }, owner: string, n
   const workflow = loadWorkflows(workflowsPath()).find((each) => each.name === name)
   if (!workflow) throw new Error(`no ${name} workflow in workflows.json`)
   const k = workflow.workers
-  const args = ['run', '--ready', run.channel, '--loop', '--wait', '2m', ...(k.runner ? ['--runner', k.runner] : ['--cwd', k.cwd!]), '--agent', k.agent, '--as', `${k.as}-round`, ...(k.repo ? ['--repo', k.repo] : []), ...(k.push || workflow.steps.some((step) => step.push === true) ? ['--push'] : []), ...(k.timeout ? ['--timeout', k.timeout] : []), '--by', `${owner}+workflows`, '--label', `workflow=${name}`, '--label', `request=${run.request}`]
+  const args = ['run', '--ready', run.channel, '--loop', '--wait', '2m', ...(k.runner ? ['--runner', k.runner] : ['--cwd', k.cwd!]), '--agent', k.agent, '--as', `${k.as}-round`, ...(k.repo ? ['--repo', k.repo] : []), ...(k.push || workflow.steps.some((step) => step.push === true) ? ['--push'] : []), ...(k.timeout ? ['--timeout', k.timeout] : []), ...(k.template ? ['--template', k.template] : []), ...(k.model ? ['--model', k.model] : []), '--by', `${owner}+workflows`, '--label', `workflow=${name}`, '--label', `request=${run.request}`]
   going.add(run.channel)
   const child = spawn(process.env.LOOP_MU ?? 'mu', args, { stdio: 'ignore', detached: true, env: process.env })
   child.on('exit', () => going.delete(run.channel))
@@ -653,7 +792,8 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
   // What the round that ended showed goes on the card before the next one starts, whichever watcher got here first.
   await shareScreenshots(team, card, run.work.id, owner)
   // Only what was said once the run was asked for: what came before it went into planning, or the spec.
-  const waiting = takenSince(replies, owner, run.request)
+  const project = projectOf(card.channel)
+  const waiting = takenSince(replies, owner, run.request, project)
   if (waiting.length === 0) return false
   const round = run.work.rounds + 2
   const { text: quoted, taken: asked } = quote(waiting)
@@ -677,10 +817,32 @@ async function nextRound(team: Board, cardId: number): Promise<boolean> {
   }
   await again(run.work.id)
   await again(run.review.id)
-  startWorker(run, owner)
+  startWorker(run, owner, flow('card', project))
   // Last: the marker says these comments were taken, so a retry before it takes them again rather than losing them.
   await team.as('intake').reply({ to: card.id, text: `round ${round}: taking ${asked.map((reply) => `#${reply.id}`).join(', ')}`, idempotencyKey: `loop-round-${card.id}-${last}` })
   return true
+}
+
+/**
+ * Starts what waited for a place, oldest card first: a change held `queued`, and a triage or a planning not yet
+ * asked for. Each checks for a place itself, so one that still has none waits for the next run to end.
+ */
+async function startWaiting(team: Board): Promise<void> {
+  const owner = await ownerOf(team)
+  const waiting: { id: number; channel: string; hold: string }[] = []
+  for (const path of (await team.channels()).channels.map((each) => each.path).filter(isCardChannel)) {
+    for (const task of (await team.taskList({ channel: path, state: 'blocked', limit: 1000 })).tasks) {
+      const hold = task.hold?.kind ?? ''
+      if (task.channel === path && task.owner.principal === owner && task.owner.profile === 'intake' && ['queued', 'triage', 'planning'].includes(hold)) waiting.push({ id: task.id, channel: path, hold })
+    }
+  }
+  for (const card of waiting.sort((a, b) => a.id - b.id)) {
+    if (card.hold === 'queued') {
+      const spec = await latestSpec(team, card.id, owner)
+      if (spec !== null) await startWork(team, card.id, spec.id, owner)
+    } else if (card.hold === 'triage') await askTriage(team, card.id, owner, await heldSince(team, card.id, 'triage'))
+    else if ((await requestsOn(team, card.id, owner, flow('planning', projectOf(card.channel)))).length === 0) await askPlan(team, card.id, owner, 0)
+  }
 }
 
 export const watch = {
@@ -719,18 +881,19 @@ export const watch = {
       const owner = await ownerOf(team)
       // Only a result the triage run's own worker completed: an agent that completed it with its sandbox's token gets nothing.
       const done = await workflowResult(team, event.task!.id, owner)
-      if (done === null || done.workflow !== 'triage' || !done.result) return
+      if (done === null || !done.result) return
       const card = await team.readThread({ id: done.thread })
-      if (card.task?.state !== 'blocked' || card.task.hold?.kind !== 'triage') return
+      const where = card.message.channel
+      if (done.workflow !== flow('triage', projectOf(where)) || card.task?.state !== 'blocked' || card.task.hold?.kind !== 'triage') return
       // Only the newest triage: one asked for before the report was last changed read text that isn't there now.
-      if ((await requestsOn(team, done.thread, owner, 'triage')).at(-1)?.seq !== done.request) return
+      if ((await requestsOn(team, done.thread, owner, done.workflow)).at(-1)?.seq !== done.request) return
       const links = await linksIn(team, done.result, done.thread, owner)
       // A result that names other cards and writes none: held for a person, never left as if a triage still ran.
       if (!links.spec.trim()) {
         const kind = links.duplicate === null ? 'declined' : 'duplicate'
         await rehold(team, done.thread, kind, links.duplicate === null ? 'the triage wrote no card' : `the same request as #${links.duplicate.id}`)
         await note(team, done.thread, links.duplicate === null ? 'declined: the triage wrote no card. Edit the report, or move it to ready again, to try again.' : `duplicate of #${links.duplicate.id}, with no card of its own: cancel it, or move it to ready again to triage it again.`, `nospec-${event.task!.id}`)
-        notify(`card #${done.thread} ${links.duplicate === null ? 'was declined' : `looks like a duplicate of #${links.duplicate.id}`}: mu read ${done.thread}`)
+        notify(`card #${done.thread} ${links.duplicate === null ? 'was declined' : `looks like a duplicate of #${links.duplicate.id}`}: mu read ${done.thread}`, where)
         return
       }
       const spec = await team.reply({ to: done.thread, text: defused(links.spec), idempotencyKey: `loop-spec-${event.task!.id}` })
@@ -744,13 +907,13 @@ export const watch = {
       if (links.duplicate !== null) {
         await rehold(team, done.thread, 'duplicate', `the same request as #${links.duplicate.id}: label it approved=yes to work it anyway`)
         await note(team, done.thread, `duplicate of #${links.duplicate.id}: held. Label it approved=yes to work it anyway, or cancel it.`, `duplicate-${event.task!.id}`)
-        notify(`card #${done.thread} looks like a duplicate of #${links.duplicate.id}: mu read ${done.thread}`)
+        notify(`card #${done.thread} looks like a duplicate of #${links.duplicate.id}: mu read ${done.thread}`, where)
         return
       }
       // Trusted only as first written: an edit since was someone's, and the board holds the card as edited then.
-      if (trusted(card.message.by, owner) && card.message.revision === 1) return startWork(team, done.thread, spec.id, owner)
+      if (trusted(card.message.by, owner, projectOf(where)) && card.message.revision === 1) return startWork(team, done.thread, spec.id, owner)
       await rehold(team, done.thread, 'approval', 'waiting for a trusted person to label it approved=yes')
-      notify(`card #${done.thread} needs your approval: mu read ${done.thread}, then mu label ${done.thread} approved=yes`)
+      notify(`card #${done.thread} needs your approval: mu read ${done.thread}, then mu label ${done.thread} approved=yes`, where)
     },
   },
 
@@ -761,14 +924,16 @@ export const watch = {
     run: async ({ event, board: team }) => {
       const owner = await ownerOf(team)
       const done = await workflowResult(team, event.task!.id, owner)
-      if (done === null || done.workflow !== 'planning' || !done.result) return
+      if (done === null || !done.result) return
+      const where = (await team.readThread({ id: done.thread })).message.channel
+      if (done.workflow !== flow('planning', projectOf(where))) return
       // Only the newest planning, of a card still in planning: one of text since changed, or of a card moved on, says nothing now.
-      if ((await requestsOn(team, done.thread, owner, 'planning')).at(-1)?.seq !== done.request) return
+      if ((await requestsOn(team, done.thread, owner, done.workflow)).at(-1)?.seq !== done.request) return
       const card = (await team.readThread({ id: done.thread })).task
       if (card?.state !== 'blocked' || card.hold?.kind !== 'planning') return
       const rounds = (await team.readThread({ id: event.task!.id })).task?.rounds ?? 0
       await team.reply({ to: done.thread, text: defused(done.result), idempotencyKey: `loop-plan-${event.task!.id}-${rounds}` })
-      notify(`card #${done.thread} has a plan to read: mu read ${done.thread}`)
+      notify(`card #${done.thread} has a plan to read: mu read ${done.thread}`, where)
       await nextPlanRound(team, done.thread)
     },
   },
@@ -780,17 +945,17 @@ export const watch = {
     as: 'intake',
     run: async ({ event, board: team }) => {
       const owner = await ownerOf(team)
-      const run = /^(cards\/[a-z0-9][a-z0-9_.-]*)\/planning-(\d+)$/.exec(event.task!.channel)
-      if (!run || !(await workersFailure(team, event, owner, 'planning'))) return
-      const request = Number(run[2])
+      const run = runOf(event.task!.channel)
+      if (run?.base !== 'planning' || !(await workersFailure(team, event, owner, run.name))) return
+      const request = run.request
       const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
-      if (asked?.seq !== request || asked.thread === null || asked.channel !== run[1] || (asked.data as { name?: unknown }).name !== 'planning' || asked.by.principal !== owner || asked.by.profile !== 'intake') return
-      if ((await requestsOn(team, asked.thread, owner, 'planning')).at(-1)?.seq !== request) return
+      if (asked?.seq !== request || asked.thread === null || asked.channel !== run.card || (asked.data as { name?: unknown }).name !== run.name || asked.by.principal !== owner || asked.by.profile !== 'intake') return
+      if ((await requestsOn(team, asked.thread, owner, run.name)).at(-1)?.seq !== request) return
       const card = (await team.readThread({ id: asked.thread })).task
       if (card?.state !== 'blocked' || card.hold?.kind !== 'planning') return
       const rounds = (await team.readThread({ id: event.task!.id })).task?.rounds ?? 0
       await note(team, asked.thread, 'the planner stopped without an answer: reply on the card to try again.', `plan-stopped-${event.task!.id}-${rounds}`)
-      notify(`card #${asked.thread}'s planner stopped: mu read ${asked.thread}`)
+      notify(`card #${asked.thread}'s planner stopped: mu read ${asked.thread}`, run.card)
     },
   },
 
@@ -801,8 +966,9 @@ export const watch = {
     run: async ({ event, board: team }) => {
       const owner = await ownerOf(team)
       const set = (event.data as { set?: Record<string, string> }).set ?? {}
-      if (set.approved !== 'yes' || !trusted(event.by, owner)) return
+      if (set.approved !== 'yes') return
       const card = await team.readThread({ id: event.thread! })
+      if (!trusted(event.by, owner, projectOf(card.message.channel))) return
       if (!isCardChannel(card.message.channel) || card.task?.state !== 'blocked' || !['approval', 'duplicate'].includes(card.task.hold?.kind ?? '')) return
       const spec = await latestSpec(team, card.message.id, owner)
       // A spec older than the report's last change is about text that isn't there now: it waits for the new triage.
@@ -843,7 +1009,7 @@ export const watch = {
       // Only a change its own sync or someone trusted made: anyone else's label wakes nothing, nor writes a note.
       const made = await madeOf(team, event.thread!)
       const bySync = made?.key != null && event.by.profile === null && (event.by.principal === made.key || event.by.principal.startsWith(`${made.key}:user:`))
-      if (!bySync && !trusted(event.by, await ownerOf(team))) return
+      if (!bySync && !trusted(event.by, await ownerOf(team), projectOf((await team.readThread({ id: event.thread! })).message.channel))) return
       await reconcile(team, event.thread!, event.seq)
     },
   },
@@ -855,20 +1021,20 @@ export const watch = {
     as: 'intake',
     run: async ({ event, board: team }) => {
       const owner = await ownerOf(team)
-      const run = /^(cards\/[a-z0-9][a-z0-9_.-]*)\/triage-(\d+)$/.exec(event.task!.channel)
+      const run = runOf(event.task!.channel)
       // A failure anyone but the run's own workers wrote declines nothing.
-      if (!run || !(await workersFailure(team, event, owner, 'triage'))) return
-      const request = Number(run[2])
+      if (run?.base !== 'triage' || !(await workersFailure(team, event, owner, run.name))) return
+      const request = run.request
       const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
-      if (asked?.seq !== request || asked.thread === null || asked.channel !== run[1] || (asked.data as { name?: unknown }).name !== 'triage' || asked.by.principal !== owner || asked.by.profile !== 'intake') return
+      if (asked?.seq !== request || asked.thread === null || asked.channel !== run.card || (asked.data as { name?: unknown }).name !== run.name || asked.by.principal !== owner || asked.by.profile !== 'intake') return
       const card = asked.thread
       // Only the newest triage: one of text since changed has nothing to say about the report now.
-      if ((await requestsOn(team, card, owner, 'triage')).at(-1)?.seq !== request) return
+      if ((await requestsOn(team, card, owner, run.name)).at(-1)?.seq !== request) return
       const now = (await team.readThread({ id: card })).task
       if (now?.state !== 'blocked' || now.hold?.kind !== 'triage') return
       await rehold(team, card, 'declined', 'the triage made no card: edit the report, or move it to ready again')
       await note(team, card, "declined: the triage made no card, and its summary says why. Edit the report, or move it to ready again, to try again.", `declined-${request}`)
-      notify(`card #${card} was declined: mu read ${card}`)
+      notify(`card #${card} was declined: mu read ${card}`, run.card)
     },
   },
 
@@ -892,14 +1058,15 @@ export const watch = {
       const runTask = event.task!
       // The label only says where to look: the request it names is checked against the board's own record below.
       const request = Number((await team.readThread({ id: runTask.id })).message.labels.request)
-      if (!/\/card-\d+$/.test(runTask.channel) || !Number.isSafeInteger(request)) return
+      const run0 = runOf(runTask.channel)
+      if (run0?.base !== 'card' || run0.request !== request) return
       const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
-      if (asked?.seq !== request || asked.thread === null || runTask.channel !== `${asked.channel}/card-${request}`) return
+      if (asked?.seq !== request || asked.thread === null || runTask.channel !== `${asked.channel}/${run0.name}-${request}`) return
       const card = (await team.readThread({ id: asked.thread })).message
       const run = await latestRun(team, card, owner)
       if (run?.channel !== runTask.channel || !run.ended) return
       await shareScreenshots(team, card, run.work?.id, owner)
-      notify(`card #${card.id}'s change is done for now: mu read ${card.id}`)
+      notify(`card #${card.id}'s change is done for now: mu read ${card.id}`, card.channel)
       // Comments that came while it ran go first: a card isn't done while there is more asked of it.
       if (await nextRound(team, card.id)) return
       const review = run.review === undefined ? null : await workflowResult(team, run.review.id, owner)
@@ -915,21 +1082,32 @@ export const watch = {
     run: async ({ event, board: team }) => {
       if ((event.data as { from?: unknown }).from !== 'blocked') return
       const task = event.task!
-      const run = /^(cards\/[a-z0-9][a-z0-9_.-]*)\/(triage|planning|card)-(\d+)$/.exec(task.channel)
+      const run = runOf(task.channel)
       if (!run) return
       // Only a run this module asked for: the request it names is checked against the board's own record.
-      const request = Number(run[3])
+      const request = run.request
       const owner = await ownerOf(team)
       const asked = (await team.events({ after: request - 1, filter: { types: ['workflow.requested'] }, limit: 1 })).events[0]
-      if (asked?.seq !== request || asked.channel !== run[1] || (asked.data as { name?: unknown }).name !== run[2] || asked.by.principal !== owner || asked.by.profile !== 'intake') return
-      startWorker({ channel: task.channel, request }, owner, run[2])
+      if (asked?.seq !== request || asked.channel !== run.card || (asked.data as { name?: unknown }).name !== run.name || asked.by.principal !== owner || asked.by.profile !== 'intake') return
+      startWorker({ channel: task.channel, request }, owner, run.name)
     },
   },
 
   // A task of a card's run waits for a person: you are told its ID, and nothing it says.
   'needs-me': {
-    tail: { channel: 'cards/', types: ['task.blocked'], kinds: ['!triage', '!approval', '!working', '!backlog', '!planning', '!done', '!declined', '!duplicate'] },
-    run: ({ event }) => notify(`task #${event.task!.id} is blocked: mu read ${event.task!.id}`),
+    tail: { channel: 'cards/', types: ['task.blocked'], kinds: ['!triage', '!approval', '!working', '!backlog', '!planning', '!done', '!declined', '!duplicate', '!queued'] },
+    run: ({ event }) => notify(`task #${event.task!.id} is blocked: mu read ${event.task!.id}`, event.task!.channel),
+  },
+
+  // A run's task ended, or waits for a person: its place is free, and the oldest card waiting for one starts.
+  // Only with a maxRuns or LOOP_MAX_RUNS set: without, nothing waits.
+  next: {
+    tail: { channel: 'cards/', types: ['task.completed', 'task.failed', 'task.canceled', 'task.blocked'] },
+    as: 'intake',
+    run: async ({ event, board: team }) => {
+      if (runOf(event.task!.channel) === null) return
+      if (caps() !== null) await startWaiting(team)
+    },
   },
 } satisfies Record<string, Watch>
 
