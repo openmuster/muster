@@ -28,6 +28,7 @@ function fakeNotion() {
   const asked: { method: string; path: string; body: any; version: string | null }[] = []
   let made = 0
   let down: () => boolean = () => false
+  let lose = 0
   const pageJson = (page: Page) => ({
     object: 'page',
     id: page.id,
@@ -74,6 +75,8 @@ function fakeNotion() {
     if (path === '/comments' && method === 'POST') {
       const comment: Comment = { id: `cccc0000-0000-4000-8000-${String(++made).padStart(12, '0')}`, page: body.parent.page_id, text: body.rich_text.map((each: any) => each.text.content).join(''), by: BOT, created: '2026-01-01T00:00:00.000Z', edited: '2026-01-01T00:00:00.000Z' }
       comments.set(id(comment.id), comment)
+      // Made, and the answer lost on its way back.
+      if (lose > 0 && lose--) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })
       return Response.json(commentJson(comment))
     }
     if ((match = /^\/comments\/([^/]+)$/.exec(path))) {
@@ -83,7 +86,7 @@ function fakeNotion() {
     }
     return new Response('{}', { status: 404 })
   }) as typeof fetch
-  return { pages, comments, asked, fetcher, set markdownDown(check: () => boolean) { down = check } }
+  return { pages, comments, asked, fetcher, set markdownDown(check: () => boolean) { down = check }, set lose(count: number) { lose = count } }
 }
 
 function setup(options: { dir?: string; secret?: string } = {}) {
@@ -241,6 +244,24 @@ describe('sync: Notion', () => {
     expect((await threads())[0]!.message.text).toBe('Stacks should show a count\n\nEach stack row shows how many are in it.')
     const dropped = (await team.events({ after: 0, filter: { types: ['sync.dropped'] } })).events
     expect(dropped.map((event) => [event.data.key, event.data.id, event.data.error])).toEqual([['nt', 'notion:evt-lost', 'platform_500']])
+  })
+
+  it('a reply Notion may have taken, with no answer to say so, is never posted twice: the thread says it may not have gone', async () => {
+    process.env.MUSTER_CONFIG = tempDir()
+    const { hook, page, threads, backend, team, api, time } = setup()
+    page(P1)
+    await hook('page.created', { id: P1, type: 'page' })
+    await backend.syncTick()
+    const root = (await threads())[0]!.message.id
+    api.lose = 1
+    await team.reply({ to: root, text: 'On it.' })
+    for (let i = 0; i < 4; i++) {
+      await backend.syncTick()
+      time.advance(60_000)
+    }
+    expect(api.asked.filter((each) => each.method === 'POST' && each.path === '/comments')).toHaveLength(1)
+    const failed = (await team.events({ after: 0, filter: { types: ['sync.failed'] } })).events
+    expect(failed.map((event) => event.data.error)).toEqual(['unconfirmed'])
   })
 
   it("a reply on the board goes to Notion as a comment on the page, and Notion's echo of it isn't brought back", async () => {

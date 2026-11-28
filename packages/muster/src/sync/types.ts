@@ -87,7 +87,13 @@ export type Provider = ProviderExtras & {
   /** Whether board replies in a synced thread go back to the platform. */
   mirrors(place: string): boolean
   /** Posts a board message on the platform. `threadExternal` is null for a new root. */
-  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch, read: ReadFile): Promise<Delivery>
+  deliver(message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch, read: ReadFile, marker?: string): Promise<Delivery>
+  /**
+   * Looks on the platform for a message an earlier try may have posted, by the `marker` `deliver` was given, and
+   * says what it is there, or null when it isn't. A platform without this never has a message sent twice: one
+   * whose try went unanswered is recorded as `unconfirmed` instead.
+   */
+  find?(marker: string, message: Message, target: { place: string; threadExternal: string | null }, fetcher: typeof fetch): Promise<Delivery | null>
 }
 
 /** What a provider may also do. Each is optional: a platform that can't simply doesn't. */
