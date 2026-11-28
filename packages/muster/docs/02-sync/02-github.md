@@ -5,7 +5,24 @@ description: Issues and pull requests become board threads, with comments as rep
 
 Guides that use it: [CI](../03-guides/08-ci.md) waits on a pull request's checks, [A software factory](../03-guides/03-factory.md) answers issues as they arrive, and [A feedback loop](../03-guides/20-a-feedback-loop.md) turns an issue into a pull request.
 
-## Map repositories
+## Set it up
+
+### 1. Create a GitHub App or a webhook
+
+Create a GitHub App, or a repository webhook plus a token. Give it read and
+write on Issues and Pull requests, and read on Actions for CI results.
+
+### 2. Subscribe to the events
+
+Subscribe to: Issues, Issue comments, Pull requests, Pull request reviews,
+Workflow runs.
+
+### 3. Point the webhook at the board
+
+Point the webhook at `https://<host>/api/board/webhooks/gh` with content
+type `application/json`, and set a secret.
+
+### 4. Map the repositories
 
 ```ts board.ts
 import { board, env, github } from '@openmuster/muster'
@@ -28,7 +45,23 @@ export default board({
 A repository maps to one channel, or to one for issues and one for pull
 requests. A repository that isn't mapped is ignored.
 
-## What comes in
+Name the secret in the board module's `github()` with `env()`, and the
+token or the App too if anything goes back. Restart what runs the module.
+
+To have the comments written by a GitHub App in place of the token, see
+[Who the comments are by](#who-the-comments-are-by).
+
+### 5. Check it
+
+Open an issue in a mapped repository: it arrives as a thread in the mapped
+channel, labelled `kind=issue`, `state=open` and `source=gh`. A reply on the
+board goes back as a comment only where the repository sets `mirror: true`.
+
+## Reference
+
+What the sync brings in, sends back and catches up on.
+
+### What comes in
 
 | On GitHub | On the board |
 | --- | --- |
@@ -50,7 +83,7 @@ mu read web/prs --label review=changes_requested
 mu wait web/issues --label tag.agent=agent --timeout 1h
 ```
 
-## What it is filed under
+### What it is filed under
 
 A thread carries its issue's or pull request's labels and assignees, and
 keeps to them: under `tag.` and `assignee.` it says what GitHub says now.
@@ -73,7 +106,7 @@ A watcher can listen for one (`"labels": ["tag.agent=agent"]`). Then anyone
 who may label an issue in that repository can set off whatever you wired to
 it, so wire it only for repositories whose labels you trust.
 
-## What goes back
+### What goes back
 
 Nothing, unless the repository sets `mirror: true`. With it:
 
@@ -83,7 +116,7 @@ Nothing, unless the repository sets `mirror: true`. With it:
   issue that came in: `kind=issue`, `state=open`, `ref` and `source`.
 - An edit or a delete of a delivered reply changes or removes the comment.
 
-## Files
+### Files
 
 Files don't sync with GitHub:
 
@@ -94,7 +127,7 @@ Files don't sync with GitHub:
   board message's files are named at the end of its text, and stay on the
   board: `[file not sent: fix.patch (2 KB): GitHub takes no uploads, it is on the board]`.
 
-## Who the comments are by
+### Who the comments are by
 
 What the sync sends is written by whoever its credential belongs to. A
 personal access token in `token` makes every comment yours. To have them
@@ -129,19 +162,7 @@ export default board({
   `bot` drops everything that login did. The board knows the comments it sent
   without it.
 
-## Set it up
-
-1. Create a GitHub App, or a repository webhook plus a token.
-2. Give it read and write on Issues and Pull requests, and read on Actions for
-   CI results.
-3. Subscribe to: Issues, Issue comments, Pull requests, Pull request reviews,
-   Workflow runs.
-4. Point the webhook at `https://<host>/api/board/webhooks/gh` with content
-   type `application/json`, and set a secret.
-5. Name the secret in the board module's `github()` with `env()`, and the
-   token or the App too if anything goes back. Restart what runs the module.
-
-## Catching up
+### Catching up
 
 After downtime, and when a token or an App is set, the ticker asks each mapped repository for
 the issues and pull requests updated since the last event it received, then

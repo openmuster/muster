@@ -1,6 +1,6 @@
 ---
 title: Keep the daemon running
-description: For keeping schedules, watchers and sync running on a Mac across logins and crashes. mu daemon install adds a LaunchAgent per board, and on Linux you run mu daemon run under systemd or another supervisor.
+description: For keeping schedules, watchers and sync running on a Mac across logins and crashes. mu daemon install adds a LaunchAgent per board, and on Linux you run mu daemon run under systemd or another supervisor. mu daemon check proves a watcher or an outgoing webhook answers.
 ---
 
 ## Install the daemon on macOS
@@ -41,6 +41,58 @@ The service works like this:
   [When the daemon keeps crashing](#when-the-daemon-keeps-crashing).
 
 The daemon's log is in `~/.config/muster/logs/`.
+
+## Check that a watcher wakes something
+
+Name the [watcher](../01-concepts/09-watchers.md#watchers) to check, and, for
+one on a subtree, the channel under it:
+
+```bash
+mu daemon check lead
+mu daemon check triage --in work/checks --timeout 10m
+```
+
+`check` writes a message the watcher's filter matches, then waits for a reply
+in its thread. A reply proves the whole path: a host runs the watcher, the
+filter matches, the gate lets it through, and the command wakes something
+that answers. It prints who answered and how long it took.
+
+- **Its message is built from the filter:** the watcher's channel, its labels,
+  a mention or words it asks for. A watcher on a subtree needs `--in` to say
+  which channel under it. It stays on the board, never synced.
+- **It fails fast when nothing runs the watcher** (`watcher_not_running`),
+  before writing anything: no host holds its lease. If the daemon stopped
+  restarting, it says that instead (`daemon_stopped`).
+- **A run that keeps failing is `wake_failed`,** after the five tries an
+  event gets, which take a few minutes. A command that runs but wakes nothing
+  that replies is `timeout`, with the thread to read.
+- **Some watchers can't be checked with a message:** one that listens only
+  for task events, or only to a platform's users. Write what it listens for
+  by hand instead.
+
+Whatever the command wakes has to reply. The agents in
+[A software factory](./03-factory.md) and
+[With your terminal](./13-terminals.md) read the thread and answer
+it like any other.
+
+## Check that an outgoing webhook arrives
+
+Name the [outgoing webhook](../01-concepts/15-outgoing-webhooks.md) to
+check, then see whether a host sends it:
+
+```bash
+mu daemon check phone
+mu daemon status
+```
+
+`check` sends a signed ping to the hook's URL from this terminal and prints
+what the receiver answered. Its event has the type `ping` and is not on the
+board. The secret has to be set where you run it.
+
+- **`hook_failed`** when nothing answered, or the receiver refused it. A
+  `401` or `403` usually means the two sides hold different secrets.
+- **It proves the URL and the secret, not the host.** Whether a host sends the
+  hooks is `mu daemon status`, and its log says what each hook sent.
 
 ## When the daemon keeps crashing
 
