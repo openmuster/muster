@@ -4,8 +4,6 @@ export const metadata = { title: 'factory' }
 
 /** Every size, colour and time is named once, in `:root`; spacing is a multiple of one step. */
 const s = (n: number) => `calc(var(--spacing) * ${n})`
-/** Below this width, in px, the page is a phone's. A media query can't read a CSS variable. */
-const PHONE = 640
 
 const STYLE = `
 :root {

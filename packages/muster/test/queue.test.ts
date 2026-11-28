@@ -382,7 +382,7 @@ const gaveUp = async (team: ReturnType<typeof setup>['team'], thread: number, na
   (await team.readThread({ id: thread })).replies.filter((reply) => reply.text.startsWith(`watcher "${name}" couldn't deliver a wake-up after 5 tries`))
 
 describe('the queue template: when a script fails', () => {
-  const failing = (verbs: string[], dir: string) =>
+  const failing = (verbs: string[], _dir: string) =>
     `#!/bin/sh\ncase "$1" in ${verbs.join('|')}) echo 'error: the board is busy' >&2; exit 1 ;; esac\nexec ${process.execPath} ${BIN} "$@"\n`
 
   it("start.sh fails when the board can't be written, so the daemon tries the card again and then says so on it", async () => {

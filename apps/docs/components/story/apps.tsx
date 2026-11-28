@@ -5,7 +5,6 @@ import type { App, AppComment, Chapter, View } from './cues'
 export const TOOL: Record<View, string> = { linear: 'Linear', github: 'GitHub', slack: 'Slack', notion: 'Notion' }
 
 const COLUMNS = ['Backlog', 'Todo', 'In Progress', 'Done']
-const STATUSES = ['Not started', 'Ready for agent', 'In progress', 'Done']
 
 /**
  * A sketch of a synced tool's own view of the work: drawn in the site's greys, not the tool's colours,

@@ -50,19 +50,6 @@ export function violation(schema: Schema, value: unknown, at = '$'): string | nu
   return null
 }
 
-/** The blocks in a message's text, parsed. A program reads these and never the text. */
-export function blocksOf(text: string): Block[] {
-  const out: Block[] = []
-  for (const match of text.matchAll(FENCE)) {
-    try {
-      out.push({ schema: `${match[1]}@${match[2]}`, data: JSON.parse(match[3]!) })
-    } catch {
-      // Refused on write; text written before its schema existed is shown as text.
-    }
-  }
-  return out
-}
-
 /**
  * The blocks a stored message carries: each one that follows a schema the board has. A write through the
  * board was checked already, but text also arrives from a platform under sync, and that never was: so a

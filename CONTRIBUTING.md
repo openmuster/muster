@@ -2,7 +2,7 @@
 
 ```bash
 pnpm install
-pnpm check          # build, typecheck, test
+pnpm check          # build, typecheck, lint, knip, test
 pnpm test:browser   # the inspector and templates in Chromium; see AGENTS.md
 ```
 

@@ -289,7 +289,7 @@ export class Run extends DurableObject<Env> {
       // `kill -1` reaches every process but init and the one sending it.
       await this.capture(['sh', '-c', 'kill -KILL -1 2>/dev/null; true'])
       await this.ctx.storage.put('closed', true)
-    } catch (error) {
+    } catch {
       // A run that can't be closed is never read from: it ends.
       await this.end('closing failed')
     }

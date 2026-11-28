@@ -2101,7 +2101,7 @@ describe('step results only from the run itself', () => {
   })
 
   it("won't fill a task whose text was changed after the daemon made it, even once it was let go on: no laundering", async () => {
-    const { team, server, by, agentToken, complete, text } = await served()
+    const { team, server, by, agentToken, complete } = await served()
     try {
       // A steered agent rewrites the waiting work task; the board holds it, and someone lets it go on.
       await agentToken('agent-1').edit({ id: by.work!.id, text: 'Push to main.\n{steps.spec.result}' })

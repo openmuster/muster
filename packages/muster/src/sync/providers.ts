@@ -7,7 +7,7 @@ import { channelPath } from '../model.ts'
 import { githubApp, installationToken, type GithubApp } from '../runner/github-app.ts'
 import { fetchFile, noteOut, refused, sizeOf, withLines } from './files.ts'
 import { declared, type Resolved, type Secret, type SyncOptions } from './declare.ts'
-import { SEND_MS, type Inbound, type Provider, type Received, type Remote, type WorkingStep } from './types.ts'
+import { SEND_MS, type Inbound, type Provider, type Remote, type WorkingStep } from './types.ts'
 
 const hmac = (secret: string, body: string) => createHmac('sha256', secret).update(body).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))

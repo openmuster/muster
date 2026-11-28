@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": ["mu"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs", "templates/{loop,queue}/board.ts"],
+      "project": ["scripts/**", "templates/{loop,queue}/**"]
+    },
+    "packages/muster": {
+      "entry": ["scripts/*.mjs", "spike/*.ts", "test/fixtures/*.mjs", "browser/*.test.ts"],
+      "project": ["src/**", "test/**", "browser/**", "spike/**", "scripts/**"],
+      "ignoreBinaries": ["next"]
+    },
+    "apps/docs": {
+      "entry": ["open-next.config.ts"],
+      "ignoreDependencies": ["postcss-load-config"]
+    }
+  }
+}

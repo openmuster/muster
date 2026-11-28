@@ -254,7 +254,8 @@ function App() {
               const next = event.target.value.trim() || null
               setMe(next)
               try {
-                next ? localStorage.setItem('muster.as', next) : localStorage.removeItem('muster.as')
+                if (next) localStorage.setItem('muster.as', next)
+                else localStorage.removeItem('muster.as')
               } catch {
                 // Storage is a convenience.
               }
