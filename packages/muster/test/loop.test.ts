@@ -8,6 +8,7 @@ import { openRuns, type Spawner } from '../src/daemon/runs.ts'
 import { fillResults } from '../src/daemon/steps.ts'
 import { board, file, linear, LINEAR_SCOPES, loadWorkflows, notion, type Board, type FileOptions } from '../src/index.ts'
 import { watch } from '../../../templates/loop/board.ts'
+import { projectWorkflows, readProjects } from '../../../templates/loop/projects.ts'
 import { clock, tempDir } from './helpers.ts'
 
 const loop = resolve(dirname(fileURLToPath(import.meta.url)), '../../../templates/loop')
@@ -24,15 +25,24 @@ afterEach(() => {
  * template's workflows, as `mu serve --module board.ts` runs them. The cloud workers are stand-ins: a test
  * plays the run's worker, claiming and completing as `agent-1` from the daemon's machine.
  */
-async function setup(more: Pick<FileOptions, 'sync' | 'fetch'> = {}) {
+async function setup(more: Pick<FileOptions, 'sync' | 'fetch'> & { projects?: Record<string, unknown> } = {}) {
   const time = clock()
-  const backend = file({ memory: true, principal: OWNER, now: time.now, ...more })
+  const { projects: _, ...options } = more
+  const backend = file({ memory: true, principal: OWNER, now: time.now, ...options })
   const team = board({ backend, watch })
   /** Someone who isn't the board's owner: a Slack user, say, as sync names them. */
   const as = (principal: string): Board => board({ backend: { ...backend, self: async (profile) => ({ principal, profile }) } })
   const workers: Parameters<Spawner>[0][] = []
   const deps = { spawn: (async (worker) => void workers.push(worker)) as Spawner, now: () => time.now().getTime(), runs: openRuns(), env: { MUSTER_URL: 'https://b.example', VERCEL_OIDC_TOKEN: 'o', GITHUB_APP_ID: '1', GITHUB_APP_KEY_FILE: '/k' } }
-  const workflows = loadWorkflows(join(loop, 'workflows.json'))
+  let workflows = loadWorkflows(join(loop, 'workflows.json'))
+  if (more.projects) {
+    // As an operator sets several projects up: loop-projects.json beside the workflows it writes, both where the loop reads them.
+    const config = tempDir()
+    writeFileSync(join(config, 'loop-projects.json'), JSON.stringify({ projects: more.projects }))
+    writeFileSync(join(config, 'workflows.json'), JSON.stringify({ workflows: projectWorkflows(JSON.parse(readFileSync(join(loop, 'workflows.json'), 'utf8')).workflows, readProjects({ projects: more.projects })) }))
+    process.env.MUSTER_CONFIG = config
+    workflows = loadWorkflows(join(config, 'workflows.json'))
+  }
   const tick = async () => {
     await team.deliver()
     await tickOnce(team, { list: workflows, deps })
@@ -196,6 +206,173 @@ describe('templates/loop', () => {
     const requests = (await team.events({ after: 0, filter: { types: ['workflow.requested'], re: report.id } })).events.map((event) => (event.data as { name: string }).name)
     expect(requests).toEqual(['triage', 'card'])
     expect((await team.readThread({ id: report.id })).replies.filter((reply) => reply.by.profile === 'triage')).toHaveLength(1)
+  })
+
+  describe('projects', () => {
+    const ACME = { repo: 'https://github.com/acme/web', runner: 'vercel' }
+    const GLOBEX = { repo: 'https://github.com/globex/site', runner: 'vercel' }
+    const argvOf = (workers: Parameters<Spawner>[0][], name: string) => workers.map((worker) => worker.argv).find((argv) => argv.includes(`workflow=${name}`))
+    const notes = () => {
+      const file = join(tempDir(), 'notes')
+      const notifier = join(tempDir(), 'notify.sh')
+      writeFileSync(notifier, `#!/bin/sh\necho "$1" >> ${file}\n`)
+      chmodSync(notifier, 0o755)
+      process.env.NOTIFY_CMD = notifier
+      return async (including: string) => {
+        await waitFor(() => existsSync(file) && readFileSync(file, 'utf8').includes(including))
+        return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : []
+      }
+    }
+
+    it("writes the template's workflows once more for each project, held to its cards and its repository", () => {
+      const base = JSON.parse(readFileSync(join(loop, 'workflows.json'), 'utf8')).workflows
+      const out = projectWorkflows(base, readProjects({ projects: { acme: { repo: 'https://github.com/acme/web', runner: 'e2b', template: 'acme-go', model: 'claude-opus-5-5' } } }))
+      expect(out.map((each: { name: string }) => each.name)).toEqual(['triage', 'planning', 'card', 'triage.acme', 'planning.acme', 'card.acme'])
+      const card = out.find((each: { name: string }) => each.name === 'card.acme')!
+      expect(card.channels).toEqual(['cards/acme/'])
+      expect(card.workers).toMatchObject({ repo: 'https://github.com/acme/web', runner: 'e2b', template: 'acme-go', model: 'claude-opus-5-5', as: 'agent' })
+      // The prompts are the template's, written once.
+      expect(card.steps).toEqual(base.find((each: { name: string }) => each.name === 'card').steps)
+      // A setting the template's workflow has stands unless the project names its own; a template only on e2b.
+      const modelled = base.map((each: { workers: object }) => ({ ...each, workers: { ...each.workers, model: 'claude-sonnet-5-5', template: 'base-tpl' } }))
+      const plain = projectWorkflows(modelled, readProjects({ projects: { acme: ACME } })).find((each: { name: string }) => each.name === 'card.acme')!
+      expect(plain.workers).toMatchObject({ model: 'claude-sonnet-5-5', runner: 'vercel' })
+      expect(plain.workers).not.toHaveProperty('template')
+      // With none, the template's as they are.
+      expect(projectWorkflows(base, readProjects({}))).toEqual(base)
+      // A source's own channel name, a dot, or a setting it doesn't know is refused, not guessed at.
+      expect(() => readProjects({ projects: { linear: ACME } })).toThrow(/not one of slack, linear/)
+      expect(() => readProjects({ projects: { 'a.b': ACME } })).toThrow(/needs a name/)
+      expect(() => readProjects({ projects: { acme: { ...ACME, repos: 'x' } } })).toThrow(/"repos", which isn't a project setting/)
+      expect(() => readProjects({ projects: { acme: { runner: 'vercel' } } })).toThrow(/needs a "repo"/)
+      expect(() => readProjects({ projects: { acme: { ...ACME, template: 'x' } } })).toThrow(/"template", which is for "runner": "e2b"/)
+    })
+
+    it("a card under a project's channel is triaged and worked on that project's repository; one right under cards/ as before", async () => {
+      const { team, tick, run, complete, card, workers } = await setup({ projects: { acme: ACME, globex: GLOBEX } })
+      const report = await team.post({ channel: 'cards/acme/linear', text: 'the stacks should say how many are in them' })
+      const legacy = await team.post({ channel: 'cards/app', text: 'dark mode please' })
+      await tick()
+      expect(await card(report.id)).toMatchObject({ state: 'blocked', hold: { kind: 'triage' } })
+      const triage = (await run(report.id, 'triage.acme'))!
+      expect(argvOf(workers, 'triage.acme')).toEqual(expect.arrayContaining(['--repo', 'https://github.com/acme/web']))
+      expect(await run(legacy.id, 'triage')).not.toBeNull()
+      expect(argvOf(workers, 'triage')).toEqual(expect.arrayContaining(['--repo', 'https://github.com/your-org/your-repo']))
+      await complete(triage.triage!.id, SPEC)
+      await tick()
+      expect(await card(report.id)).toMatchObject({ state: 'blocked', hold: { kind: 'working' } })
+      const work = (await run(report.id, 'card.acme'))!
+      expect(work.work!.channel).toMatch(/^cards\/acme\/linear\/card\.acme-\d+$/)
+      expect(argvOf(workers, 'card.acme')).toEqual(expect.arrayContaining(['--repo', 'https://github.com/acme/web', '--push']))
+      expect(workers.some((worker) => worker.argv.includes('workflow=card.globex'))).toBe(false)
+    })
+
+    it("a project's trusted list replaces LOOP_TRUSTED on its cards, and LOOP_TRUSTED still holds on the others", async () => {
+      process.env.LOOP_TRUSTED = 'slack:user:U1'
+      const { as, tick, run, complete, card } = await setup({ projects: { acme: { ...ACME, trusted: ['slack:user:U2'] } } })
+      const byU1 = await as('slack:user:U1').post({ channel: 'cards/acme/slack', text: 'one' })
+      const byU2 = await as('slack:user:U2').post({ channel: 'cards/acme/app', text: 'two' })
+      const legacy = await as('slack:user:U1').post({ channel: 'cards/slack', text: 'three' })
+      await tick()
+      for (const [id, name] of [[byU1.id, 'triage.acme'], [byU2.id, 'triage.acme'], [legacy.id, 'triage']] as const) await complete((await run(id, name))!.triage!.id, SPEC)
+      await tick()
+      // On acme's cards only its own list counts: U1 waits for an approval there, U2 doesn't.
+      expect(await card(byU1.id)).toMatchObject({ hold: { kind: 'approval' } })
+      expect(await card(byU2.id)).toMatchObject({ hold: { kind: 'working' } })
+      expect(await card(legacy.id)).toMatchObject({ hold: { kind: 'working' } })
+    })
+
+    it("a project's triage is shown only that project's cards", async () => {
+      const { team, tick, run } = await setup({ projects: { acme: ACME, globex: GLOBEX } })
+      const theirs = await team.post({ channel: 'cards/globex/linear', text: 'globex secret plan' })
+      const legacy = await team.post({ channel: 'cards/app', text: 'an app report' })
+      await tick()
+      const report = await team.post({ channel: 'cards/acme/linear', text: 'acme report' })
+      await tick()
+      const triage = (await run(report.id, 'triage.acme'))!
+      expect(triage.triage!.text).not.toContain('globex secret plan')
+      expect(triage.triage!.text).not.toContain(`#${theirs.id} `)
+      expect(triage.triage!.text).not.toContain(`#${legacy.id} `)
+    })
+
+    it('runs past a project\'s maxRuns wait, and start as runs end; another project is not held back', async () => {
+      const heard = notes()
+      const { team, as, tick, run, complete, card } = await setup({ projects: { acme: { ...ACME, maxRuns: 1 }, globex: GLOBEX } })
+      // From someone not trusted, so its triage ends at an approval, and no change follows it to take the place.
+      const first = await as('slack:user:U9').post({ channel: 'cards/acme/linear', text: 'first' })
+      await tick()
+      const second = await team.post({ channel: 'cards/acme/app', text: 'second' })
+      const other = await team.post({ channel: 'cards/globex/linear', text: 'other' })
+      await tick()
+      expect(await run(first.id, 'triage.acme')).not.toBeNull()
+      // acme has its one run going: its second card waits, held for triage with none asked, and says why.
+      expect(await run(second.id, 'triage.acme')).toBeNull()
+      expect(await card(second.id)).toMatchObject({ state: 'blocked', hold: { kind: 'triage' } })
+      expect((await team.readThread({ id: second.id })).replies.map((reply) => reply.text).join('\n')).toMatch(/waiting: 1 run of acme is going/)
+      expect(await run(other.id, 'triage.globex')).not.toBeNull()
+      // The first triage ends, at an approval: the second starts.
+      await complete((await run(first.id, 'triage.acme'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'approval' } })
+      expect(await run(second.id, 'triage.acme')).not.toBeNull()
+      expect(await heard('needs your approval')).toContain(`acme: card #${first.id} needs your approval: mu read ${first.id}, then mu label ${first.id} approved=yes`)
+    })
+
+    it('LOOP_MAX_RUNS caps the runs going across every project and the cards right under cards/, and needs no projects', async () => {
+      process.env.LOOP_MAX_RUNS = '1'
+      const { team, as, tick, run, complete } = await setup()
+      const first = await as('slack:user:U9').post({ channel: 'cards/slack', text: 'first' })
+      await tick()
+      const second = await team.post({ channel: 'cards/app', text: 'second' })
+      await tick()
+      expect(await run(second.id, 'triage')).toBeNull()
+      expect((await team.readThread({ id: second.id })).replies.map((reply) => reply.text).join('\n')).toMatch(/waiting: 1 run is going on the board/)
+      // The first triage ends at an approval, with no change after it: the second starts.
+      await complete((await run(first.id, 'triage'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect(await run(second.id, 'triage')).not.toBeNull()
+    })
+
+    it("a change past the cap is held queued, says so once, and starts on its spec when a run ends", async () => {
+      process.env.LOOP_MAX_RUNS = '1'
+      const { team, as, tick, run, complete, card } = await setup({ projects: { acme: ACME } })
+      // Both from someone not trusted: each triage ends at an approval, with no change after it.
+      const first = await as('slack:user:U9').post({ channel: 'cards/acme/slack', text: 'first' })
+      await tick()
+      await complete((await run(first.id, 'triage.acme'))!.triage!.id, SPEC)
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'approval' } })
+      const second = await as('slack:user:U9').post({ channel: 'cards/acme/app', text: 'second' })
+      await tick()
+      expect(await run(second.id, 'triage.acme')).not.toBeNull()
+      // The second's triage has the one place: the first, approved now, waits, held queued, and says so once.
+      await team.label({ id: first.id, set: { approved: 'yes' } })
+      await tick()
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'queued' } })
+      expect(await run(first.id, 'card.acme')).toBeNull()
+      const waits = async () => (await team.readThread({ id: first.id })).replies.filter((reply) => reply.text.startsWith('waiting:')).length
+      expect(await waits()).toBe(1)
+      // The second's triage ends: the place is free, and the queued change starts on the first's spec.
+      await complete((await run(second.id, 'triage.acme'))!.triage!.id, SPEC)
+      await tick()
+      await tick()
+      expect(await card(first.id)).toMatchObject({ hold: { kind: 'working' } })
+      expect(await run(first.id, 'card.acme')).not.toBeNull()
+      expect(await waits()).toBe(1)
+    })
+
+    it("a project's public sources default to the ones LOOP_PUBLIC names, under its own channel", async () => {
+      process.env.LOOP_PUBLIC = 'cards/github,cards/forum'
+      const { team, tick, run } = await setup({ projects: { acme: ACME } })
+      const secret = await team.post({ channel: 'cards/acme/linear', text: 'private plan' })
+      await tick()
+      const report = await team.post({ channel: 'cards/acme/forum', text: 'from the public forum' })
+      await tick()
+      expect((await run(report.id, 'triage.acme'))!.triage!.text).not.toContain(`#${secret.id} `)
+    })
   })
 
   describe('rounds', () => {

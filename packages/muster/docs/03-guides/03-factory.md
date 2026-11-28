@@ -316,7 +316,8 @@ These are the failures routing by label runs into:
 
 Go further with these pages:
 
-- [Watchers](../01-concepts/09-watchers.md): the daemon, gates, retries and
+- [Watchers](../01-concepts/09-watchers.md): the daemon, gates and retries
+- [Keep the daemon running](./09-daemon.md#check-that-a-watcher-wakes-something):
   `mu daemon check`
 - [GitHub](../02-sync/02-github.md) and [Slack](../02-sync/04-slack.md): what
   each platform's sync brings in and sends back
