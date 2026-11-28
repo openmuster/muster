@@ -806,7 +806,7 @@ const commands: Record<string, Command> = {
   },
 
   run: {
-    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
+    spec: { value: ['agent', 'cwd', 'worktree', 'branch', 'model', 'timeout', 'lease', 'ready', 'wait', 'resume', 'budget', 'runner', 'repo', 'by', 'template'], many: ['label', 'from', 'env'], bool: ['bypass-permissions', 'safe', 'loop', 'fresh', 'full', 'detach', 'no-install', 'push'] },
     async run(run, parsed) {
       // Checked here, on what was typed: a cloud worker passes its flags on to each task it runs by ID.
       refuseByWithoutReady(parsed)
@@ -1665,7 +1665,7 @@ async function runAgent(run: Run, parsed: Parsed, onKind?: (kind: string) => voi
   // Checked before the board is asked anything: starting a sandbox needs only where the board is.
   if (where !== 'local') return runInCloud(run, parsed, where, agent)
   // These are about a sandbox: on this machine they would do nothing, so they are refused, not ignored.
-  const cloudOnly = (['repo', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
+  const cloudOnly = (['repo', 'template', 'push', 'detach', 'no-install'] as const).find((flag) => (flag === 'repo' || flag === 'template' ? str(parsed.flags, flag) !== undefined : on(parsed.flags, flag)))
   if (cloudOnly) throw misuse(cloudOnly === 'push' ? 'push_unsupported' : 'unknown_flag', `--${cloudOnly} is for a cloud runner, and this run is on this machine.`, 'Add --runner vercel, --runner cloudflare or --runner e2b, or leave it out.')
   const me = await run.team.whoami()
   const cwd = resolvePath(str(parsed.flags, 'cwd') ?? process.cwd())
@@ -1813,6 +1813,12 @@ export function repoUrl(value: string): string {
  * itself, through the board at MUSTER_URL, which the sandbox must be able to reach.
  */
 async function runInCloud(run: Run, parsed: Parsed, where: string, agent: (typeof AGENTS)[string]): Promise<number> {
+  // --template names the E2B template for this run, in place of MUSTER_E2B_TEMPLATE: a workflow's own, say.
+  const template = str(parsed.flags, 'template')
+  if (template !== undefined) {
+    if (where !== 'e2b') throw misuse('unknown_flag', `--template names an E2B template, and this run is on ${where}.`, 'Use it with --runner e2b, or leave it out.')
+    run = { ...run, io: { ...run.io, env: { ...run.io.env, MUSTER_E2B_TEMPLATE: template } } }
+  }
   // --ready --loop is a worker here with a sandbox (on Cloudflare, a container) per task; --ready alone is one sandbox that takes task after task.
   if (str(parsed.flags, 'ready') !== undefined && on(parsed.flags, 'loop')) return cloudWorker(run, parsed, where, agent)
   return cloudTask(run, parsed, where, agent)

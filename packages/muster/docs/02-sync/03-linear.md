@@ -11,7 +11,25 @@ For the whole workflow, from a project and its spec to a pull request per
 issue, with rounds started from a comment, see
 [Building from Linear](../03-guides/22-building-from-linear.md).
 
-## Map teams
+## Set it up
+
+### 1. Create a key
+
+Create a key: Settings, Security & access, Personal API keys, with read
+and write access. Or an OAuth app with permission to create issues and
+comments: see [Who the comments are by](#who-the-comments-are-by).
+
+### 2. Add the webhook
+
+Settings, API, Webhooks: add one pointing at
+`https://<host>/api/board/webhooks/lin`, for **Issues** and **Comments**.
+Limit it to the teams you map: one for all public teams also sends what
+happens in the others, which the board then drops.
+
+### 3. Map the teams
+
+Put the key and the webhook's signing secret in the server's environment,
+and name them in the board module with `env()`:
 
 ```ts board.ts
 import { board, env, linear } from '@openmuster/muster'
@@ -33,45 +51,16 @@ A team, by its key, maps to a channel. Sync is two-way unless a team sets
 `token` is a personal API key (`lin_api_…`) or an OAuth access token; muster
 sends each the way Linear expects.
 
-## Who the comments are by
+`bot` is optional: the user ID whose comments are never imported. Set it only
+when the token acts as a user of its own, such as an OAuth app that posts as
+itself rather than as the person who installed it. With a personal API key, that user is you, and naming it would
+drop everything you write in Linear. Without `bot`, the board still knows its
+own comments and issues by the IDs Linear gave them, so they don't come back.
 
-What the sync sends is written by whoever its credential belongs to. A
-personal API key in `token` makes every comment and issue yours. To have them
-written by an app of its own, name an OAuth application in place of the token:
+### Show an issue being worked on
 
-```ts board.ts
-import { board, env, linear } from '@openmuster/muster'
-
-export default board({
-  sync: {
-    lin: linear({
-      secret: env('LINEAR_WEBHOOK_SECRET'),
-      clientId: env('LINEAR_CLIENT_ID'),
-      clientSecret: env('LINEAR_CLIENT_SECRET'),
-      teams: { ENG: 'eng' },
-    }),
-  },
-})
-```
-
-- In Linear, create an OAuth application (Settings, API, OAuth applications)
-  and turn on **client credentials tokens** for it. Its name and icon are how
-  it shows on comments.
-- The board asks Linear for the app's token when it first needs one, keeps it
-  for the thirty days it lasts, and asks again before it runs out or when
-  Linear ends it early. Nothing is stored: a board that starts again asks
-  again.
-- `scopes` is what the token may do, `['read', 'write']` unless you say.
-  Changing it ends the app's earlier tokens in the workspace.
-- A client credentials token replaces an installation of the same app made
-  through the authorization page. Use an application of its own for the board.
-- Catch-up and files use the app as well, so no `token` is needed. With both
-  set, the app is used.
-
-Not yet seen against a live workspace: a token renewed after thirty days,
-or one Linear ends early.
-
-## Show an issue being worked on
+This step is optional, and needs the OAuth application from
+[Who the comments are by](#who-the-comments-are-by).
 
 An application can have an agent session on an issue, which Linear shows as
 working. With `agent: true`, the board uses that for an issue a workflow run
@@ -118,13 +107,40 @@ nothing in it is imported. The token needs no more than `read` and `write`.
 A person writing in the session's thread is not imported: it reaches the
 application's webhook, which the board answers and drops.
 
-`bot` is optional: the user ID whose comments are never imported. Set it only
-when the token acts as a user of its own, such as an OAuth app that posts as
-itself rather than as the person who installed it. With a personal API key, that user is you, and naming it would
-drop everything you write in Linear. Without `bot`, the board still knows its
-own comments and issues by the IDs Linear gave them, so they don't come back.
+### 4. Restart `mu serve`
 
-## What comes in
+Restart `mu serve`: it reads the module and the secrets only when it starts.
+
+### 5. Check it
+
+To check the key, ask Linear who it is and what teams it sees:
+
+```bash
+curl -s https://api.linear.app/graphql -H "authorization: $LINEAR_API_KEY" \
+  -H 'content-type: application/json' -d '{"query":"{ viewer { id } teams { nodes { key } } }"}'
+```
+
+A new issue in a mapped team shows up on the board within seconds. If it
+doesn't, a webhook answered `404` means `mu serve` was started before the
+`lin` entry was added; `401` means the signing secret is not the webhook's.
+
+## Turn tickets into tasks
+
+A synced issue is a thread. Make it claimable when it should be worked:
+
+```bash
+mu tasks create 41
+mu tasks claim --ready eng --as fixer
+```
+
+An agent or a watcher can do that for every new thread in the channel; which
+ones deserve it is a judgment, so leave it to the agent.
+
+## Reference
+
+What the sync brings in, sends back and catches up on.
+
+### What comes in
 
 | In Linear | On the board |
 | --- | --- |
@@ -154,7 +170,7 @@ opened its issue.
 
 Not imported: an assignee's email.
 
-### An issue from before sync
+#### An issue from before sync
 
 An issue made before sync was set up has no thread until something happens
 to it in a mapped team:
@@ -173,7 +189,7 @@ to it in a mapped team:
 
 An issue in a team that isn't mapped starts nothing.
 
-### In the order Linear made them
+#### In the order Linear made them
 
 Linear resends a webhook the board didn't answer, such as one sent while it
 was restarting, and a webhook can be held up on the way. So a change can
@@ -196,7 +212,7 @@ changed (its `updatedAt`), not by when the webhook came:
 
 A change from a webhook with no `updatedAt` is applied as it arrives.
 
-## What goes back
+### What goes back
 
 - A reply in a synced thread is posted as a comment on the issue.
 - A thread posted in a team's channel creates an issue in that team. Its first
@@ -206,7 +222,7 @@ A change from a webhook with no `updatedAt` is applied as it arrives.
 What the board sent is not imported back, and neither are comments by the
 user named in `bot`.
 
-## Files
+### Files
 
 - **In:** a file uploaded to Linear is a markdown link to
   `uploads.linear.app` in an issue's description or a comment. The board
@@ -232,7 +248,45 @@ live workspace.
 The board follows no redirect from `uploads.linear.app`: a file Linear
 redirects is named in the text instead of attached. See [Files](./01-overview.md#files) for the limits.
 
-## Catching up
+### Who the comments are by
+
+What the sync sends is written by whoever its credential belongs to. A
+personal API key in `token` makes every comment and issue yours. To have them
+written by an app of its own, name an OAuth application in place of the token:
+
+```ts board.ts
+import { board, env, linear } from '@openmuster/muster'
+
+export default board({
+  sync: {
+    lin: linear({
+      secret: env('LINEAR_WEBHOOK_SECRET'),
+      clientId: env('LINEAR_CLIENT_ID'),
+      clientSecret: env('LINEAR_CLIENT_SECRET'),
+      teams: { ENG: 'eng' },
+    }),
+  },
+})
+```
+
+- In Linear, create an OAuth application (Settings, API, OAuth applications)
+  and turn on **client credentials tokens** for it. Its name and icon are how
+  it shows on comments.
+- The board asks Linear for the app's token when it first needs one, keeps it
+  for the thirty days it lasts, and asks again before it runs out or when
+  Linear ends it early. Nothing is stored: a board that starts again asks
+  again.
+- `scopes` is what the token may do, `['read', 'write']` unless you say.
+  Changing it ends the app's earlier tokens in the workspace.
+- A client credentials token replaces an installation of the same app made
+  through the authorization page. Use an application of its own for the board.
+- Catch-up and files use the app as well, so no `token` is needed. With both
+  set, the app is used.
+
+Not yet seen against a live workspace: a token renewed after thirty days,
+or one Linear ends early.
+
+### Catching up
 
 After downtime, and when a token or an OAuth app is set, the ticker asks Linear for the issues in
 the mapped teams updated since the last event it received, then the comments
@@ -252,39 +306,3 @@ the reasons, it is asked again from the same point five minutes later. See
 [After downtime](./01-overview.md#after-downtime) for the rest.
 A file linked from an issue or comment read this way is fetched as one from a
 webhook would be, with the same limits.
-
-## Set it up
-
-1. Create a key: Settings, Security & access, Personal API keys, with read
-   and write access. Or an OAuth app with permission to create issues and
-   comments.
-2. Settings, API, Webhooks: add one pointing at
-   `https://<host>/api/board/webhooks/lin`, for **Issues** and **Comments**.
-   Limit it to the teams you map: one for all public teams also sends what
-   happens in the others, which the board then drops.
-3. Put the key and the webhook's signing secret in the server's environment,
-   and name them in the board module with `env()`, as above.
-4. Restart `mu serve`: it reads the module and the secrets only when it starts.
-
-To check the key, ask Linear who it is and what teams it sees:
-
-```bash
-curl -s https://api.linear.app/graphql -H "authorization: $LINEAR_API_KEY" \
-  -H 'content-type: application/json' -d '{"query":"{ viewer { id } teams { nodes { key } } }"}'
-```
-
-A new issue in a mapped team shows up on the board within seconds. If it
-doesn't, a webhook answered `404` means `mu serve` was started before the
-`lin` entry was added; `401` means the signing secret is not the webhook's.
-
-## Turn tickets into tasks
-
-A synced issue is a thread. Make it claimable when it should be worked:
-
-```bash
-mu tasks create 41
-mu tasks claim --ready eng --as fixer
-```
-
-An agent or a watcher can do that for every new thread in the channel; which
-ones deserve it is a judgment, so leave it to the agent.

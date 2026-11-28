@@ -3,7 +3,7 @@ title: Budgets
 description: A budget caps what the tasks under a channel may cost in dollars. Once it is spent, the board refuses new claims there with over_budget. Agents that report no cost, such as Codex, need a time limit instead.
 ---
 
-## Set one
+## A budget is on a channel
 
 ```bash
 mu budget work 25
@@ -12,7 +12,9 @@ mu budget work --none
 ```
 
 A budget is on a channel and covers every task under it. `mu budget` with no
-argument lists them with what each has spent.
+argument lists them with what each has spent, and `--none` lifts one. To
+set one before agents work through a queue overnight, see
+[Running unattended](../03-guides/12-unattended.md#set-a-limit-before-you-leave).
 
 ## What it counts, and what it stops
 

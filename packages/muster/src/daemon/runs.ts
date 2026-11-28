@@ -71,7 +71,8 @@ export function missingSettings(workers: Workflow['workers'], env: Record<string
   const missing: string[] = []
   if (!env.MUSTER_URL && !env.MUSTER_SANDBOX_URL) missing.push('MUSTER_URL or MUSTER_SANDBOX_URL')
   if (workers.runner === 'cloudflare') for (const name of ['MUSTER_CF_WORKER', 'MUSTER_CF_SECRET']) if (!env[name]) missing.push(name)
-  if (workers.runner === 'e2b') for (const name of ['E2B_API_KEY', 'MUSTER_E2B_TEMPLATE']) if (!env[name]) missing.push(name)
+  // A workflow that names its own template needs none from the daemon's environment.
+  if (workers.runner === 'e2b') for (const name of ['E2B_API_KEY', ...(workers.template ? [] : ['MUSTER_E2B_TEMPLATE'])]) if (!env[name]) missing.push(name)
   if (workers.runner === 'vercel') {
     const set = ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'].filter((name) => env[name])
     if (set.length === 0 && !env.VERCEL_OIDC_TOKEN) missing.push('VERCEL_TOKEN, VERCEL_TEAM_ID and VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN')
@@ -163,6 +164,8 @@ export function workerArgv(workflow: Workflow, run: string, seq: number, i: numb
     // Any task may push: a step that mustn't is labelled so by the daemon, and the worker reads only that.
     ...(pushes(workflow) ? ['--push'] : []),
     ...(workers.timeout ? ['--timeout', workers.timeout] : []),
+    ...(workers.template ? ['--template', workers.template] : []),
+    ...(workers.model ? ['--model', workers.model] : []),
     '--by', `${owner}+${WORKFLOWS_PROFILE}`, '--label', `workflow=${workflow.name}`, '--label', `request=${seq}`,
   ]
 }

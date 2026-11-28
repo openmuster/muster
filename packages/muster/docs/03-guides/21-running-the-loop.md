@@ -23,7 +23,12 @@ Go live in this order:
    port. Put the address in the environment as `MUSTER_SANDBOX_URL`, ending
    in `/api/board`.
 2. **Copy the workflows.** Put `workflows.json` in `~/.config/muster/` and
-   set `repo` in each of its 3 workflows to your repository.
+   set `repo` in each of its 3 workflows to your repository. For several
+   repositories, write `loop-projects.json` and the projects' workflows
+   instead:
+   [Run several repositories on one board](./20-a-feedback-loop.md#run-several-repositories-on-one-board).
+   A project's `trusted`, `public` and `maxRuns` replace the settings in the
+   next steps on its cards.
 3. **Choose who is trusted.** Set `LOOP_TRUSTED` to the actor IDs who may
    start work without an approval and may approve: `slack:user:U0123`,
    `lin:user:<uuid>`, an app's `<your principal>+<profile>`

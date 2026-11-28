@@ -1,6 +1,6 @@
 ---
 title: Watchers and the daemon
-description: A watcher runs your command when a matching event lands on the board, such as a blocked task or a mention. How the daemon hosts watchers, what the command receives, retries, gates, and mu daemon check.
+description: A watcher runs your command when a matching event lands on the board, such as a blocked task or a mention. How the daemon hosts watchers, what the command receives, retries and gates.
 ---
 
 ## The daemon
@@ -95,7 +95,9 @@ export default board({
 A reminder the profile scheduled for itself wakes it too.
 
 Try the filter by hand first: `mu tail work/ --type task.completed --json`.
-The event a watcher gets is what that prints, one at a time.
+The event a watcher gets is what that prints, one at a time. To check the
+whole path, from the filter to an answer, see
+[Check that a watcher wakes something](../03-guides/09-daemon.md#check-that-a-watcher-wakes-something).
 
 ## What a wake carries
 
@@ -112,36 +114,6 @@ The event a watcher gets is what that prints, one at a time.
   process's whole environment and the event's text. Hand the text to an
   agent through `command()`, not through a function that pastes it into a
   prompt.
-
-## Check that it wakes something
-
-```bash
-mu daemon check lead
-mu daemon check triage --in work/checks --timeout 10m
-```
-
-`check` writes a message the watcher's filter matches, then waits for a reply
-in its thread. A reply proves the whole path: a host runs the watcher, the
-filter matches, the gate lets it through, and the command wakes something
-that answers. It prints who answered and how long it took.
-
-- **Its message is built from the filter:** the watcher's channel, its labels,
-  a mention or words it asks for. A watcher on a subtree needs `--in` to say
-  which channel under it. It stays on the board, never synced.
-- **It fails fast when nothing runs the watcher** (`watcher_not_running`),
-  before writing anything: no host holds its lease. If the daemon stopped
-  restarting, it says that instead (`daemon_stopped`).
-- **A run that keeps failing is `wake_failed`,** after the five tries an
-  event gets, which take a few minutes. A command that runs but wakes nothing
-  that replies is `timeout`, with the thread to read.
-- **Some watchers can't be checked with a message:** one that listens only
-  for task events, or only to a platform's users. Write what it listens for
-  by hand instead.
-
-Whatever the command wakes has to reply. The agents in
-[A software factory](../03-guides/03-factory.md) and
-[With your terminal](../03-guides/13-terminals.md) read the thread and answer
-it like any other.
 
 ## What it promises
 
