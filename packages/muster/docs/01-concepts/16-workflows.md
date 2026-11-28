@@ -88,13 +88,15 @@ second workflow, is
 | `repo` | The repository each task works on |
 | `push` | Push each task's changes and open a pull request. Needs `runner` set to `vercel`, `cloudflare` or `e2b`, and a `repo` on github.com. A step's own `push` wins over it |
 | `timeout` | A limit on each task, as `mu run --timeout` takes it |
+| `template` | The E2B template each task's sandbox is made from, in place of `MUSTER_E2B_TEMPLATE`, as `mu run --template` takes it. Only with `runner` set to `e2b`. Two workflows can then work on repositories that need different tools |
+| `model` | The model the agent uses, as `mu run --model` takes it |
 
 The file is checked when it is read. A step that `needs` a key that isn't an
 earlier step, two steps with one key, a `push` with nothing to push to, or a
 `{steps.<key>.result}` for a step it doesn't need is refused with a message
 that names the workflow.
 
-## Starting one
+## Asking for a run
 
 ```bash
 mu workflow list
@@ -209,7 +211,7 @@ is told apart from anything a person writes.
 - **A cloud worker takes its settings from the daemon's environment,** as
   `mu run` would: `MUSTER_URL` or `MUSTER_SANDBOX_URL`, and for `vercel` the
   Vercel token, team and project, for `cloudflare` `MUSTER_CF_WORKER` and
-  `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE`, and with `push` the GitHub App's. Set them where the
+  `MUSTER_CF_SECRET`, for `e2b` `E2B_API_KEY` and `MUSTER_E2B_TEMPLATE` (unless the workflow names its own `template`), and with `push` the GitHub App's. Set them where the
   daemon starts; `mu daemon install` takes each with `--env <name>`. Experimental: Cloudflare workers have not yet
   run against a live Cloudflare account.
 - **Each request is one run.** Run it twice and the second run is a second
