@@ -48,8 +48,6 @@ export const SHAPE = {
   duration: '180ms',
 } as const
 
-export type Token = keyof typeof COLOURS.dark | keyof typeof SHAPE
-
 /** The tokens as CSS custom properties, `--<prefix><name>: <value>;`, for a `:root` rule. */
 export const declarations = (tokens: Record<string, string>, prefix = '') =>
   Object.entries(tokens)
